@@ -141,6 +141,12 @@ def _canonical_sort_key(term: str, var_order: list[str]) -> tuple:
     return tuple(_CHAR_RANK[c] for c in term)
 
 
+def _literal_count(terms) -> int:
+    """Total literal count across a set/iterable of bit-pattern terms —
+    every non-dash position is one literal."""
+    return sum(len(t) - t.count("-") for t in terms)
+
+
 def minimize(var_order: list[str], minterms: set[int]) -> Expr:
     """Return a minimal sum-of-products :class:`Expr` for a function of
     ``var_order`` (in D10 order) that is true exactly on ``minterms``
@@ -157,9 +163,19 @@ def minimize(var_order: list[str], minterms: set[int]) -> Expr:
     essential, remaining = _essential_cover(primes, minterms, n_vars)
     extra_options = _minimal_extra_cover(primes, remaining, n_vars)
 
+    # Petrick's method above only minimizes the number of terms. Standard
+    # minimal-SOP practice ranks ties by total literal count next, and only
+    # then falls back to a deterministic tie-break — so filter to the
+    # literal-minimal covers before applying D5's canonical-string tie-break,
+    # otherwise a candidate that merely sorts first lexicographically can
+    # beat one with strictly fewer literals.
+    covers = [essential | extra for extra in extra_options]
+    best_literal_count = min(_literal_count(c) for c in covers)
+    covers = [c for c in covers if _literal_count(c) == best_literal_count]
+
     best_terms: list[str] | None = None
-    for extra in extra_options:
-        candidate = sorted(essential | extra, key=lambda t: _canonical_sort_key(t, var_order))
+    for cover in covers:
+        candidate = sorted(cover, key=lambda t: _canonical_sort_key(t, var_order))
         if best_terms is None:
             best_terms = candidate
             continue

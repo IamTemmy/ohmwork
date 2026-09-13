@@ -46,7 +46,12 @@ def format_markdown(table: DerivationTable) -> str:
 
 
 def _latex_escape(label: str) -> str:
-    return label.replace("'", "^{\\prime}")
+    # Column labels come from ohmwork.expr.render, which spells XOR as
+    # " ^ " (D8 notation). Inside a LaTeX math environment a bare `^` is the
+    # superscript operator, not XOR, so it must become \oplus — done before
+    # the complement escape below, since that escape introduces its own `^`
+    # (for the prime superscript) that must NOT be re-escaped.
+    return label.replace(" ^ ", r" \oplus ").replace("'", "^{\\prime}")
 
 
 def format_latex(table: DerivationTable) -> str:

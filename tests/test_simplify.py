@@ -4,7 +4,7 @@ result alongside the derivation table."""
 from ohmwork.derivation import build_table, variables_in_order
 from ohmwork.expr import render
 from ohmwork.parser import parse
-from ohmwork.simplify import simplify
+from ohmwork.simplify import minimize, simplify
 
 
 def simplified_str(expr_text: str) -> str:
@@ -43,3 +43,34 @@ def test_three_variable_consensus():
     # xy + x'z + yz  ==  xy + x'z  (yz is the consensus term, redundant)
     result = simplified_str("xy + x'z + yz")
     assert result in ("xy + x'z", "x'z + xy")
+
+
+def _literal_count(expr_str: str) -> int:
+    return sum(1 for ch in expr_str if ch.isalpha())
+
+
+def test_tie_break_prefers_fewest_literals_not_just_lexicographic_order():
+    # Regression: among covers tied on term count, the D5 canonical-string
+    # tie-break must only decide between covers that are ALSO tied on total
+    # literal count — it must never prefer a lexicographically-smaller
+    # string that has strictly more literals. This 4-variable function has
+    # two term-count-4 covers, one with 12 literals and one with 13.
+    var_order = ["a", "b", "c", "d"]
+    minterms = {1, 2, 3, 4, 6, 8, 9, 10, 11, 13}
+    result = render(minimize(var_order, minterms))
+    assert _literal_count(result) == 12
+
+
+def test_tie_break_prefers_fewest_literals_more_cases():
+    # A few more concrete counterexamples from the same bug class (found by
+    # randomized search against the pre-fix code, where each used to come
+    # out one literal heavier than necessary).
+    var_order = ["a", "b", "c", "d"]
+    cases = [
+        ({0, 1, 3, 5, 6, 8, 9, 12, 13, 14}, 12),
+        ({0, 4, 5, 7, 9, 10, 12, 13, 14}, 14),
+        ({0, 3, 4, 6, 7, 10, 11, 12, 13, 14}, 14),
+    ]
+    for minterms, expected_literals in cases:
+        result = render(minimize(var_order, minterms))
+        assert _literal_count(result) == expected_literals, (minterms, result)
