@@ -169,6 +169,30 @@ def test_rejects_complement_with_no_operand():
         parse("'x")
 
 
+# --- D15: "F" is reserved (collides with the output column) -----------------
+
+
+def test_rejects_bare_f_as_a_variable():
+    with pytest.raises(ParseError, match="reserved"):
+        parse("F")
+
+
+def test_rejects_bare_f_anywhere_in_the_expression():
+    with pytest.raises(ParseError, match="reserved"):
+        parse("F + y")
+    with pytest.raises(ParseError, match="reserved"):
+        parse("AF")  # F need not be the whole expression to collide
+
+
+def test_allows_f_with_a_trailing_digit():
+    assert parse("F0") == Var("F0")
+    assert parse("F1") == Var("F1")
+
+
+def test_allows_lowercase_f():
+    assert parse("f") == Var("f")
+
+
 def test_parse_error_has_a_human_readable_message():
     with pytest.raises(ParseError) as exc_info:
         parse("A12")

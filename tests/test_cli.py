@@ -120,6 +120,22 @@ def test_tt_cols_rejects_empty_list():
     assert "error" in err.lower()
 
 
+# --- D15: "F" as a variable name is rejected, not silently collided --------
+
+
+def test_tt_rejects_bare_f_as_a_variable():
+    code, out, err = run(["tt", "F + y"])
+    assert code != 0
+    assert out == ""
+    assert "reserved" in err.lower()
+
+
+def test_tt_allows_f_with_trailing_digit():
+    code, out, err = run(["tt", "F0 + y"])
+    assert code == 0
+    assert header_labels(out) == ["F0", "y", "F"]
+
+
 def test_tt_terse_and_cols_are_mutually_exclusive_at_the_cli():
     import contextlib
     import io

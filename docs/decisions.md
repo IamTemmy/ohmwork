@@ -212,3 +212,29 @@ mode" — explicit modes double the test surface and drift out of sync.
 ask for it, and a maintained single mode is cheaper than two modes that inevitably diverge.
 
 **Date:** 2026-09-13
+
+---
+
+## D15 — The variable name `F` collides with the output column; how is it resolved?
+
+**Choice:** The bare letter `F` is reserved and cannot be used as a variable name;
+`ohmwork tt "F + y"` is rejected the same way any other invalid input is (D8), with an
+error naming the conflict and suggesting a fix (e.g. `F0`, or a different letter). `F0`,
+`F1`, and lowercase `f` are unaffected — they render distinctly from the output column and
+don't collide.
+
+**Reasoning:** D8 permits any single letter as a variable name, and D9/the M1a acceptance
+test fix the output column's label as `F` — the two decisions weren't checked against each
+other and a variable literally named `F` collides with it (`ohmwork tt "F + y"` printed two
+columns both headed "F" and the confusing line `F = F + y`). Renaming the output column
+instead was considered and rejected: the M1a acceptance test in charter §8 requires the
+output column be `F` and the report read `F = x`, so the output side of this collision isn't
+free to move. Disambiguating only when a collision actually occurs (e.g. relabeling just the
+variable in that one case) was also considered and rejected as unwarranted cleverness for an
+edge case that barely anyone hits — it adds a rendering special-case that has to be
+maintained and tested for a name almost no one needs. Rejecting the name at parse time
+follows the same pattern D8 already established for other sources of ambiguity (malformed
+variable suffixes, unbalanced parens): fix it in the grammar, not in downstream display
+logic.
+
+**Date:** 2026-09-13

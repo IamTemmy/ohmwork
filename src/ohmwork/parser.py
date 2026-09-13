@@ -13,7 +13,9 @@ A variable token is a single letter with an optional single trailing digit
 (D8): ``A``, ``x``, ``A0``, ``B2``. Anything the grammar doesn't recognize —
 an unknown character, a stray digit, unbalanced parens, a dangling operator,
 an empty expression — is rejected with a ``ParseError`` rather than guessed,
-per D8's "ambiguous input is rejected, never guessed."
+per D8's "ambiguous input is rejected, never guessed." The bare letter ``F``
+is additionally reserved (D15) — it would collide with the derivation
+table's output column — while ``F0``, ``F1``, and lowercase ``f`` are fine.
 """
 
 from __future__ import annotations
@@ -25,6 +27,12 @@ from ohmwork.expr import Expr, Not, Var, mk_and, mk_or, mk_xor
 
 _LETTERS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _DIGITS = "0123456789"
+
+# D15 (docs/decisions.md): the derivation table's output column is always
+# labeled "F" (D9/M1a acceptance test); a variable literally named "F" would
+# collide with it. Only the bare letter is reserved — "F0", "F1", etc. and
+# lowercase "f" render distinctly and don't collide.
+_RESERVED_OUTPUT_NAME = "F"
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,14 @@ def tokenize(source: str) -> list[Token]:
                         position=start,
                         source=source,
                     )
+            if name == _RESERVED_OUTPUT_NAME:
+                raise ParseError(
+                    f"'{name}' is reserved for the derivation table's output column "
+                    f"(D15, docs/decisions.md) and cannot be used as a variable name — "
+                    f"rename it (e.g. '{name}0') or use a different letter",
+                    position=start,
+                    source=source,
+                )
             tokens.append(Token("VAR", name, start))
             continue
         if ch in _DIGITS:
