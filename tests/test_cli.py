@@ -81,3 +81,53 @@ def test_deeper_expression_3_xor():
     code, out, err = run(["tt", "a^b^c"])
     assert code == 0
     assert "F =" in out
+
+
+# --- D9: --terse and --cols --------------------------------------------------
+
+
+def header_labels(out):
+    """Exact column headers from a terminal-table ``tt`` output, parsed from
+    the header row rather than substring-matched (labels like "y'" and
+    "xy'" would otherwise falsely match each other)."""
+    header_line = out.splitlines()[1]
+    return [p.strip() for p in header_line.split("|") if p.strip() != ""]
+
+
+def test_tt_terse_shows_only_product_terms_and_output():
+    code, out, err = run(["tt", "xy + xy'", "--terse"])
+    assert code == 0
+    assert header_labels(out) == ["xy", "xy'", "F"]
+    assert "F = x" in out
+
+
+def test_tt_cols_shows_exactly_the_requested_columns():
+    code, out, err = run(["tt", "x'y + xy'", "--cols", "x,x',xy'"])
+    assert code == 0
+    assert header_labels(out) == ["x", "x'", "xy'", "F"]
+
+
+def test_tt_cols_rejects_unknown_column():
+    code, out, err = run(["tt", "xy", "--cols", "z"])
+    assert code != 0
+    assert out == ""
+    assert "error" in err.lower()
+
+
+def test_tt_cols_rejects_empty_list():
+    code, out, err = run(["tt", "xy", "--cols", ""])
+    assert code != 0
+    assert "error" in err.lower()
+
+
+def test_tt_terse_and_cols_are_mutually_exclusive_at_the_cli():
+    import contextlib
+    import io
+
+    import pytest
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), pytest.raises(SystemExit) as exc_info:
+        main(["tt", "xy", "--terse", "--cols", "x"])
+    assert exc_info.value.code == 2
+    assert "not allowed" in err.getvalue().lower()

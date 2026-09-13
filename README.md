@@ -26,6 +26,10 @@ order the terms are evaluated — followed by the simplified result. See
 [docs/decisions.md](docs/decisions.md) D8 for the expression syntax and D9 for what a
 derivation table contains.
 
+- `--md` / `--latex` — Markdown or LaTeX output instead of the terminal table.
+- `--terse` — collapse the table to just the top-level product terms and the output.
+- `--cols "x,y,xy"` — show exactly these columns (each a valid expression), plus the output.
+
 ## Development
 
 ```bash

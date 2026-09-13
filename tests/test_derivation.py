@@ -1,6 +1,8 @@
 """Tests for the D9 (full column breakout) / D10 (first-appearance variable
 order) derivation table."""
 
+import pytest
+
 from ohmwork.derivation import build_table, variables_in_order
 from ohmwork.parser import parse
 from ohmwork.simplify import simplify
@@ -125,3 +127,65 @@ def test_root_that_is_a_bare_complement():
     table = build_table(parse("x'"))
     assert col_labels(table) == ["x", "F"]
     assert col(table, "F").values == [True, False]
+
+
+# --- D9: --terse (collapse to product terms and output) --------------------
+
+
+def test_terse_collapses_to_product_terms_and_output():
+    table = build_table(parse("xy + xy'"), terse=True)
+    assert col_labels(table) == ["xy", "xy'", "F"]
+    assert col(table, "xy").values == [False, False, False, True]
+    assert col(table, "xy'").values == [False, False, True, False]
+    assert col(table, "F").values == [False, False, True, True]
+
+
+def test_terse_with_no_top_level_sum_shows_only_output():
+    # No top-level Or means there's nothing to break into product terms.
+    table = build_table(parse("(x+y)z"), terse=True)
+    assert col_labels(table) == ["F"]
+
+
+def test_terse_root_column_matches_full_breakout_output():
+    full = build_table(parse("x'y + xy'"))
+    terse = build_table(parse("x'y + xy'"), terse=True)
+    assert col_labels(terse) == ["x'y", "xy'", "F"]
+    assert terse.output.values == full.output.values
+
+
+# --- D9: --cols (explicit column list) --------------------------------------
+
+
+def test_cols_shows_exactly_the_requested_columns_plus_output():
+    table = build_table(parse("x'y + xy'"), cols=["x", "x'", "xy'"])
+    assert col_labels(table) == ["x", "x'", "xy'", "F"]
+
+
+def test_cols_output_is_always_appended_even_if_not_requested():
+    table = build_table(parse("xy + xy'"), cols=["xy"])
+    assert col_labels(table) == ["xy", "F"]
+
+
+def test_cols_deduplicates_repeated_requests():
+    table = build_table(parse("xy + xy'"), cols=["x", "x", "xy"])
+    assert col_labels(table) == ["x", "xy", "F"]
+
+
+def test_cols_root_expression_requested_explicitly_still_ends_up_last():
+    table = build_table(parse("xy + xy'"), cols=["xy + xy'", "x"])
+    assert col_labels(table) == ["x", "F"]
+
+
+def test_cols_rejects_a_column_that_is_not_a_subexpression():
+    with pytest.raises(ValueError, match="not a sub-expression"):
+        build_table(parse("xy"), cols=["z"])
+
+
+def test_cols_rejects_an_unparseable_column_spec():
+    with pytest.raises(ValueError, match="invalid column"):
+        build_table(parse("xy"), cols=["x+"])
+
+
+def test_terse_and_cols_are_mutually_exclusive():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        build_table(parse("xy"), terse=True, cols=["x"])

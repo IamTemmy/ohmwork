@@ -119,11 +119,74 @@ class DerivationTable:
         return self.columns[-1]
 
 
-def build_table(node: Expr) -> DerivationTable:
-    """Build the full D9/D10 derivation table for a parsed expression."""
+def _terse_subexpressions(node: Expr) -> list[Expr]:
+    """D9 ``--terse``: the top-level product terms plus the output. If the
+    root is an ``Or``, its direct operands are the terms being summed; any
+    other root has no sum to break into terms, so only the output remains."""
+    terms = list(node.operands) if isinstance(node, Or) else []
+    return [*terms, node]
+
+
+def _explicit_columns(node: Expr, specs: list[str]) -> list[Expr]:
+    """D9 ``--cols``: resolve each requested column spec (itself a D8
+    expression, e.g. ``"xy"``) against the sub-expressions actually present
+    in ``node``'s parse tree, matched by rendered form. The output column is
+    always appended last regardless of whether — or where — it was
+    requested, and duplicate requests collapse to one column. A spec that
+    matches nothing is rejected rather than silently dropped or guessed at,
+    per the project's general stance on ambiguous/invalid input (D8)."""
+    # Local import: parser depends on nothing here, but this keeps
+    # derivation.py's import graph unidirectional (parser -> expr only).
+    from ohmwork.parser import parse
+
+    available = subexpressions_in_order(node)
+    by_label = {render(sub): sub for sub in available}
+
+    selected: list[Expr] = []
+    seen: set[int] = set()
+    for spec in specs:
+        try:
+            requested = parse(spec)
+        except Exception as e:  # re-raise as a column-specific message
+            raise ValueError(f"invalid column {spec!r}: {e}") from e
+        label = render(requested)
+        match = by_label.get(label)
+        if match is None:
+            raise ValueError(
+                f"column {spec!r} is not a sub-expression of the parsed expression"
+            )
+        if id(match) not in seen:
+            seen.add(id(match))
+            selected.append(match)
+
+    selected = [s for s in selected if s is not node]
+    selected.append(node)
+    return selected
+
+
+def build_table(
+    node: Expr, *, terse: bool = False, cols: list[str] | None = None
+) -> DerivationTable:
+    """Build a D9/D10 derivation table for a parsed expression.
+
+    By default this is the full breakout (every distinct sub-expression,
+    deduplicated, in evaluation order). ``terse=True`` collapses that to the
+    top-level product terms plus the output. ``cols`` (mutually exclusive
+    with ``terse``) takes an explicit list of column specs and shows exactly
+    those, plus the output. In every mode the last column is always the
+    output, labeled "F"."""
+    if terse and cols is not None:
+        raise ValueError("terse and cols are mutually exclusive")
+
     variables = variables_in_order(node)
     rows = all_assignments(variables)
-    subexprs = subexpressions_in_order(node)
+
+    if cols is not None:
+        subexprs = _explicit_columns(node, cols)
+    elif terse:
+        subexprs = _terse_subexpressions(node)
+    else:
+        subexprs = subexpressions_in_order(node)
 
     columns: list[Column] = []
     for i, sub in enumerate(subexprs):

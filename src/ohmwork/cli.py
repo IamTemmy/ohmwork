@@ -39,6 +39,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     output_format.add_argument("--md", action="store_true", help="Markdown table output")
     output_format.add_argument("--latex", action="store_true", help="LaTeX array output")
 
+    column_selection = tt.add_mutually_exclusive_group()
+    column_selection.add_argument(
+        "--terse",
+        action="store_true",
+        help="Show only the top-level product-term columns and F, instead of the full D9 breakout.",
+    )
+    column_selection.add_argument(
+        "--cols",
+        metavar="LIST",
+        help='Comma-separated explicit list of columns to show, e.g. "x,y,xy" (D9). F is always included.',
+    )
+
     return parser
 
 
@@ -49,7 +61,19 @@ def run_tt(args: argparse.Namespace, *, stdout, stderr) -> int:
         print(f"error: {e}", file=stderr)
         return 1
 
-    table = build_table(ast)
+    cols = None
+    if args.cols is not None:
+        cols = [c.strip() for c in args.cols.split(",")]
+        if not cols or any(not c for c in cols):
+            print("error: --cols must be a non-empty, comma-separated list of columns", file=stderr)
+            return 1
+
+    try:
+        table = build_table(ast, terse=args.terse, cols=cols)
+    except ValueError as e:
+        print(f"error: {e}", file=stderr)
+        return 1
+
     if args.latex:
         print(format_latex(table), file=stdout)
     elif args.md:
