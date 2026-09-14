@@ -147,19 +147,34 @@ def _literal_count(terms) -> int:
     return sum(len(t) - t.count("-") for t in terms)
 
 
-def minimize(var_order: list[str], minterms: set[int]) -> Expr:
+def minimize(
+    var_order: list[str], minterms: set[int], dont_cares: set[int] = frozenset()
+) -> Expr:
     """Return a minimal sum-of-products :class:`Expr` for a function of
-    ``var_order`` (in D10 order) that is true exactly on ``minterms``
-    (each an int in ``[0, 2**len(var_order))``, bit ``k`` from the top
-    corresponding to ``var_order[k]``)."""
+    ``var_order`` (in D10 order) that is true on ``minterms``, false outside
+    ``minterms | dont_cares``, and free to be either on ``dont_cares`` (D4:
+    "assigned freely to minimize transistor count"). Each is an int in
+    ``[0, 2**len(var_order))``, bit ``k`` from the top corresponding to
+    ``var_order[k]`` — the same convention as
+    :func:`ohmwork.derivation.all_assignments`.
+
+    Prime implicants are generated over ``minterms | dont_cares`` (a
+    don't-care may help combine terms into a larger, cheaper implicant), but
+    only ``minterms`` must actually be covered by the result — a don't-care
+    is covered opportunistically, never required."""
     n_vars = len(var_order)
     full = set(range(2**n_vars))
-    if minterms == full:
-        return Const(True)
+    care_set = minterms | dont_cares
     if not minterms:
+        # Every don't-care can be assigned 0 too, so the constant-0 function
+        # (zero literals) is always available and always optimal here.
         return Const(False)
+    if care_set == full:
+        # Every position is either a required 1 or free — assigning every
+        # don't-care to 1 satisfies all constraints at zero literal cost.
+        return Const(True)
 
-    primes = _prime_implicants(n_vars, minterms)
+    primes = _prime_implicants(n_vars, care_set)
     essential, remaining = _essential_cover(primes, minterms, n_vars)
     extra_options = _minimal_extra_cover(primes, remaining, n_vars)
 

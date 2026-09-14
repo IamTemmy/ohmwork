@@ -238,3 +238,64 @@ variable suffixes, unbalanced parens): fix it in the grammar, not in downstream 
 logic.
 
 **Date:** 2026-09-13
+
+---
+
+## D16 — M1b v1: what exactly is the declared search space, and how are PDN/PUN built?
+
+**Choice:** D1 requires the search space to be "declared explicitly... and grows as the
+engine does." For M1b's first pass, the declared space is: **two candidate PDN shapes per
+function, both single-stage, both derived from flat two-level Quine-McCluskey SOPs** — not
+general algebraic factoring (kernel/co-kernel extraction, à la Espresso/SIS). Concretely:
+
+1. **Construction.** The PDN must conduct exactly when the output should be 0, so it is
+   built from `F'` (never `F` directly): AND becomes series, OR becomes parallel, each
+   literal becomes one transistor (NMOS). The PUN is the topological dual of the PDN — same
+   literals, series and parallel swapped, PMOS instead of NMOS. This is the standard
+   complementary-CMOS construction, not a decision point in itself; what *is* decided here
+   is which expression for `F'` gets fed into it.
+2. **Two candidates, both tried:**
+   - **AOI**: minimize `F'` directly into a minimal SOP via Quine-McCluskey (D4's
+     don't-care handling applies here too) — a parallel-of-series PDN.
+   - **OAI**: minimize `F` itself into a minimal SOP, then take its structural De Morgan
+     complement (swap And/Or, complement each literal — a deliberate, visible synthesis
+     step, distinct from D5's ban on identity rewrites in canonicalization/tie-breaking) —
+     a series-of-parallels PDN.
+   Whichever costs fewer transistors wins; a tie is broken exactly as D5 prescribes
+   (canonical rendered form, compared lexicographically).
+3. **What this space does *not* find.** A function whose cheapest realization needs a
+   literal shared across product terms in a way neither flat-SOP candidate captures will not
+   be found — general multi-level factoring is future work, not v1. Per D6, a result is
+   labeled "not proven minimal" unless the narrow certificate in point 4 applies.
+4. **Minimality certificate.** If the chosen PDN uses exactly one literal per declared
+   variable (every declared variable appears, and the literal count equals the variable
+   count), the result is provably minimal in *any* search space — a function depending on n
+   variables needs at least n literals, full stop. This is the only minimality claim v1
+   makes; it happens to cover single-stage NAND/NOR/AOI/OAI gates with no repeated or
+   redundant variables (including all three of M1b's acceptance-test gates), but nothing
+   more.
+5. **Inverters (D2/D12).** Costed at 2 transistors each, once per distinct complemented
+   literal appearing in the *chosen* candidate's `F'` (shared across every product term that
+   uses it, never per use site), unless `--dual-rail` is given.
+6. **Gate naming (D14).** Read off the chosen PDN's shape: all-series -> NAND-n, all-parallel
+   -> NOR-n, parallel-of-series -> AOI followed by each series branch's length (descending),
+   series-of-parallels -> OAI likewise. Anything else is reported as an unnamed "custom
+   complex gate" rather than guessed — though because Quine-McCluskey's output is always a
+   flat two-level SOP, both candidates are always one of these four shapes today; the
+   fallback exists for when factoring (point 3) is eventually added and can produce deeper
+   nesting.
+
+**Reasoning:** D1 explicitly names "AOI/OAI and their generalizations" as the v1 search
+space alongside NAND/NOR decompositions — this is that space made concrete and
+implementable, not an expansion of it. Building full multi-level factoring now would be a
+substantially larger effort for a case the M1b acceptance test doesn't require (all three of
+its gates are already optimal flat-SOP realizations); shipping the narrower, honestly-scoped
+version first, with D6 correctly declining to overclaim on cases it can't solve, matches
+design principle 5.1 ("correct before clever"). Per the working agreement (§9), a second
+collaborator building an independent M1b implementation needs this written down to get the
+*same* answers on anything beyond the three acceptance-test gates — without it, two correct
+but differently-scoped synthesizers would disagree on cases like `((a+b)c)'`, which this
+search space happens to solve optimally (by trying the OAI candidate) but a pure-AOI-only
+implementation would not.
+
+**Date:** 2026-09-13
