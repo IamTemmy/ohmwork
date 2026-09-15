@@ -147,3 +147,53 @@ def test_tt_terse_and_cols_are_mutually_exclusive_at_the_cli():
         main(["tt", "xy", "--terse", "--cols", "x"])
     assert exc_info.value.code == 2
     assert "not allowed" in err.getvalue().lower()
+
+
+# --- `ui` subcommand (M1.1) ---------------------------------------------------
+#
+# run_server() itself blocks forever serving the page, so these only check
+# that `ui` is wired up correctly and passes its flags through — the server
+# and its HTTP behavior are covered end to end in tests/test_webui.py.
+
+
+def test_ui_command_is_registered():
+    import contextlib
+    import io
+
+    import pytest
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), pytest.raises(SystemExit) as exc_info:
+        main(["ui", "--help"])
+    assert exc_info.value.code == 0
+    assert "--port" in out.getvalue()
+    assert "--no-browser" in out.getvalue()
+
+
+def test_ui_command_calls_run_server_with_parsed_flags(monkeypatch):
+    import ohmwork.cli as cli_module
+
+    calls = []
+    monkeypatch.setattr(
+        cli_module,
+        "run_ui",
+        lambda args, *, stdout, stderr: calls.append((args.port, args.no_browser)) or 0,
+    )
+    code, out, err = run(["ui", "--port", "9999", "--no-browser"])
+    assert code == 0
+    assert calls == [(9999, True)]
+
+
+def test_ui_defaults_to_port_5757_and_opening_a_browser(monkeypatch):
+    import ohmwork.webui as webui_module
+
+    captured = {}
+
+    def fake_run_server(*, host="127.0.0.1", port=5757, open_browser=True, stdout=None):
+        captured["port"] = port
+        captured["open_browser"] = open_browser
+
+    monkeypatch.setattr(webui_module, "run_server", fake_run_server)
+    code, out, err = run(["ui"])
+    assert code == 0
+    assert captured == {"port": 5757, "open_browser": True}

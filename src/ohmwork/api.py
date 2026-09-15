@@ -1,0 +1,123 @@
+"""The UI-agnostic core operations behind both ``ohmwork``'s CLI and its
+optional web UI (M1.1, ``ohmwork ui``): "render a tt report" and "render a
+synth report" as plain functions returning text, so both front ends call
+the exact same logic rather than reimplementing it.
+
+Design principle 5.4 ("core is a library") already meant the engine itself
+(parser/derivation/synth/verify) was UI-free; this module is the thin,
+still-UI-free layer both `cli.py` and `webui.py` sit on top of, so that
+"the web UI wraps the existing library without changing its logic" is true
+by construction — there's only one place either behavior lives.
+
+Every function here raises ``ParseError`` or ``ValueError`` on invalid
+input (the same exceptions the underlying modules raise) rather than
+handling them — printing an "error: ..." line and choosing an exit code is
+a CLI concern, and rendering an error banner is a web-UI concern; neither
+belongs here.
+"""
+
+from __future__ import annotations
+
+from ohmwork.derivation import all_assignments, build_table, evaluate, variables_in_order
+from ohmwork.expr import render as render_expr
+from ohmwork.parser import parse
+from ohmwork.render import format_latex, format_markdown, format_terminal
+from ohmwork.report import format_synth_report
+from ohmwork.simplify import simplify
+from ohmwork.synth import synthesize
+from ohmwork.truth_table import parse_index_list, parse_table_string, parse_var_list
+
+
+def render_tt(
+    expression: str,
+    *,
+    md: bool = False,
+    latex: bool = False,
+    terse: bool = False,
+    cols: list[str] | None = None,
+) -> str:
+    """The full text ``ohmwork tt`` prints: the table (in whichever format)
+    followed by ``F = ...``. Raises ``ParseError`` (bad expression) or
+    ``ValueError`` (bad terse/cols combination, or an unknown column)."""
+    ast = parse(expression)
+    table = build_table(ast, terse=terse, cols=cols)
+
+    if latex:
+        body = format_latex(table)
+    elif md:
+        body = format_markdown(table)
+    else:
+        body = format_terminal(table)
+
+    var_order = variables_in_order(ast)
+    simplified = simplify(var_order, table.output.values)
+    return f"{body}\nF = {render_expr(simplified)}"
+
+
+def resolve_truth_table(
+    *,
+    expr: str | None = None,
+    variables: str | None = None,
+    ones: str | None = None,
+    dc: str | None = None,
+    table: str | None = None,
+) -> tuple[list[str], set[int], set[int]]:
+    """Work out (var_order, minterms, dont_cares) from whichever input mode
+    was given: ``expr`` alone, or ``variables`` with ``ones``/``dc``, or
+    ``variables`` with ``table``. Raises ``ValueError`` on any invalid or
+    conflicting combination — rejected the same way ambiguous D8 input is,
+    never guessed."""
+    if expr is not None:
+        if any(x is not None for x in (variables, ones, dc, table)):
+            raise ValueError("an expression cannot be combined with an explicit variable list")
+        ast = parse(expr)
+        var_order = variables_in_order(ast)
+        if not var_order:
+            raise ValueError("the expression must contain at least one variable")
+        rows = all_assignments(var_order)
+        minterms = {i for i, row in enumerate(rows) if evaluate(ast, row)}
+        return var_order, minterms, set()
+
+    if variables is None:
+        raise ValueError("give an expression, or a variable list together with minterms (or a table)")
+    var_order = parse_var_list(variables)
+
+    if table is not None:
+        if ones is not None or dc is not None:
+            raise ValueError("a table string cannot be combined with minterms/don't-cares")
+        minterms, dont_cares = parse_table_string(table, len(var_order))
+        return var_order, minterms, dont_cares
+
+    if ones is None:
+        raise ValueError("give minterms (or a table) alongside the variable list")
+    minterm_set = parse_index_list(ones, len(var_order), "minterms")
+    dont_care_set = parse_index_list(dc, len(var_order), "don't-cares") if dc is not None else set()
+    overlap = minterm_set & dont_care_set
+    if overlap:
+        raise ValueError(f"index/indices {sorted(overlap)} listed as both a minterm and a don't-care")
+    return var_order, minterm_set, dont_care_set
+
+
+def render_synth(
+    *,
+    expr: str | None = None,
+    variables: str | None = None,
+    ones: str | None = None,
+    dc: str | None = None,
+    table: str | None = None,
+    dual_rail: bool = False,
+    max_stack: int | None = None,
+) -> str:
+    """The full text ``ohmwork synth`` prints: candidates, gate name,
+    transistor breakdown, schematic, and D7 verification. Raises
+    ``ValueError`` (bad input, unsupported variable count, or no candidate
+    fits ``max_stack``) or ``RuntimeError`` (D7 verification failed inside
+    ``synthesize`` itself — a bug in ohmwork, never a valid design)."""
+    var_order, minterms, dont_cares = resolve_truth_table(
+        expr=expr, variables=variables, ones=ones, dc=dc, table=table
+    )
+    result = synthesize(var_order, minterms, dont_cares, dual_rail=dual_rail, max_stack=max_stack)
+    # synthesize() already verified this design (D7) before returning it —
+    # result.verification is guaranteed to have passed, or it would have
+    # raised RuntimeError above instead of reaching this line.
+    return format_synth_report(result, result.verification)

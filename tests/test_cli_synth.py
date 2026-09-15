@@ -157,10 +157,10 @@ def test_verification_failure_exits_nonzero_not_success(monkeypatch):
     # actually depends on.
     import ohmwork.cli as cli_module
 
-    def fake_synthesize(*args, **kwargs):
+    def fake_render_synth(*args, **kwargs):
         raise RuntimeError("failed its own D7 verification (forced for this test)")
 
-    monkeypatch.setattr(cli_module, "synthesize", fake_synthesize)
+    monkeypatch.setattr(cli_module, "render_synth", fake_render_synth)
     code, out, err = run(["synth", "--expr", "(abc)'"])
     assert code != 0
     assert out == ""

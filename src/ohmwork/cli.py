@@ -1,9 +1,13 @@
 """The ``ohmwork`` command line, per D14: layered subcommands, not modes.
 
-M1a shipped ``tt`` (the derivation table). M1b adds ``synth`` (the
-transistor layer) — ``kmap`` is still M1b+ and not registered yet. D14 is
-explicit that transistor content never appears unasked: ``synth`` is its own
-subcommand, never a flag on ``tt``.
+M1a shipped ``tt`` (the derivation table). M1b added ``synth`` (the
+transistor layer) — ``kmap`` is still M1b+ and not registered yet. M1.1 adds
+``ui``, a local web front end for the same two operations, for people who'd
+rather use form fields than remember flags; it wraps ``ohmwork.api``, the
+same UI-agnostic layer this module's own ``tt``/``synth`` handlers call, so
+the two front ends can never drift into different behavior. D14 is explicit
+that transistor content never appears unasked: ``synth`` is its own
+subcommand, never a flag on ``tt``, and the UI keeps that same separation.
 """
 
 from __future__ import annotations
@@ -11,15 +15,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from ohmwork.derivation import all_assignments, build_table, evaluate, variables_in_order
+from ohmwork.api import render_synth, render_tt
 from ohmwork.errors import ParseError
-from ohmwork.expr import render as render_expr
-from ohmwork.parser import parse
-from ohmwork.render import format_latex, format_markdown, format_terminal
-from ohmwork.report import format_synth_report
-from ohmwork.simplify import simplify
-from ohmwork.synth import synthesize
-from ohmwork.truth_table import parse_index_list, parse_table_string, parse_var_list
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -81,16 +78,25 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Reject any candidate whose series stack height exceeds N (D3's opt-in constraint)",
     )
 
+    ui = subparsers.add_parser(
+        "ui",
+        help="Start a local web page for tt/synth (M1.1) instead of the command line",
+        description=(
+            "Start a small local server hosting a form-based front end for tt and "
+            "synth, and open it in your browser. A thin wrapper over the same "
+            "ohmwork.api functions the CLI uses — nothing about tt/synth's own "
+            "behavior changes."
+        ),
+    )
+    ui.add_argument("--port", type=int, default=5757, help="Port to listen on (default: 5757)")
+    ui.add_argument(
+        "--no-browser", action="store_true", help="Don't automatically open the page in a browser"
+    )
+
     return parser
 
 
 def run_tt(args: argparse.Namespace, *, stdout, stderr) -> int:
-    try:
-        ast = parse(args.expression)
-    except ParseError as e:
-        print(f"error: {e}", file=stderr)
-        return 1
-
     cols = None
     if args.cols is not None:
         cols = [c.strip() for c in args.cols.split(",")]
@@ -99,84 +105,44 @@ def run_tt(args: argparse.Namespace, *, stdout, stderr) -> int:
             return 1
 
     try:
-        table = build_table(ast, terse=args.terse, cols=cols)
-    except ValueError as e:
+        output = render_tt(args.expression, md=args.md, latex=args.latex, terse=args.terse, cols=cols)
+    except (ParseError, ValueError) as e:
         print(f"error: {e}", file=stderr)
         return 1
 
-    if args.latex:
-        print(format_latex(table), file=stdout)
-    elif args.md:
-        print(format_markdown(table), file=stdout)
-    else:
-        print(format_terminal(table), file=stdout)
-
-    var_order = variables_in_order(ast)
-    simplified = simplify(var_order, table.output.values)
-    print(f"F = {render_expr(simplified)}", file=stdout)
+    print(output, file=stdout)
     return 0
-
-
-def _resolve_synth_input(args: argparse.Namespace) -> tuple[list[str], set[int], set[int]]:
-    """Work out (var_order, minterms, dont_cares) from whichever of
-    --expr / --vars+--ones / --vars+--table the user gave. Raises
-    ``ValueError`` on any invalid or conflicting combination — rejected
-    the same way ambiguous D8 input is, never guessed."""
-    if args.expr is not None:
-        if any(x is not None for x in (args.vars, args.ones, args.dc, args.table)):
-            raise ValueError("--expr cannot be combined with --vars/--ones/--dc/--table")
-        ast = parse(args.expr)
-        var_order = variables_in_order(ast)
-        if not var_order:
-            raise ValueError("--expr must contain at least one variable")
-        rows = all_assignments(var_order)
-        minterms = {i for i, row in enumerate(rows) if evaluate(ast, row)}
-        return var_order, minterms, set()
-
-    if args.vars is None:
-        raise ValueError("give --expr, or --vars together with --ones (or --table)")
-    var_order = parse_var_list(args.vars)
-
-    if args.table is not None:
-        if args.ones is not None or args.dc is not None:
-            raise ValueError("--table cannot be combined with --ones/--dc")
-        minterms, dont_cares = parse_table_string(args.table, len(var_order))
-        return var_order, minterms, dont_cares
-
-    if args.ones is None:
-        raise ValueError("give --ones (or --table) alongside --vars")
-    minterms = parse_index_list(args.ones, len(var_order), "--ones")
-    dont_cares = parse_index_list(args.dc, len(var_order), "--dc") if args.dc is not None else set()
-    overlap = minterms & dont_cares
-    if overlap:
-        raise ValueError(f"index/indices {sorted(overlap)} listed in both --ones and --dc")
-    return var_order, minterms, dont_cares
 
 
 def run_synth(args: argparse.Namespace, *, stdout, stderr) -> int:
     try:
-        var_order, minterms, dont_cares = _resolve_synth_input(args)
+        output = render_synth(
+            expr=args.expr,
+            variables=args.vars,
+            ones=args.ones,
+            dc=args.dc,
+            table=args.table,
+            dual_rail=args.dual_rail,
+            max_stack=args.max_stack,
+        )
     except (ValueError, ParseError) as e:
         print(f"error: {e}", file=stderr)
         return 1
-
-    try:
-        result = synthesize(
-            var_order, minterms, dont_cares, dual_rail=args.dual_rail, max_stack=args.max_stack
-        )
-    except ValueError as e:
-        print(f"error: {e}", file=stderr)
-        return 1
     except RuntimeError as e:
-        # synthesize() only raises this if its own D7 verification failed —
-        # a bug in ohmwork, not bad input. Never printed as a valid design.
+        # render_synth() only raises this if synthesize()'s own D7
+        # verification failed — a bug in ohmwork, not bad input. Never
+        # printed as a valid design.
         print(f"error: {e}", file=stderr)
         return 1
 
-    # synthesize() already verified this design (D7) before returning it —
-    # result.verification is guaranteed to have passed, or synthesize()
-    # would have raised above rather than reach here.
-    print(format_synth_report(result, result.verification), file=stdout)
+    print(output, file=stdout)
+    return 0
+
+
+def run_ui(args: argparse.Namespace, *, stdout, stderr) -> int:
+    from ohmwork.webui import run_server  # imported lazily: only `ui` needs it
+
+    run_server(port=args.port, open_browser=not args.no_browser, stdout=stdout)
     return 0
 
 
@@ -188,6 +154,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_tt(args, stdout=sys.stdout, stderr=sys.stderr)
     if args.command == "synth":
         return run_synth(args, stdout=sys.stdout, stderr=sys.stderr)
+    if args.command == "ui":
+        return run_ui(args, stdout=sys.stdout, stderr=sys.stderr)
 
     parser.print_help()  # pragma: no cover - unreachable while every command is handled above
     return 1

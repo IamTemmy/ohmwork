@@ -3,7 +3,7 @@
 Digital logic work at the speed of typing, showing its work at every step.
 
 See [docs/CHARTER.md](docs/CHARTER.md) for the mission and scope, and
-[docs/decisions.md](docs/decisions.md) for the definitional decisions (D1–D14) that govern
+[docs/decisions.md](docs/decisions.md) for the definitional decisions (D1–D16) that govern
 the implementation.
 
 ## Setup
@@ -47,6 +47,18 @@ and any shared inverters — D12), an ASCII schematic, and independent functiona
 and structural-validity verification (D7). `--dual-rail` assumes complemented inputs are
 free (D2); `--max-stack N` enforces D3's engineering stack-height constraint instead of the
 default advisory-only textbook mode.
+
+`ui` (M1.1) starts a small local web page for `tt`/`synth` — form fields instead of flags,
+for routine use:
+
+```bash
+ohmwork ui
+```
+
+Opens `http://127.0.0.1:5757/` in your browser (`--port N` to use a different port,
+`--no-browser` to just print the URL). It's a thin wrapper over the same `ohmwork.api`
+functions the CLI itself calls — nothing about `tt`/`synth`'s behavior changes, and the CLI
+keeps working exactly as before. Stop the server with Ctrl+C.
 
 ## Development
 
