@@ -110,7 +110,15 @@ def _minimal_extra_cover(
             minimal.add(p)
         products = minimal
     best_size = min(len(p) for p in products)
-    return [set(p) for p in products if len(p) == best_size]
+    result = [set(p) for p in products if len(p) == best_size]
+    # `products` is a set of frozensets of strings: Python randomizes string
+    # hashing per-process (PYTHONHASHSEED), so iterating it — and therefore
+    # this list's order — is otherwise seed-dependent. Sort by each cover's
+    # own bit patterns (plain string comparison, no hashing involved) so the
+    # order is fixed regardless of hash seed, per design principle 5.3
+    # ("identical input yields byte-identical output").
+    result.sort(key=lambda cover: sorted(cover))
+    return result
 
 
 def _term_to_expr(term: str, var_order: list[str]) -> Expr:
@@ -185,6 +193,12 @@ def minimal_covers(
     for cover in covers:
         ordered = sorted(cover, key=lambda t: _canonical_sort_key(t, var_order))
         results.append(mk_or([_term_to_expr(t, var_order) for t in ordered]))
+    # Defense in depth: _minimal_extra_cover already returns a
+    # hash-seed-independent order, but this function's own determinism
+    # shouldn't depend on a caller trusting that — sort on each result's
+    # own rendered form (a caller-facing property, not an internal
+    # implementation detail) so this guarantee holds regardless.
+    results.sort(key=str)
     return results
 
 

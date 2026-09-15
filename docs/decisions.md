@@ -341,3 +341,20 @@ enforced in code, and verification (D7) was checked by the CLI but didn't preven
 design from being returned with exit code 0 — both are closed now, the latter by making
 verification a precondition inside `synthesize()` itself rather than a separate step a
 caller could skip or ignore.
+
+**Update (2026-09-15):** Fixing the above (retaining every tied cover instead of just one)
+introduced a determinism regression, also caught by ChatGPT's review: the new candidate
+lists were built from Python `set`/`frozenset` internals in `simplify._minimal_extra_cover`,
+whose iteration order depends on `PYTHONHASHSEED` (randomized per-process by default) —
+across 80 seeds, the same input produced two byte-distinct outputs, differing only in which
+of two equal-cost candidates was listed first. The chosen circuit itself was never affected,
+only the "candidates considered" display — but design principle 5.3 ("identical input
+yields byte-identical output") makes no exception for cosmetic ordering. Fixed at three
+layers: `_minimal_extra_cover` now sorts its own output by each cover's bit patterns before
+returning (fixing the root cause), `minimal_covers` independently sorts its result by
+rendered form (so its own determinism doesn't depend on trusting that internal fix), and
+`synth._build_candidates` sorts the combined candidate list the same way before it ever
+reaches `SynthesisResult` — so no caller, not just the report, can observe hash-dependent
+order. Verified against the reported reproducer across 10 different `PYTHONHASHSEED` values
+(previously 2 distinct outputs, now 1) and added as a genuine cross-process regression test,
+since hash randomization is fixed per-process and can't be exercised any other way.

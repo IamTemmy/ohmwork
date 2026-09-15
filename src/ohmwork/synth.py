@@ -167,6 +167,13 @@ def _build_candidates(
 
     candidates = [_make_candidate("AOI", fp, dual_rail=dual_rail) for fp in aoi_f_primes]
     candidates += [_make_candidate("OAI", fp, dual_rail=dual_rail) for fp in oai_f_primes]
+    # minimal_covers() already returns each direction's covers in a fixed
+    # (hash-seed-independent) order, but sort the combined list here too —
+    # SynthesisResult.other_candidates is a public, caller-facing field, and
+    # its order shouldn't depend on trusting an upstream module's internals.
+    # Total cost first (cheapest-first reads naturally), then the rendered
+    # form and label as a deterministic tie-break for equal-cost candidates.
+    candidates.sort(key=lambda c: (c.total_cost, render_expr(c.f_prime), c.label))
     return candidates
 
 

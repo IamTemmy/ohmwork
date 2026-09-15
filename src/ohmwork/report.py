@@ -34,7 +34,7 @@ def format_synth_report(result: SynthesisResult, verification: VerificationResul
     lines: list[str] = []
 
     lines.append("Candidates considered (D1/D16: every literal-minimal AOI/OAI cover):")
-    for c in sorted(result.other_candidates, key=lambda c: c.total_cost):
+    for c in sorted(result.other_candidates, key=lambda c: (c.total_cost, render_expr(c.f_prime), c.label)):
         chosen = " <- chosen" if c is result.chosen else ""
         lines.append(
             f"  {c.label}: F' = {render_expr(c.f_prime)} "

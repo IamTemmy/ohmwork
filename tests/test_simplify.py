@@ -126,6 +126,23 @@ def test_minimal_covers_returns_none_for_constant_true():
     assert minimal_covers(["a", "b"], minterms={0, 1}, dont_cares={2, 3}) is None
 
 
+def test_minimal_covers_output_order_is_deterministic_not_hash_dependent():
+    # Regression (ChatGPT's M1b review): minimal_covers() built its result
+    # list from Python sets of frozensets, whose iteration order depends on
+    # PYTHONHASHSEED — so two ties could come back in either order across
+    # runs. The list is now always sorted by each cover's own rendered
+    # form, so calling it repeatedly (even if the underlying sets were
+    # rebuilt) must always yield the same order.
+    var_order = ["a", "b", "c", "d"]
+    dont_cares = {0, 1, 3, 4, 7, 9, 11, 13, 14}
+    covers = minimal_covers(var_order, minterms={5, 8, 10}, dont_cares=dont_cares)
+    rendered = [render(c) for c in covers]
+    assert rendered == sorted(rendered)
+    # Calling it again must reproduce the exact same order.
+    covers2 = minimal_covers(var_order, minterms={5, 8, 10}, dont_cares=dont_cares)
+    assert [render(c) for c in covers2] == rendered
+
+
 def test_tie_break_prefers_fewest_literals_more_cases():
     # A few more concrete counterexamples from the same bug class (found by
     # randomized search against the pre-fix code, where each used to come

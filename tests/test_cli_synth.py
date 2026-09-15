@@ -3,6 +3,9 @@ test: reproduce the three CPE 635 Fall 2026 Exam #1 answers)."""
 
 import contextlib
 import io
+import os
+import subprocess
+import sys
 
 from ohmwork.cli import main
 
@@ -116,6 +119,33 @@ def test_rejects_five_or_more_variables():
     code, out, err = run(["synth", "--vars", "a,b,c,d,e", "--ones", "0"])
     assert code != 0
     assert "1-4 variables" in err
+
+
+def test_output_is_byte_identical_across_hash_seeds():
+    # Regression (ChatGPT's M1b review): this exact input has two tied OAI
+    # candidates whose display order used to depend on PYTHONHASHSEED —
+    # Python's hash randomization is fixed per-process at startup, so this
+    # can only be tested faithfully across real subprocesses, not by
+    # varying anything within this test process.
+    args = [
+        sys.executable,
+        "-m",
+        "ohmwork.cli",
+        "synth",
+        "--vars",
+        "a,b,c,d",
+        "--ones",
+        "5,8,10",
+        "--dc",
+        "0,1,3,4,7,9,11,13,14",
+    ]
+    outputs = set()
+    for seed in ("1", "2", "3", "4"):
+        env = dict(os.environ, PYTHONHASHSEED=seed)
+        result = subprocess.run(args, capture_output=True, text=True, env=env)
+        assert result.returncode == 0, result.stderr
+        outputs.add(result.stdout)
+    assert len(outputs) == 1, f"output differed across hash seeds: {outputs}"
 
 
 def test_verification_failure_exits_nonzero_not_success(monkeypatch):
