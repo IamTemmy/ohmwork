@@ -147,6 +147,47 @@ def _literal_count(terms) -> int:
     return sum(len(t) - t.count("-") for t in terms)
 
 
+def minimal_covers(
+    var_order: list[str], minterms: set[int], dont_cares: set[int] = frozenset()
+) -> list[Expr] | None:
+    """Every minimal sum-of-products cover tied for minimum term count, then
+    minimum literal count — i.e. every candidate :func:`minimize` would
+    consider before applying D5's own canonical-string tie-break. Exposed
+    separately so a caller with its own cost model (M1b's synth.py, which
+    additionally weighs shared-inverter cost per D12) can pick among these
+    on its own terms rather than being handed only D5's single choice.
+
+    Each returned :class:`Expr` is an ``Or`` (or a bare term/literal) with
+    its own operands already in D5's canonical order. Returns ``None`` for
+    the two constant cases (0 or 1), which have no "covers" in this sense —
+    callers should fall back to :func:`minimize` for those."""
+    n_vars = len(var_order)
+    full = set(range(2**n_vars))
+    care_set = minterms | dont_cares
+    if not minterms or care_set == full:
+        return None
+
+    primes = _prime_implicants(n_vars, care_set)
+    essential, remaining = _essential_cover(primes, minterms, n_vars)
+    extra_options = _minimal_extra_cover(primes, remaining, n_vars)
+
+    # Petrick's method above only minimizes the number of terms. Standard
+    # minimal-SOP practice ranks ties by total literal count next — so
+    # filter to the literal-minimal covers, otherwise a candidate that
+    # merely sorts first lexicographically could beat one with strictly
+    # fewer literals (that final lexicographic pick is minimize()'s job,
+    # not this function's).
+    covers = [essential | extra for extra in extra_options]
+    best_literal_count = min(_literal_count(c) for c in covers)
+    covers = [c for c in covers if _literal_count(c) == best_literal_count]
+
+    results = []
+    for cover in covers:
+        ordered = sorted(cover, key=lambda t: _canonical_sort_key(t, var_order))
+        results.append(mk_or([_term_to_expr(t, var_order) for t in ordered]))
+    return results
+
+
 def minimize(
     var_order: list[str], minterms: set[int], dont_cares: set[int] = frozenset()
 ) -> Expr:
@@ -158,10 +199,12 @@ def minimize(
     ``var_order[k]`` — the same convention as
     :func:`ohmwork.derivation.all_assignments`.
 
-    Prime implicants are generated over ``minterms | dont_cares`` (a
-    don't-care may help combine terms into a larger, cheaper implicant), but
-    only ``minterms`` must actually be covered by the result — a don't-care
-    is covered opportunistically, never required."""
+    Among :func:`minimal_covers`' ties, picks the one whose rendered form is
+    lexicographically smallest (D5's canonical tie-break) — this is the
+    right choice for reporting a single "the simplified result" (M1a's
+    ``tt``), but a cost model beyond term/literal count (like M1b's
+    transistor-and-inverter cost) should call :func:`minimal_covers`
+    directly instead of assuming this pick is the cheapest for its purposes."""
     n_vars = len(var_order)
     full = set(range(2**n_vars))
     care_set = minterms | dont_cares
@@ -174,35 +217,9 @@ def minimize(
         # don't-care to 1 satisfies all constraints at zero literal cost.
         return Const(True)
 
-    primes = _prime_implicants(n_vars, care_set)
-    essential, remaining = _essential_cover(primes, minterms, n_vars)
-    extra_options = _minimal_extra_cover(primes, remaining, n_vars)
-
-    # Petrick's method above only minimizes the number of terms. Standard
-    # minimal-SOP practice ranks ties by total literal count next, and only
-    # then falls back to a deterministic tie-break — so filter to the
-    # literal-minimal covers before applying D5's canonical-string tie-break,
-    # otherwise a candidate that merely sorts first lexicographically can
-    # beat one with strictly fewer literals.
-    covers = [essential | extra for extra in extra_options]
-    best_literal_count = min(_literal_count(c) for c in covers)
-    covers = [c for c in covers if _literal_count(c) == best_literal_count]
-
-    best_terms: list[str] | None = None
-    for cover in covers:
-        candidate = sorted(cover, key=lambda t: _canonical_sort_key(t, var_order))
-        if best_terms is None:
-            best_terms = candidate
-            continue
-        # D5 tie-break: canonical (rendered) form, compared lexicographically.
-        candidate_str = " + ".join(str(_term_to_expr(t, var_order)) for t in candidate)
-        best_str = " + ".join(str(_term_to_expr(t, var_order)) for t in best_terms)
-        if candidate_str < best_str:
-            best_terms = candidate
-
-    assert best_terms is not None
-    term_exprs = [_term_to_expr(t, var_order) for t in best_terms]
-    return mk_or(term_exprs)
+    covers = minimal_covers(var_order, minterms, dont_cares)
+    assert covers is not None  # the constant cases were handled above
+    return min(covers, key=lambda e: str(e))
 
 
 def simplify(var_order: list[str], values: list[bool]) -> Expr:

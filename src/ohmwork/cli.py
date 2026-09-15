@@ -20,7 +20,6 @@ from ohmwork.report import format_synth_report
 from ohmwork.simplify import simplify
 from ohmwork.synth import synthesize
 from ohmwork.truth_table import parse_index_list, parse_table_string, parse_var_list
-from ohmwork.verify import verify
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -168,9 +167,16 @@ def run_synth(args: argparse.Namespace, *, stdout, stderr) -> int:
     except ValueError as e:
         print(f"error: {e}", file=stderr)
         return 1
+    except RuntimeError as e:
+        # synthesize() only raises this if its own D7 verification failed —
+        # a bug in ohmwork, not bad input. Never printed as a valid design.
+        print(f"error: {e}", file=stderr)
+        return 1
 
-    verification = verify(result.pdn, result.pun, var_order, minterms, dont_cares)
-    print(format_synth_report(result, verification), file=stdout)
+    # synthesize() already verified this design (D7) before returning it —
+    # result.verification is guaranteed to have passed, or synthesize()
+    # would have raised above rather than reach here.
+    print(format_synth_report(result, result.verification), file=stdout)
     return 0
 
 

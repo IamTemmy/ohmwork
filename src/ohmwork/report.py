@@ -33,10 +33,13 @@ def _schematic(result: SynthesisResult) -> str:
 def format_synth_report(result: SynthesisResult, verification: VerificationResult) -> str:
     lines: list[str] = []
 
-    lines.append("Candidates considered (D1: AOI/OAI dual search):")
-    for c in result.other_candidates:
-        chosen = " <- chosen" if c.label == result.chosen_label else ""
-        lines.append(f"  {c.label}: F' = {render_expr(c.f_prime)} ({c.transistor_cost} transistors){chosen}")
+    lines.append("Candidates considered (D1/D16: every literal-minimal AOI/OAI cover):")
+    for c in sorted(result.other_candidates, key=lambda c: c.total_cost):
+        chosen = " <- chosen" if c is result.chosen else ""
+        lines.append(
+            f"  {c.label}: F' = {render_expr(c.f_prime)} "
+            f"({c.core_cost} core + {c.inverter_cost} inverter = {c.total_cost} transistors){chosen}"
+        )
     lines.append("")
 
     lines.append(f"Gate: {result.gate_name}")

@@ -110,3 +110,28 @@ def test_rejects_reserved_f_in_vars():
     code, out, err = run(["synth", "--vars", "F,a", "--ones", "0"])
     assert code != 0
     assert "error" in err.lower()
+
+
+def test_rejects_five_or_more_variables():
+    code, out, err = run(["synth", "--vars", "a,b,c,d,e", "--ones", "0"])
+    assert code != 0
+    assert "1-4 variables" in err
+
+
+def test_verification_failure_exits_nonzero_not_success(monkeypatch):
+    # Confirms the CLI actually surfaces a failed-verification error rather
+    # than printing exit code 0 -- the exact defect ChatGPT's review found
+    # (it injected a failing VerificationResult and got exit 0 back). A real
+    # failure can no longer occur through normal input (synthesize() itself
+    # now gates on it), so this forces the failure at the boundary the CLI
+    # actually depends on.
+    import ohmwork.cli as cli_module
+
+    def fake_synthesize(*args, **kwargs):
+        raise RuntimeError("failed its own D7 verification (forced for this test)")
+
+    monkeypatch.setattr(cli_module, "synthesize", fake_synthesize)
+    code, out, err = run(["synth", "--expr", "(abc)'"])
+    assert code != 0
+    assert out == ""
+    assert "error" in err.lower()

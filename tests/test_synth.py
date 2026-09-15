@@ -4,6 +4,7 @@ comparison, gate naming, inverter accounting, and the minimality proof."""
 import pytest
 
 from ohmwork.derivation import all_assignments, evaluate
+from ohmwork.expr import render as render_expr
 from ohmwork.parser import parse
 from ohmwork.synth import de_morgan_complement, synthesize
 
@@ -172,10 +173,10 @@ def test_max_stack_accepts_a_compliant_function():
 
 
 def test_gate_naming_generalizes_to_more_than_two_terms():
-    var_order = ["a", "b", "c", "d", "e", "f"]
-    minterms = minterms_from_expr(var_order, "(ab+cd+ef)'")
+    var_order = ["a", "b", "c", "d"]
+    minterms = minterms_from_expr(var_order, "(ab+c+d)'")
     result = synthesize(var_order, minterms)
-    assert result.gate_name == "AOI222"
+    assert result.gate_name == "AOI211"
 
 
 def test_gate_naming_generalizes_for_oai_too():
@@ -183,3 +184,93 @@ def test_gate_naming_generalizes_for_oai_too():
     minterms = minterms_from_expr(var_order, "((a+d)(b+c+d))'")
     result = synthesize(var_order, minterms)
     assert result.gate_name == "OAI32"
+
+
+# --- Regressions from ChatGPT's M1b review ----------------------------------
+#
+# Selection previously compared only PDN+PUN cost, excluding inverters, and
+# minimize() had already committed to one lexicographically-first cover
+# before synthesis ever saw a cheaper (fewer-inverter) tied alternative.
+# Both are exact reproducers from that review.
+
+
+def test_selection_accounts_for_inverter_cost_not_just_core_cost():
+    # One AOI cover and one OAI cover both core-tie at 10 transistors, but
+    # need different numbers of complemented literals: 3 (16T total) vs 4
+    # (18T total). The cheaper one must win regardless of which direction
+    # found it -- picking the 18T design here was the exact reported bug.
+    var_order = ["a", "b", "c", "d"]
+    result = synthesize(var_order, minterms={1, 3, 4, 5, 11, 13, 14}, dont_cares={6, 7, 10, 12, 15})
+    assert result.total_transistors == 16
+    assert all(c.total_cost >= 16 for c in result.other_candidates)
+
+
+def test_tied_covers_within_one_direction_are_compared_on_inverter_cost():
+    # Two literal-minimal covers of F' both cost 6 core transistors (a'cd
+    # and bcd), but only one needs an inverter -- the inverter-free cover
+    # must win even though it doesn't sort first lexicographically.
+    var_order = ["a", "b", "c", "d"]
+    result = synthesize(var_order, minterms={0, 1, 2, 5, 6, 9, 10, 11}, dont_cares={3, 4, 8, 12, 13, 14, 15})
+    assert result.total_transistors == 6
+    assert result.inverter_transistors == 0
+    assert render_expr(result.f_prime) == "bcd"
+
+
+def test_verification_is_checked_before_a_result_is_ever_returned():
+    # Every SynthesisResult carries a verification that has already passed
+    # -- synthesize() itself is the gate (D7), not something layered on
+    # after the fact by a caller that might forget to check it.
+    var_order = ["a", "b", "c"]
+    minterms = minterms_from_expr(var_order, "(abc)'")
+    result = synthesize(var_order, minterms)
+    assert result.verification.passed is True
+
+
+def test_synthesize_raises_rather_than_return_a_design_that_fails_verification(monkeypatch):
+    # A real failure can't occur through normal input (that's the point of
+    # the fix) -- so this forces the internal verify() call to report one,
+    # confirming synthesize() actually gates on it rather than trusting the
+    # construction. ChatGPT's review found the CLI previously printed such
+    # a design with exit code 0.
+    import ohmwork.synth as synth_module
+    from ohmwork.verify import VerificationResult
+
+    fake = VerificationResult(
+        vector_count=8,
+        functional_pass=False,
+        structural_pass=False,
+        mismatches=(3,),
+        floating=(1,),
+        shorted=(2,),
+        dont_care_assignments={},
+    )
+    monkeypatch.setattr(synth_module, "verify", lambda *a, **k: fake)
+    with pytest.raises(RuntimeError, match="failed its own D7 verification"):
+        synthesize(["a", "b", "c"], minterms=minterms_from_expr(["a", "b", "c"], "(abc)'"))
+
+
+def test_synth_rejects_five_or_more_variables():
+    with pytest.raises(ValueError, match="1-4 variables"):
+        synthesize(["a", "b", "c", "d", "e"], minterms={0})
+
+
+def test_synth_rejects_zero_variables():
+    with pytest.raises(ValueError, match="1-4 variables"):
+        synthesize([], minterms=set())
+
+
+def test_false_minimality_claim_no_longer_occurs():
+    # Third reproducer from the same review: the buggy selection previously
+    # picked a 14-transistor design here and reported it "proven minimal";
+    # a cheaper 12-transistor cover was available and should now win, and
+    # since it doesn't use every declared variable (only 3 of 4), it must
+    # NOT claim proof (D6) -- unlike the false claim before the fix.
+    var_order = ["a", "b", "c", "d"]
+    result = synthesize(var_order, minterms={7, 8, 12, 14, 15}, dont_cares={0, 1, 4, 6, 10})
+    assert result.total_transistors == 12
+    assert result.minimality_proof is None
+
+
+def test_synth_allows_one_and_two_variables():
+    assert synthesize(["a"], minterms={0}).gate_name == "inverter (1 input)"
+    assert synthesize(["a", "b"], minterms={0}).gate_name is not None

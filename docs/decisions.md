@@ -25,6 +25,15 @@ claim now and widen the claim later without retracting anything it said before.
 
 **Date:** 2026-09-13
 
+**Update (2026-09-14):** M1b's actual first implementation (D16) covers only the
+single-stage AOI/OAI half of the space named above — the "plus NAND/NOR decompositions"
+(multi-stage) half described here is **not yet built**. This was flagged by ChatGPT's M1b
+review as a documents-disagreeing-with-each-other risk (exactly what §9's working agreement
+exists to catch): a reader could take D1's text alone to mean multi-stage decomposition
+already ships. It doesn't. D16 is the authoritative statement of what v1 actually searches;
+multi-stage NAND/NOR decomposition remains real future work, not yet scheduled to a
+milestone.
+
 ---
 
 ## D2 — Are complemented inputs free (dual-rail), or must inverters be counted?
@@ -254,15 +263,20 @@ general algebraic factoring (kernel/co-kernel extraction, à la Espresso/SIS). C
    literals, series and parallel swapped, PMOS instead of NMOS. This is the standard
    complementary-CMOS construction, not a decision point in itself; what *is* decided here
    is which expression for `F'` gets fed into it.
-2. **Two candidates, both tried:**
-   - **AOI**: minimize `F'` directly into a minimal SOP via Quine-McCluskey (D4's
-     don't-care handling applies here too) — a parallel-of-series PDN.
-   - **OAI**: minimize `F` itself into a minimal SOP, then take its structural De Morgan
-     complement (swap And/Or, complement each literal — a deliberate, visible synthesis
-     step, distinct from D5's ban on identity rewrites in canonicalization/tie-breaking) —
-     a series-of-parallels PDN.
-   Whichever costs fewer transistors wins; a tie is broken exactly as D5 prescribes
-   (canonical rendered form, compared lexicographically).
+2. **Every literal-minimal candidate in both directions, not just one of each.** Two SOP
+   covers can tie on term count and literal count while needing a different number of
+   complemented literals — which changes their *total* transistor cost once shared inverters
+   (point 5) are counted. So every tied cover is built into a candidate, not only whichever
+   one Quine-McCluskey's own (inverter-blind) tie-break happens to settle on first:
+   - **AOI**: every literal-minimal SOP of `F'` (D4's don't-care handling applies here too)
+     — each a parallel-of-series PDN.
+   - **OAI**: every literal-minimal SOP of `F`, each structurally De Morgan-complemented
+     (swap And/Or, complement each literal — a deliberate, visible synthesis step, distinct
+     from D5's ban on identity rewrites in canonicalization/tie-breaking) — each a
+     series-of-parallels PDN.
+   Whichever candidate has the cheapest **complete** cost (PDN + PUN + shared inverters)
+   wins; a genuine tie on that complete cost is broken exactly as D5 prescribes (canonical
+   rendered form, compared lexicographically) — never before complete cost is compared.
 3. **What this space does *not* find.** A function whose cheapest realization needs a
    literal shared across product terms in a way neither flat-SOP candidate captures will not
    be found — general multi-level factoring is future work, not v1. Per D6, a result is
@@ -284,6 +298,17 @@ general algebraic factoring (kernel/co-kernel extraction, à la Espresso/SIS). C
    flat two-level SOP, both candidates are always one of these four shapes today; the
    fallback exists for when factoring (point 3) is eventually added and can produce deeper
    nesting.
+7. **Variable count.** Charter §8 scopes M1b's deliverable and acceptance test to 3-4
+   variables and explicitly excludes 5+ from M1 entirely. `synth` enforces 1-4 (1-2 are
+   strictly simpler than the tested ceiling, so nothing is gained by refusing them; only the
+   upper bound is a real scope line) and rejects anything outside it rather than silently
+   running an unscoped search.
+8. **Verification is a precondition of returning a result, not a separate step a caller can
+   skip.** Per charter §4 ("every emitted network is exhaustively simulated... before it is
+   returned"), `synthesize()` runs D7's verification on the chosen design internally and
+   raises rather than returning it if verification fails — a caller (the CLI included)
+   cannot obtain a `SynthesisResult` that hasn't already passed. A failure here means a bug
+   in this module, not bad input.
 
 **Reasoning:** D1 explicitly names "AOI/OAI and their generalizations" as the v1 search
 space alongside NAND/NOR decompositions — this is that space made concrete and
@@ -299,3 +324,20 @@ search space happens to solve optimally (by trying the OAI candidate) but a pure
 implementation would not.
 
 **Date:** 2026-09-13
+
+**Update (2026-09-14):** ChatGPT's independent M1b review found that the first
+implementation of this decision had a real bug relative to its own stated intent: selection
+compared only PDN+PUN cost (excluding inverters) before picking a winner, and `minimize()`
+committed to a single literal-minimal cover via its own lexicographic tie-break *before*
+synthesis ever saw whether an equally-minimal alternative needed fewer inverters. Together
+these could — and, in a constructed reproducer, did — pick an 18-transistor design over a
+16-transistor one, and separately an 8-transistor design over a 6-transistor one, in both
+cases because the cheaper option lost a tie-break that never should have run (the true costs
+weren't equal). Point 2 above now states the corrected rule (complete cost, all tied covers
+considered) that was always the *intent*; the review also confirmed the three
+acceptance-test gates were unaffected (none of them hit this tie condition). Points 7 and 8
+were added in the same pass: the 5+-variable exclusion from D1/charter §8 was never actually
+enforced in code, and verification (D7) was checked by the CLI but didn't prevent a failed
+design from being returned with exit code 0 — both are closed now, the latter by making
+verification a precondition inside `synthesize()` itself rather than a separate step a
+caller could skip or ignore.

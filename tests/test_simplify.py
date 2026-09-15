@@ -4,7 +4,7 @@ result alongside the derivation table."""
 from ohmwork.derivation import build_table, variables_in_order
 from ohmwork.expr import render
 from ohmwork.parser import parse
-from ohmwork.simplify import minimize, simplify
+from ohmwork.simplify import minimal_covers, minimize, simplify
 
 
 def simplified_str(expr_text: str) -> str:
@@ -93,6 +93,37 @@ def test_all_dont_care_and_no_minterms_is_constant_false():
 def test_minterms_plus_dont_cares_covering_everything_is_constant_true():
     result = minimize(["a", "b"], minterms={0, 1}, dont_cares={2, 3})
     assert render(result) == "1"
+
+
+# --- minimal_covers(): exposes every tied cover, not just D5's pick --------
+
+
+def test_minimal_covers_exposes_a_genuine_tie():
+    # From the ChatGPT-reported case (F' minterms = {7}, same don't-cares):
+    # two literal-minimal covers exist (a'cd and bcd), and minimize() picks
+    # a'cd only because it sorts first lexicographically — minimal_covers()
+    # must expose both so a caller with a different cost model (e.g.
+    # inverter count) can choose the cheaper one instead.
+    var_order = ["a", "b", "c", "d"]
+    dont_cares = {3, 4, 8, 12, 13, 14, 15}
+    covers = minimal_covers(var_order, minterms={7}, dont_cares=dont_cares)
+    rendered = {render(c) for c in covers}
+    assert rendered == {"a'cd", "bcd"}
+    assert render(minimize(var_order, {7}, dont_cares)) == "a'cd"  # D5's pick: lexicographically smaller
+
+
+def test_minimal_covers_single_result_when_no_tie():
+    covers = minimal_covers(["x", "y"], minterms={0}, dont_cares={1})
+    assert len(covers) == 1
+    assert render(covers[0]) == "x'"
+
+
+def test_minimal_covers_returns_none_for_constant_false():
+    assert minimal_covers(["a", "b"], minterms=set(), dont_cares={0, 1, 2, 3}) is None
+
+
+def test_minimal_covers_returns_none_for_constant_true():
+    assert minimal_covers(["a", "b"], minterms={0, 1}, dont_cares={2, 3}) is None
 
 
 def test_tie_break_prefers_fewest_literals_more_cases():
