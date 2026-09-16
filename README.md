@@ -15,6 +15,17 @@ python3 -m venv .venv
 ./.venv/bin/pip install -e ".[dev]"
 ```
 
+Every command below (`ohmwork ...`, `pytest`) needs the virtual environment active in your
+shell first:
+
+```bash
+source .venv/bin/activate
+```
+
+You'll see `(.venv)` in your prompt once it's active; `deactivate` turns it back off. If you
+don't want to activate it, prefix every command with `./.venv/bin/` instead (`./.venv/bin/ohmwork ui`,
+`./.venv/bin/pytest`) — same effect, no activation needed.
+
 ## Usage
 
 ```bash
