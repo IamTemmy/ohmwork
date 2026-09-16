@@ -10,8 +10,10 @@
 #   project_dir the ohmwork project root the app should launch (default:
 #               this script's own repo)
 #
-# Needs: iconutil, sips (both ship with macOS), and Pillow for the icon
-# artwork (not a project dependency -- see make_icon.py's own docstring).
+# Needs: iconutil, sips (both ship with macOS). Uses icon-source.png (the
+# project's actual chosen artwork, checked into this repo) as the icon;
+# falls back to generating a plain placeholder via make_icon.py (which
+# needs Pillow -- not a project dependency) only if that file is missing.
 
 set -euo pipefail
 
@@ -24,8 +26,13 @@ APP="$OUT_DIR/Ohmwork.app"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-echo "Generating icon artwork..."
-python3 "$SCRIPT_DIR/make_icon.py" "$WORK/icon_1024.png"
+if [ -f "$SCRIPT_DIR/icon-source.png" ]; then
+    echo "Using icon-source.png..."
+    cp "$SCRIPT_DIR/icon-source.png" "$WORK/icon_1024.png"
+else
+    echo "icon-source.png not found -- generating a placeholder icon..."
+    python3 "$SCRIPT_DIR/make_icon.py" "$WORK/icon_1024.png"
+fi
 
 echo "Building .iconset..."
 mkdir -p "$WORK/AppIcon.iconset"
