@@ -72,11 +72,19 @@ Opens `http://127.0.0.1:5757/` in your browser (`--port N` to use a different po
 functions the CLI itself calls — nothing about `tt`/`synth`'s behavior changes, and the CLI
 keeps working exactly as before. Stop the server with Ctrl+C.
 
-**No terminal typing, every time:** double-click [`launch-ui.command`](launch-ui.command) —
-from Finder, or keep it in your Dock — to start the server and open the browser in one
-click. It's still the same local server underneath (nothing hosted, nothing new to trust);
-this just skips retyping the setup dance each time. Closing its Terminal window stops the
-server, same as Ctrl+C would.
+**No terminal typing, every time:** double-click [`launch-ui.command`](launch-ui.command)
+from Finder to start the server and open the browser in one click. It's still the same
+local server underneath (nothing hosted, nothing new to trust); this just skips retyping the
+setup dance each time. Closing its Terminal window stops the server, same as Ctrl+C would.
+
+**A real app icon, pinnable to the Dock (macOS):** run
+[`packaging/macos/build_app.sh`](packaging/macos/build_app.sh) to build `Ohmwork.app` (put
+next to this project folder by default) — a proper double-clickable app with its own icon
+that you can drag straight onto the Dock or into Applications, like any other app. It's a
+thin wrapper: launching it just opens Terminal running `launch-ui.command` above, so the
+actual behavior is identical either way. The `.app` itself isn't checked into git (it's a
+generated, machine-specific build artifact — rebuild it any time, e.g. if you move this
+folder); the build script is.
 
 ## Development
 
