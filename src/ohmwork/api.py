@@ -66,35 +66,45 @@ def resolve_truth_table(
     was given: ``expr`` alone, or ``variables`` with ``ones``/``dc``, or
     ``variables`` with ``table``. Raises ``ValueError`` on any invalid or
     conflicting combination — rejected the same way ambiguous D8 input is,
-    never guessed."""
+    never guessed.
+
+    Error text intentionally still names the CLI's own flags (``--expr``,
+    ``--vars``, etc.) even though this function is also the web UI's path —
+    it's the exact wording ``synth`` had before M1.1 (and its own tests
+    pin), which this extraction must not silently change (a real regression
+    ChatGPT's M1.1 review caught: the flag-oriented text had drifted to
+    UI-neutral prose here, which broke the CLI's byte-for-byte output). A
+    friendlier, front-end-specific rendering of these errors is future work
+    for whenever the UI gets an actual design pass — not a reason to let
+    the CLI's existing, already-signed-off behavior drift for free."""
     if expr is not None:
         if any(x is not None for x in (variables, ones, dc, table)):
-            raise ValueError("an expression cannot be combined with an explicit variable list")
+            raise ValueError("--expr cannot be combined with --vars/--ones/--dc/--table")
         ast = parse(expr)
         var_order = variables_in_order(ast)
         if not var_order:
-            raise ValueError("the expression must contain at least one variable")
+            raise ValueError("--expr must contain at least one variable")
         rows = all_assignments(var_order)
         minterms = {i for i, row in enumerate(rows) if evaluate(ast, row)}
         return var_order, minterms, set()
 
     if variables is None:
-        raise ValueError("give an expression, or a variable list together with minterms (or a table)")
+        raise ValueError("give --expr, or --vars together with --ones (or --table)")
     var_order = parse_var_list(variables)
 
     if table is not None:
         if ones is not None or dc is not None:
-            raise ValueError("a table string cannot be combined with minterms/don't-cares")
+            raise ValueError("--table cannot be combined with --ones/--dc")
         minterms, dont_cares = parse_table_string(table, len(var_order))
         return var_order, minterms, dont_cares
 
     if ones is None:
-        raise ValueError("give minterms (or a table) alongside the variable list")
-    minterm_set = parse_index_list(ones, len(var_order), "minterms")
-    dont_care_set = parse_index_list(dc, len(var_order), "don't-cares") if dc is not None else set()
+        raise ValueError("give --ones (or --table) alongside --vars")
+    minterm_set = parse_index_list(ones, len(var_order), "--ones")
+    dont_care_set = parse_index_list(dc, len(var_order), "--dc") if dc is not None else set()
     overlap = minterm_set & dont_care_set
     if overlap:
-        raise ValueError(f"index/indices {sorted(overlap)} listed as both a minterm and a don't-care")
+        raise ValueError(f"index/indices {sorted(overlap)} listed in both --ones and --dc")
     return var_order, minterm_set, dont_care_set
 
 

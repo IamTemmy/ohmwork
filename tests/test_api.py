@@ -68,7 +68,13 @@ def test_resolve_truth_table_from_explicit_minterms():
 
 
 def test_resolve_truth_table_rejects_expr_with_variables():
-    with pytest.raises(ValueError, match="cannot be combined"):
+    # Exact wording matters here, not just "some error happened": this is
+    # the CLI's own pre-M1.1 stderr text (D8-flag-oriented), and this
+    # function is now also the web UI's path to the same check — a past
+    # regression (caught in review) reworded it to UI-neutral prose here,
+    # which silently changed the CLI's output. See api.resolve_truth_table's
+    # own docstring for why the CLI-flavored wording is kept deliberately.
+    with pytest.raises(ValueError, match=r"^--expr cannot be combined with --vars/--ones/--dc/--table$"):
         resolve_truth_table(expr="ab", variables="a,b")
 
 
