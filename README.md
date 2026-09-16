@@ -8,7 +8,8 @@ the implementation.
 
 ## Setup
 
-Ohmwork uses a project-specific virtual environment — not a conda environment.
+Ohmwork uses a project-specific virtual environment — not a conda environment. Run these
+from inside this project folder (`cd` here first if you're not already in it):
 
 ```bash
 python3 -m venv .venv
@@ -70,6 +71,12 @@ Opens `http://127.0.0.1:5757/` in your browser (`--port N` to use a different po
 `--no-browser` to just print the URL). It's a thin wrapper over the same `ohmwork.api`
 functions the CLI itself calls — nothing about `tt`/`synth`'s behavior changes, and the CLI
 keeps working exactly as before. Stop the server with Ctrl+C.
+
+**No terminal typing, every time:** double-click [`launch-ui.command`](launch-ui.command) —
+from Finder, or keep it in your Dock — to start the server and open the browser in one
+click. It's still the same local server underneath (nothing hosted, nothing new to trust);
+this just skips retyping the setup dance each time. Closing its Terminal window stops the
+server, same as Ctrl+C would.
 
 ## Development
 
