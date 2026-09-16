@@ -1,6 +1,11 @@
 # Ohmwork — Project Charter
 
-**Status:** Draft v0.4 — all decisions settled (D1–D14). Ready to implement.
+**Status:** M1 shipped and independently signed off — M1a (2026-09-13), M1b (2026-09-14
+after two rounds of review-caught fixes), M1.1's local web UI (2026-09-15). Decisions now
+span D1–D16 (see `docs/decisions.md`); D15/D16 were added after this draft, during
+implementation, per §9's "every one that arises later." K-map rendering, SPICE export, and
+anything past M1 remain deliberately out of scope (§6, §10) until real coursework use
+justifies them — that's the current phase.
 **Owner:** Temiloluwa Adesola (@IamTemmy)
 **Collaborators:** Claude (via Claude Code), ChatGPT
 **Name:** Ohmwork
@@ -104,7 +109,7 @@ Recommended defaults are given; the owner decides.
 
 M1 ships in two halves. **M1a is useful on its own and lands first** — the tool should be earning its keep on coursework before the synthesis engine exists.
 
-### M1a — Derivation engine
+### M1a — Derivation engine — **shipped 2026-09-13**
 
 **Goal:** expression in → full derivation table out, fast enough to be worth opening.
 
@@ -112,7 +117,7 @@ M1 ships in two halves. **M1a is useful on its own and lands first** — the too
 
 **Acceptance test:** `ohmwork tt "xy + xy'"` produces columns for `x`, `y`, `y'`, `xy`, `xy'`, and `F`, and reports `F = x`. Three further expressions of increasing depth, including one with nested parens and one XOR, render correctly. Ambiguous input is rejected rather than guessed.
 
-### M1b — Synthesis engine
+### M1b — Synthesis engine — **shipped 2026-09-14**
 
 **Goal:** truth table in → verified minimum-transistor static CMOS design out.
 
@@ -121,6 +126,22 @@ M1 ships in two halves. **M1a is useful on its own and lands first** — the too
 **Acceptance test:** Ohmwork independently reproduces all three answers from the CPE 635 Fall 2026 Exam #1 — 6 transistors / 3-input NAND, 8 transistors / 4-input NOR, 8 transistors / AOI31 — with correct derivations and passing verification.
 
 **Deliberately excluded from M1 entirely:** K-map rendering, SPICE export, web UI, 5+ variables.
+
+**Note (added 2026-09-15):** "web UI" above meant a hosted/browser-deployed product — the
+thing D13 calls paying "a TypeScript tax" prematurely. M1.1 (below) is a different thing: a
+strictly local, same-machine form front end for the existing CLI, in plain Python
+(`wsgiref`) with no new dependency and no separate frontend toolchain — it doesn't port or
+duplicate the core, it just gives the same engine a second, friendlier way to be typed into.
+Recorded here rather than left to read as a contradiction.
+
+### M1.1 — Local web UI — **shipped 2026-09-15**
+
+Not part of the original M1 scope above; added afterward because remembering CLI flags was
+real friction once M1 was actually being used. `ohmwork ui` starts a local server (stdlib
+only) hosting form fields for `tt`/`synth`, wrapping the same `ohmwork.api` functions the
+CLI itself calls — proven byte-identical to CLI output by test, not just asserted. No engine
+or decision changed. Deliberately deferred: visual design/polish, until real coursework use
+(§10) shows what's actually worth polishing.
 
 Those acceptance tests are the milestones. Not "the code runs."
 
@@ -148,4 +169,6 @@ The project should be reconsidered, not quietly continued, if any of these hold:
 
 ---
 
-*Draft for review. §7 in particular is written to be argued with — the defaults are recommendations, not decisions.*
+*§7's decisions are settled (D1–D16, see `docs/decisions.md`) and M1 has shipped — this
+charter is no longer a draft awaiting sign-off, though §9's process still applies to
+anything that arises later. Scope and mission (§1–§6, §10) remain the standing reference.*
