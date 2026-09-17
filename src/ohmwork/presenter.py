@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass
 
 from ohmwork.expr import Expr, Not, render as render_expr
-from ohmwork.network import render_network
+from ohmwork.network import Network, Parallel, Series, Transistor, render_network
 from ohmwork.synth import Candidate, SynthesisResult
 
 # Same shape as D8's variable grammar (single letter, optional trailing
@@ -145,6 +145,34 @@ def _selection_reasoning(groups: list[CandidateGroup], *, max_stack_applied: boo
     return prefix + base
 
 
+def _flat_topology_kind(network: Network) -> str | None:
+    """"series", "parallel", or "single" for a flat (one-level) network —
+    None for anything with nested structure (AOI/OAI shapes), where a
+    one-line topology description isn't accurate and the PDN/PUN
+    expression fields should speak for themselves instead."""
+    if isinstance(network, Transistor):
+        return "single"
+    if isinstance(network, Series) and all(isinstance(b, Transistor) for b in network.branches):
+        return "series"
+    if isinstance(network, Parallel) and all(isinstance(b, Transistor) for b in network.branches):
+        return "parallel"
+    return None
+
+
+def _topology_note(result: SynthesisResult) -> str | None:
+    """A one-line plain-English topology description for flat (NAND/NOR-
+    shaped) networks, read directly off the actual Network objects — not
+    inferred from rendered text. Returns None for AOI/OAI and other
+    nested shapes, where no single sentence would be accurate."""
+    pdn_kind = _flat_topology_kind(result.pdn)
+    pun_kind = _flat_topology_kind(result.pun)
+    if pdn_kind is None or pun_kind is None:
+        return None
+    if pdn_kind == "single" and pun_kind == "single":
+        return "A single NMOS pull-down and a single PMOS pull-up."
+    return f"{result.pdn_transistors} NMOS in {pdn_kind} and {result.pun_transistors} PMOS in {pun_kind}."
+
+
 def _minimality_summary(result: SynthesisResult) -> str:
     if result.minimality_proof:
         # pdn_transistors == the literal count of the chosen F' (one
@@ -180,6 +208,8 @@ def build_synth_view(
         "gate_name": result.gate_name,
         "f_prime": render_expr(result.f_prime),
         "total_transistors": result.total_transistors,
+        "topology_note": _topology_note(result),
+        "verified_summary": f"Verified for all {v.vector_count} input combinations.",
         "pdn": {
             "expression": render_network(result.pdn),
             "transistors": result.pdn_transistors,

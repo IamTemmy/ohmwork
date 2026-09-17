@@ -62,6 +62,27 @@ def test_q1_3_input_nand():
     assert view["verification"]["vector_count"] == 8
     assert view["verification"]["functional_pass"] is True
     assert view["verification"]["structural_pass"] is True
+    assert view["topology_note"] == "3 NMOS in series and 3 PMOS in parallel."
+    assert view["verified_summary"] == "Verified for all 8 input combinations."
+
+
+def test_q2_topology_note_reflects_nor_shape():
+    result = synthesize_from_input(variables="A,B,C,D", table="1000000000000000")
+    view = build_synth_view(result)
+    assert view["topology_note"] == "4 NMOS in parallel and 4 PMOS in series."
+
+
+def test_aoi_shape_has_no_topology_note():
+    # A nested (non-flat) network shouldn't get an inaccurate one-liner.
+    result = synthesize_from_input(expr="(ABC+D)'")
+    view = build_synth_view(result)
+    assert view["topology_note"] is None
+
+
+def test_single_transistor_topology_note():
+    result = synthesize_from_input(expr="a")
+    view = build_synth_view(result)
+    assert view["topology_note"] == "A single NMOS pull-down and a single PMOS pull-up."
 
 
 def test_q1_candidates_are_deduplicated_with_provenance_preserved():
