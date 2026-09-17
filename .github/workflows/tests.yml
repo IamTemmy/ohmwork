@@ -26,3 +26,43 @@ jobs:
 
       - name: Run tests
         run: pytest -q
+
+  browser-test:
+    # Headless-browser smoke test (tests/test_webui_browser.py) for the
+    # webui.py frontend -- one job, one Python version, Chromium only.
+    # Kept separate from the matrix above: it needs `playwright install`,
+    # which the plain unit/integration tests don't.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ohmwork (dev + browser extras)
+        run: pip install -e ".[dev,browser]"
+
+      - name: Get installed Playwright version
+        id: playwright-version
+        run: echo "version=$(pip show playwright | awk '/^Version:/ {print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browser binaries
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Chromium (downloads only on a cache miss)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: playwright install --with-deps chromium
+
+      - name: Install Chromium's system dependencies (cache only covers the browser binary)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: playwright install-deps chromium
+
+      - name: Run headless-browser smoke test
+        run: pytest tests/test_webui_browser.py -q

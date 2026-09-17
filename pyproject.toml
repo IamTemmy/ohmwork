@@ -14,6 +14,12 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# Separate from `dev` on purpose: the headless-browser smoke test
+# (tests/test_webui_browser.py) needs `playwright install chromium` run
+# once after this, which the plain pytest matrix jobs shouldn't have to
+# do. That test file skips itself cleanly (pytest.importorskip) when this
+# extra isn't installed.
+browser = ["playwright>=1.40"]
 
 [project.scripts]
 ohmwork = "ohmwork.cli:main"
