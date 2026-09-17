@@ -131,3 +131,102 @@ def test_api_endpoints_never_return_a_server_error_for_bad_input(server_url):
     assert result["ok"] is False
     result2 = post_json(server_url + "/api/synth", {})
     assert result2["ok"] is False
+
+
+# --- M1.2: structured `result` field ------------------------------------------
+
+
+def test_api_synth_result_field_matches_the_three_exam_questions(server_url):
+    cases = [
+        ({"expr": "(ABC)'"}, "3-input NAND", 6),
+        ({"variables": "A,B,C,D", "table": "1000000000000000"}, "4-input NOR", 8),
+        ({"expr": "(ABC+D)'"}, "AOI31", 8),
+    ]
+    for payload, gate_name, total in cases:
+        result = post_json(server_url + "/api/synth", payload)
+        assert result["ok"] is True
+        assert "output" in result  # legacy field still present, additive change
+        assert result["result"]["gate_name"] == gate_name
+        assert result["result"]["total_transistors"] == total
+
+
+def test_api_synth_q1_alternatives_are_deduplicated_via_the_api(server_url):
+    result = post_json(server_url + "/api/synth", {"expr": "(ABC)'"})
+    alts = result["result"]["reasoning"]["alternatives"]
+    assert len(alts) == 1
+    assert set(alts[0]["labels"]) == {"AOI", "OAI"}
+
+
+@pytest.mark.parametrize("name", ["F", "Y", "M"])
+def test_api_synth_custom_output_name(server_url, name):
+    result = post_json(server_url + "/api/synth", {"expr": "(ABC)'", "output_name": name})
+    assert result["ok"] is True
+    assert result["result"]["function"] == f"{name} = (ABC)'"
+
+
+def test_api_synth_rejects_invalid_output_name(server_url):
+    result = post_json(server_url + "/api/synth", {"expr": "(ABC)'", "output_name": "Out"})
+    assert result["ok"] is False
+    assert "not a valid output name" in result["error"]
+    assert "output" not in result
+    assert "result" not in result
+
+
+def test_api_synth_rejects_output_name_colliding_with_input_variable(server_url):
+    result = post_json(server_url + "/api/synth", {"expr": "(ABC)'", "output_name": "A"})
+    assert result["ok"] is False
+    assert "duplicates an input variable" in result["error"]
+
+
+def test_api_synth_exactly_once_per_request(server_url, monkeypatch):
+    import ohmwork.api as api_module
+
+    calls = []
+    original = api_module.synthesize
+
+    def counting_synthesize(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(api_module, "synthesize", counting_synthesize)
+    result = post_json(server_url + "/api/synth", {"expr": "(ABC)'"})
+    assert result["ok"] is True
+    assert len(calls) == 1
+
+
+def test_api_synth_forced_verification_failure_returns_no_output_or_result(server_url, monkeypatch):
+    # Mirrors the pre-M1.2 CLI-level check (a real bug ChatGPT's M1.1
+    # review found: a failed verification once still returned exit 0).
+    # Here: neither the legacy `output` text nor the new `result` dict may
+    # ever be present in a failure response.
+    import ohmwork.api as api_module
+
+    def failing_synthesize(*args, **kwargs):
+        raise RuntimeError("failed its own D7 verification (forced for this test)")
+
+    monkeypatch.setattr(api_module, "synthesize", failing_synthesize)
+    result = post_json(server_url + "/api/synth", {"expr": "(ABC)'"})
+    assert result["ok"] is False
+    assert "output" not in result
+    assert "result" not in result
+
+
+# --- Truth-table grid -> exact engine bit string ----------------------------
+#
+# The grid itself is client-side JS with no Python equivalent to unit-test
+# directly, but the contract it must uphold is: whatever bit string the
+# grid builds gets sent through the exact same `table` field the manual
+# input already exercises. These confirm the manual path (which the grid
+# is required to funnel into) behaves identically regardless of which UI
+# affordance produced it, and pin the exact row-ordering convention the
+# grid's own JS must replicate (variable 0 = MSB, row i = format(i, '0nb')).
+
+
+def test_grid_equivalent_bit_string_produces_the_acceptance_result(server_url):
+    # This is exactly the string a correctly-built grid must produce for
+    # Q1 (A,B,C; F=0 only when A=B=C=1): row 7 ('111') is the only zero.
+    grid_bit_string = "11111110"
+    result = post_json(server_url + "/api/synth", {"variables": "A,B,C", "table": grid_bit_string})
+    assert result["ok"] is True
+    assert result["result"]["gate_name"] == "3-input NAND"
+    assert result["result"]["total_transistors"] == 6

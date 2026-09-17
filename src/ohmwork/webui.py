@@ -15,8 +15,10 @@ import sys
 import webbrowser
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
-from ohmwork.api import render_synth, render_tt
+from ohmwork.api import render_tt, synthesize_from_input
 from ohmwork.errors import ParseError
+from ohmwork.presenter import build_synth_view, validate_output_name
+from ohmwork.report import format_synth_report
 
 _PAGE = """<!doctype html>
 <html lang="en">
@@ -283,7 +285,12 @@ def _handle_synth(environ, start_response):
         return _json_response(start_response, "200 OK", {"ok": False, "error": "max stack height must be a whole number"})
 
     try:
-        output = render_synth(
+        # Exactly one synthesis per request (M1.2): the legacy text report
+        # (`output`, unchanged) and the new structured student view
+        # (`result`) are both derived from this same verified
+        # SynthesisResult -- never recomputed independently, and never
+        # returned partially if anything below raises.
+        result = synthesize_from_input(
             expr=body.get("expr") or None,
             variables=body.get("variables") or None,
             ones=body.get("ones") or None,
@@ -292,9 +299,13 @@ def _handle_synth(environ, start_response):
             dual_rail=bool(body.get("dual_rail")),
             max_stack=max_stack,
         )
+        output_name = validate_output_name(body.get("output_name"), result.var_order)
     except (ParseError, ValueError, RuntimeError) as e:
         return _json_response(start_response, "200 OK", {"ok": False, "error": str(e)})
-    return _json_response(start_response, "200 OK", {"ok": True, "output": output})
+
+    output = format_synth_report(result, result.verification)
+    view = build_synth_view(result, output_name=output_name, max_stack_applied=max_stack is not None)
+    return _json_response(start_response, "200 OK", {"ok": True, "output": output, "result": view})
 
 
 def _not_found(environ, start_response):
