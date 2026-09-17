@@ -16,9 +16,27 @@ import webbrowser
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 from ohmwork.api import render_tt, synthesize_from_input
+from ohmwork.derivation import variables_in_order
 from ohmwork.errors import ParseError
+from ohmwork.parser import parse
 from ohmwork.presenter import build_synth_view, validate_output_name
 from ohmwork.report import format_synth_report
+
+# The server binds to loopback only (D-adjacent: see run_server's default
+# host), but loopback binding alone doesn't stop a hostile page the user
+# has open in another tab from POSTing here -- browsers still send "simple"
+# cross-origin requests (no preflight) even though CORS then blocks the
+# attacker page from reading the *response*. That's enough to let a
+# malicious page burn CPU/memory on this local server while ``ohmwork ui``
+# is running. Three independent layers close that off for POST routes:
+# requiring a JSON content type (forces the browser into a CORS preflight
+# for any cross-origin POST, which fails closed since we don't answer
+# OPTIONS), rejecting a foreign Origin outright as defense in depth, and
+# capping the request body size. ``tt`` additionally has no engine-level
+# variable cap (unlike synth's D-scoped 3-4), so the web endpoint caps it
+# separately -- the CLI's behavior (tested byte-for-byte) is untouched.
+_MAX_BODY_BYTES = 65_536
+_MAX_TT_VARIABLES = 16
 
 _PAGE = r"""<!doctype html>
 <html lang="en">
@@ -166,9 +184,9 @@ _PAGE = r"""<!doctype html>
   </label>
 
   <button type="submit" class="submit">Run</button>
-</form>
 
-<pre id="tt-output" class="empty"></pre>
+  <pre id="tt-output" class="empty"></pre>
+</form>
 
 <form class="panel" id="panel-synth">
   <div class="row">
@@ -223,48 +241,48 @@ _PAGE = r"""<!doctype html>
   </label>
 
   <button type="submit" class="submit">Synthesize</button>
+
+  <pre id="synth-error" class="empty"></pre>
+
+  <div id="synth-result" class="empty">
+    <div class="answer-summary">
+      <div class="gate-line" id="res-gate-line"></div>
+      <div class="function-line" id="res-function-line"></div>
+      <div class="topology-line" id="res-topology-line"></div>
+      <div class="verified-line" id="res-verified-line"></div>
+      <div class="dont-care-note" id="res-dont-care-note"></div>
+    </div>
+
+    <div class="section">
+      <h3>CMOS implementation</h3>
+      <table class="kv">
+        <tr><td>PDN (NMOS)</td><td class="mono" id="res-pdn-expr"></td></tr>
+        <tr><td>PUN (PMOS)</td><td class="mono" id="res-pun-expr"></td></tr>
+        <tr><td>NMOS count</td><td id="res-nmos"></td></tr>
+        <tr><td>PMOS count</td><td id="res-pmos"></td></tr>
+        <tr><td>Inverters</td><td id="res-inverters"></td></tr>
+        <tr><td>Stack heights</td><td id="res-stacks"></td></tr>
+      </table>
+    </div>
+
+    <div class="section reasoning">
+      <h3>Reasoning</h3>
+      <p id="res-selection-note"></p>
+      <p id="res-minimality"></p>
+      <ul class="alt-list" id="res-alternatives"></ul>
+    </div>
+
+    <details class="section">
+      <summary>Advanced details</summary>
+      <pre id="res-advanced"></pre>
+    </details>
+
+    <div class="row copy-row">
+      <button type="button" class="copy-btn" id="copy-solution">Copy solution</button>
+      <button type="button" class="copy-btn" id="copy-advanced">Copy advanced report</button>
+    </div>
+  </div>
 </form>
-
-<pre id="synth-error" class="empty"></pre>
-
-<div id="synth-result" class="empty">
-  <div class="answer-summary">
-    <div class="gate-line" id="res-gate-line"></div>
-    <div class="function-line" id="res-function-line"></div>
-    <div class="topology-line" id="res-topology-line"></div>
-    <div class="verified-line" id="res-verified-line"></div>
-    <div class="dont-care-note" id="res-dont-care-note"></div>
-  </div>
-
-  <div class="section">
-    <h3>CMOS implementation</h3>
-    <table class="kv">
-      <tr><td>PDN (NMOS)</td><td class="mono" id="res-pdn-expr"></td></tr>
-      <tr><td>PUN (PMOS)</td><td class="mono" id="res-pun-expr"></td></tr>
-      <tr><td>NMOS count</td><td id="res-nmos"></td></tr>
-      <tr><td>PMOS count</td><td id="res-pmos"></td></tr>
-      <tr><td>Inverters</td><td id="res-inverters"></td></tr>
-      <tr><td>Stack heights</td><td id="res-stacks"></td></tr>
-    </table>
-  </div>
-
-  <div class="section reasoning">
-    <h3>Reasoning</h3>
-    <p id="res-selection-note"></p>
-    <p id="res-minimality"></p>
-    <ul class="alt-list" id="res-alternatives"></ul>
-  </div>
-
-  <details class="section">
-    <summary>Advanced details</summary>
-    <pre id="res-advanced"></pre>
-  </details>
-
-  <div class="row copy-row">
-    <button type="button" class="copy-btn" id="copy-solution">Copy solution</button>
-    <button type="button" class="copy-btn" id="copy-advanced">Copy advanced report</button>
-  </div>
-</div>
 
 <script>
 function $(id) { return document.getElementById(id); }
@@ -454,34 +472,60 @@ function renderSynthResult(view, rawOutput) {
   $("res-pun-expr").textContent = view.pun.expression;
   $("res-nmos").textContent = view.pdn.transistors;
   $("res-pmos").textContent = view.pun.transistors;
-  $("res-inverters").textContent = view.inverters.count === 0
+  const invertersText = view.inverters.count === 0
     ? "0"
     : `${view.inverters.count} (shared: ${view.inverters.literals.map(l => l + "'").join(", ")})`;
-  $("res-stacks").textContent = `PDN ${view.pdn.stack_height}, PUN ${view.pun.stack_height}` + (view.stack_advisory ? ` — ${view.stack_advisory}` : "");
+  $("res-inverters").textContent = invertersText;
+  const stacksText = `PDN ${view.pdn.stack_height}, PUN ${view.pun.stack_height}` + (view.stack_advisory ? ` — ${view.stack_advisory}` : "");
+  $("res-stacks").textContent = stacksText;
 
   $("res-selection-note").textContent = view.reasoning.selection_note;
   $("res-minimality").textContent = view.reasoning.minimality_summary;
 
+  function formatAlternative(alt) {
+    const label = alt.labels.join("/");
+    return `${label}: F' = ${alt.expression} (${alt.total_cost} transistors)` + (alt.is_chosen ? " — chosen" : "");
+  }
+
   const altList = $("res-alternatives");
   clearChildren(altList);
-  if (view.reasoning.alternatives.length > 1) {
-    view.reasoning.alternatives.forEach(alt => {
-      const li = document.createElement("li");
-      if (alt.is_chosen) li.classList.add("chosen");
-      const label = alt.labels.join("/");
-      li.textContent = `${label}: F' = ${alt.expression} (${alt.total_cost} transistors)` + (alt.is_chosen ? " — chosen" : "");
-      altList.appendChild(li);
-    });
-  }
+  view.reasoning.alternatives.forEach(alt => {
+    const li = document.createElement("li");
+    if (alt.is_chosen) li.classList.add("chosen");
+    li.textContent = formatAlternative(alt);
+    altList.appendChild(li);
+  });
 
   $("res-advanced").textContent = rawOutput;
 
-  lastSolutionText = [
+  const summaryLines = [
     `${view.gate_name} — ${view.total_transistors} transistors`,
     view.function,
     view.topology_note || "",
     view.verified_summary,
-  ].filter(Boolean).join("\n");
+    view.function_uses_dont_cares
+      ? "This is the function Ohmwork implemented after freely assigning the don't-care rows (see Advanced details)."
+      : "",
+  ].filter(Boolean);
+
+  const cmosLines = [
+    "CMOS implementation:",
+    `  PDN (NMOS): ${view.pdn.expression}`,
+    `  PUN (PMOS): ${view.pun.expression}`,
+    `  NMOS count: ${view.pdn.transistors}`,
+    `  PMOS count: ${view.pun.transistors}`,
+    `  Inverters: ${invertersText}`,
+    `  Stack heights: ${stacksText}`,
+  ];
+
+  const reasoningLines = [
+    "Reasoning:",
+    `  ${view.reasoning.selection_note}`,
+    `  ${view.reasoning.minimality_summary}`,
+    ...view.reasoning.alternatives.map(alt => `  ${formatAlternative(alt)}`),
+  ];
+
+  lastSolutionText = [summaryLines, cmosLines, reasoningLines].map(section => section.join("\n")).join("\n\n");
   lastAdvancedText = rawOutput;
 }
 
@@ -635,11 +679,29 @@ def _handle_index(environ, start_response):
 
 def _handle_tt(environ, start_response):
     body = _read_json_body(environ)
+    expression = body.get("expression") or ""
     cols_raw = body.get("cols") or None
     cols = [c.strip() for c in cols_raw.split(",")] if cols_raw else None
     try:
+        n_vars = len(variables_in_order(parse(expression)))
+    except ParseError as e:
+        return _json_response(start_response, "200 OK", {"ok": False, "error": str(e)})
+    if n_vars > _MAX_TT_VARIABLES:
+        return _json_response(
+            start_response,
+            "200 OK",
+            {
+                "ok": False,
+                "error": (
+                    f"this expression has {n_vars} variables; the web UI caps derivation "
+                    f"tables at {_MAX_TT_VARIABLES} variables to keep requests fast — use "
+                    "the CLI (`ohmwork tt`) for larger tables"
+                ),
+            },
+        )
+    try:
         output = render_tt(
-            body.get("expression") or "",
+            expression,
             md=bool(body.get("md")),
             latex=bool(body.get("latex")),
             terse=bool(body.get("terse")),
@@ -688,6 +750,46 @@ def _not_found(environ, start_response):
     return [body]
 
 
+def _plain_text_error(start_response, status: str, message: str):
+    body = message.encode("utf-8")
+    start_response(status, [("Content-Type", "text/plain; charset=utf-8"), ("Content-Length", str(len(body)))])
+    return [body]
+
+
+def _origin_is_allowed(environ) -> bool:
+    """No ``Origin`` header (a same-origin form submit, a direct API call,
+    curl) is allowed; a present one must match this server's own host —
+    anything else is a page from elsewhere asking this loopback server to
+    do work."""
+    origin = environ.get("HTTP_ORIGIN")
+    if not origin:
+        return True
+    host = environ.get("HTTP_HOST", "")
+    return origin in (f"http://{host}", f"https://{host}")
+
+
+def _reject_hostile_post(environ, start_response):
+    """Guards applied to every POST before it reaches a handler. Returns a
+    WSGI response iterable to short-circuit the request, or ``None`` to let
+    it proceed. See the module-level comment above ``_MAX_BODY_BYTES`` for
+    why these three checks exist together."""
+    if not _origin_is_allowed(environ):
+        return _plain_text_error(start_response, "403 Forbidden", "cross-origin requests are not allowed")
+
+    content_type = environ.get("CONTENT_TYPE", "").split(";")[0].strip().lower()
+    if content_type != "application/json":
+        return _plain_text_error(start_response, "415 Unsupported Media Type", "request body must be application/json")
+
+    try:
+        length = int(environ.get("CONTENT_LENGTH") or 0)
+    except ValueError:
+        length = 0
+    if length > _MAX_BODY_BYTES:
+        return _plain_text_error(start_response, "413 Payload Too Large", f"request body exceeds {_MAX_BODY_BYTES} bytes")
+
+    return None
+
+
 _ROUTES = {
     ("GET", "/"): _handle_index,
     ("POST", "/api/tt"): _handle_tt,
@@ -704,6 +806,10 @@ def app(environ, start_response):
     handler = _ROUTES.get((method, path))
     if handler is None:
         return _not_found(environ, start_response)
+    if method == "POST":
+        rejection = _reject_hostile_post(environ, start_response)
+        if rejection is not None:
+            return rejection
     try:
         return handler(environ, start_response)
     except Exception as e:  # noqa: BLE001 - deliberate last-resort guard, see docstring

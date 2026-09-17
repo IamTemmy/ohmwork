@@ -279,3 +279,71 @@ def test_grid_equivalent_bit_string_produces_the_acceptance_result(server_url):
     assert result["ok"] is True
     assert result["result"]["gate_name"] == "3-input NAND"
     assert result["result"]["total_transistors"] == 6
+
+
+# --- Hardening against a hostile page hitting the loopback server ------------------
+#
+# Loopback binding (127.0.0.1) stops other machines, but not a malicious
+# page open in another tab of the user's own browser: browsers still send
+# "simple" cross-origin POSTs (no preflight) even though CORS then blocks
+# that page from reading the response. These pin the three independent
+# guards in `_reject_hostile_post` (Content-Type, Origin, body size) and
+# the `tt` endpoint's own variable cap (the engine itself has no cap,
+# unlike synth's D-scoped 3-4).
+
+
+def _raw_post(url: str, data: bytes, *, content_type: str, origin: str | None = None) -> tuple[int, bytes]:
+    headers = {"Content-Type": content_type}
+    if origin is not None:
+        headers["Origin"] = origin
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+
+def test_rejects_non_json_content_type(server_url):
+    status, _ = _raw_post(server_url + "/api/tt", b'{"expression": "x"}', content_type="text/plain")
+    assert status == 415
+
+
+def test_rejects_foreign_origin(server_url):
+    status, _ = _raw_post(
+        server_url + "/api/tt",
+        b'{"expression": "x"}',
+        content_type="application/json",
+        origin="https://untrusted.example",
+    )
+    assert status == 403
+
+
+def test_accepts_matching_origin(server_url):
+    status, body = _raw_post(
+        server_url + "/api/tt",
+        b'{"expression": "x"}',
+        content_type="application/json",
+        origin=server_url,
+    )
+    assert status == 200
+    assert json.loads(body)["ok"] is True
+
+
+def test_rejects_oversized_body(server_url):
+    huge_expression = "x" * 100_000
+    payload = json.dumps({"expression": huge_expression}).encode("utf-8")
+    status, _ = _raw_post(server_url + "/api/tt", payload, content_type="application/json")
+    assert status == 413
+
+
+def test_api_tt_rejects_expressions_over_the_web_variable_cap(server_url):
+    too_many_vars = "+".join("abcdefghijklmnopqrstuvwxyz"[:17])
+    result = post_json(server_url + "/api/tt", {"expression": too_many_vars})
+    assert result["ok"] is False
+    assert "16" in result["error"]
+
+
+def test_api_tt_allows_expressions_within_the_web_variable_cap(server_url):
+    result = post_json(server_url + "/api/tt", {"expression": "a+b"})
+    assert result["ok"] is True
