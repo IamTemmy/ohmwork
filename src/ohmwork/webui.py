@@ -20,7 +20,7 @@ from ohmwork.errors import ParseError
 from ohmwork.presenter import build_synth_view, validate_output_name
 from ohmwork.report import format_synth_report
 
-_PAGE = """<!doctype html>
+_PAGE = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -47,6 +47,7 @@ _PAGE = """<!doctype html>
     width: 100%; box-sizing: border-box; padding: .45rem .5rem; font: inherit;
     margin-top: .2rem; border: 1px solid #8886; border-radius: 5px; background: transparent; color: inherit;
   }
+  input.output-name-input { width: 5rem; }
   .row { display: flex; gap: 1.4rem; flex-wrap: wrap; margin-top: .6rem; align-items: center; }
   .row label { margin-top: 0; display: inline-flex; align-items: center; gap: .35rem; font-weight: normal; }
   button.submit {
@@ -54,14 +55,85 @@ _PAGE = """<!doctype html>
     border-radius: 6px; border: 1px solid #8886; background: #8882; color: inherit; font-family: inherit;
   }
   button.submit:hover { background: #8884; }
-  pre#output {
+  pre#tt-output {
     white-space: pre-wrap; background: #8881; padding: 1rem; border-radius: 6px;
     margin-top: 1.25rem; min-height: 1.5rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: .85rem; overflow-x: auto;
   }
-  pre#output.error { color: #c0392b; }
-  pre#output.empty { display: none; }
+  pre#tt-output.error { color: #c0392b; }
+  pre#tt-output.empty { display: none; }
   .hint { font-size: .78rem; opacity: .6; margin-top: .2rem; }
+
+  /* Truth-table grid */
+  table.truth-grid { border-collapse: collapse; margin-top: .75rem; font-size: .9rem; }
+  table.truth-grid th, table.truth-grid td {
+    border: 1px solid #8886; padding: .35rem .6rem; text-align: center;
+  }
+  table.truth-grid th { font-weight: 600; background: #8881; }
+  button.cell-btn {
+    width: 2.2rem; height: 2rem; font: inherit; font-weight: 600; cursor: pointer;
+    border: 1px solid #8886; border-radius: 4px; background: transparent; color: inherit;
+  }
+  button.cell-btn:hover { background: #8884; }
+  button.cell-btn:focus-visible { outline: 2px solid #5a82ff; outline-offset: 1px; }
+  button.cell-btn[data-val="X"] { opacity: .65; }
+
+  details.manual-entry { margin-top: .85rem; }
+  details.manual-entry summary { cursor: pointer; font-size: .85rem; opacity: .8; }
+  details.manual-entry .row, details.manual-entry label { margin-top: .6rem; }
+
+  /* Synth result */
+  #synth-error {
+    white-space: pre-wrap; background: #8881; color: #c0392b; padding: 1rem;
+    border-radius: 6px; margin-top: 1.25rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .85rem;
+  }
+  #synth-error.empty { display: none; }
+  #synth-result.empty { display: none; }
+  #synth-result { margin-top: 1.25rem; }
+
+  .answer-summary {
+    background: #5a82ff14; border: 1px solid #5a82ff40; border-radius: 8px; padding: 1rem 1.2rem;
+  }
+  .answer-summary .gate-line { font-size: 1.15rem; font-weight: 700; }
+  .answer-summary .function-line {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 1.05rem; margin-top: .4rem;
+  }
+  .answer-summary .topology-line, .answer-summary .verified-line { font-size: .88rem; opacity: .8; margin-top: .3rem; }
+  .answer-summary .verified-line { color: #2e8b57; }
+  .answer-summary .dont-care-note { font-size: .8rem; opacity: .7; margin-top: .3rem; font-style: italic; }
+
+  .section { margin-top: 1.4rem; }
+  .section h3 { font-size: .95rem; margin: 0 0 .5rem; opacity: .85; }
+  table.kv { border-collapse: collapse; font-size: .88rem; }
+  table.kv td { padding: .3rem .8rem .3rem 0; vertical-align: top; }
+  table.kv td:first-child { opacity: .65; white-space: nowrap; }
+  table.kv td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .reasoning p { font-size: .9rem; margin: .3rem 0; }
+  ul.alt-list { font-size: .85rem; padding-left: 1.2rem; margin: .5rem 0 0; }
+  ul.alt-list li { margin: .2rem 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  ul.alt-list li.chosen { font-weight: 600; font-family: inherit; }
+
+  details.section summary { cursor: pointer; font-size: .95rem; opacity: .85; }
+  pre#res-advanced {
+    white-space: pre-wrap; background: #8881; padding: 1rem; border-radius: 6px;
+    margin-top: .75rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .85rem; overflow-x: auto;
+  }
+
+  .copy-row { margin-top: 1.2rem; }
+  button.copy-btn {
+    padding: .4rem 1rem; font-size: .85rem; cursor: pointer; border-radius: 6px;
+    border: 1px solid #8886; background: transparent; color: inherit; font-family: inherit;
+  }
+  button.copy-btn:hover { background: #8884; }
+  button.copy-btn.copied { background: #2e8b5730; border-color: #2e8b57; }
+  pre.copy-fallback {
+    white-space: pre-wrap; background: #8881; padding: .75rem; border-radius: 6px;
+    margin-top: .5rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .8rem; overflow-x: auto; border: 1px dashed #8886;
+  }
 </style>
 </head>
 <body>
@@ -96,6 +168,8 @@ _PAGE = """<!doctype html>
   <button type="submit" class="submit">Run</button>
 </form>
 
+<pre id="tt-output" class="empty"></pre>
+
 <form class="panel" id="panel-synth">
   <div class="row">
     <label><input type="radio" name="synth-mode" value="expr" checked> From expression</label>
@@ -112,24 +186,34 @@ _PAGE = """<!doctype html>
     <label>Variables (comma-separated, 1-4)
       <input type="text" id="synth-vars" placeholder="a,b,c,d">
     </label>
-    <div class="row">
-      <label><input type="radio" name="synth-table-mode" value="minterms" checked> Minterms &amp; don't-cares</label>
-      <label><input type="radio" name="synth-table-mode" value="bits"> Bit string</label>
-    </div>
-    <div id="synth-minterm-fields">
-      <label>Minterms where F=1 (comma-separated)
-        <input type="text" id="synth-ones" placeholder="0,1,4">
-      </label>
-      <label>Don't-cares (comma-separated, optional — D4)
-        <input type="text" id="synth-dc" placeholder="2,6">
-      </label>
-    </div>
-    <div id="synth-bits-fields" style="display:none">
-      <label>Truth table, row-ordered (0/1/x or -)
-        <input type="text" id="synth-table" placeholder="1100011x">
-      </label>
-    </div>
+
+    <div id="synth-grid-wrap"></div>
+
+    <details class="manual-entry" id="synth-manual-details">
+      <summary>Enter the truth table manually instead (minterms or a bit string)</summary>
+      <div class="row">
+        <label><input type="radio" name="synth-table-mode" value="minterms" checked> Minterms &amp; don't-cares</label>
+        <label><input type="radio" name="synth-table-mode" value="bits"> Bit string</label>
+      </div>
+      <div id="synth-minterm-fields">
+        <label>Minterms where F=1 (comma-separated)
+          <input type="text" id="synth-ones" placeholder="0,1,4">
+        </label>
+        <label>Don't-cares (comma-separated, optional — D4)
+          <input type="text" id="synth-dc" placeholder="2,6">
+        </label>
+      </div>
+      <div id="synth-bits-fields" style="display:none">
+        <label>Truth table, row-ordered (0/1/x or -)
+          <input type="text" id="synth-table" placeholder="1100011x">
+        </label>
+      </div>
+    </details>
   </div>
+
+  <label>Output name (optional — defaults to F)
+    <input type="text" id="synth-output-name" class="output-name-input" placeholder="F" maxlength="2">
+  </label>
 
   <div class="row">
     <label><input type="checkbox" id="synth-dual-rail"> Dual-rail (complements free — D2)</label>
@@ -141,13 +225,55 @@ _PAGE = """<!doctype html>
   <button type="submit" class="submit">Synthesize</button>
 </form>
 
-<pre id="output" class="empty"></pre>
+<pre id="synth-error" class="empty"></pre>
+
+<div id="synth-result" class="empty">
+  <div class="answer-summary">
+    <div class="gate-line" id="res-gate-line"></div>
+    <div class="function-line" id="res-function-line"></div>
+    <div class="topology-line" id="res-topology-line"></div>
+    <div class="verified-line" id="res-verified-line"></div>
+    <div class="dont-care-note" id="res-dont-care-note"></div>
+  </div>
+
+  <div class="section">
+    <h3>CMOS implementation</h3>
+    <table class="kv">
+      <tr><td>PDN (NMOS)</td><td class="mono" id="res-pdn-expr"></td></tr>
+      <tr><td>PUN (PMOS)</td><td class="mono" id="res-pun-expr"></td></tr>
+      <tr><td>NMOS count</td><td id="res-nmos"></td></tr>
+      <tr><td>PMOS count</td><td id="res-pmos"></td></tr>
+      <tr><td>Inverters</td><td id="res-inverters"></td></tr>
+      <tr><td>Stack heights</td><td id="res-stacks"></td></tr>
+    </table>
+  </div>
+
+  <div class="section reasoning">
+    <h3>Reasoning</h3>
+    <p id="res-selection-note"></p>
+    <p id="res-minimality"></p>
+    <ul class="alt-list" id="res-alternatives"></ul>
+  </div>
+
+  <details class="section">
+    <summary>Advanced details</summary>
+    <pre id="res-advanced"></pre>
+  </details>
+
+  <div class="row copy-row">
+    <button type="button" class="copy-btn" id="copy-solution">Copy solution</button>
+    <button type="button" class="copy-btn" id="copy-advanced">Copy advanced report</button>
+  </div>
+</div>
 
 <script>
 function $(id) { return document.getElementById(id); }
 function checkedValue(name) {
   const el = document.querySelector(`input[name=${name}]:checked`);
   return el ? el.value : null;
+}
+function clearChildren(el) {
+  while (el.firstChild) el.removeChild(el.firstChild);
 }
 
 document.querySelectorAll(".tab").forEach(tab => {
@@ -178,6 +304,101 @@ function updateSynthTableModeVisibility() {
 }
 document.querySelectorAll("input[name=synth-table-mode]").forEach(r => r.addEventListener("change", updateSynthTableModeVisibility));
 
+// --- Truth-table grid --------------------------------------------------------
+//
+// Primary way to build a truth table: shows every row for the declared
+// variables, with a clickable output cell cycling 0 -> 1 -> X -> 0. Feeds
+// the exact same row-ordered bit-string format (variable 0 = MSB) that
+// the manual "Bit string" field and --table already accept -- nothing
+// about how the engine interprets a truth table changes.
+let gridState = [];
+
+function parseVarList(raw) {
+  return raw.split(",").map(s => s.trim()).filter(s => s.length > 0);
+}
+
+function buildGrid() {
+  const vars = parseVarList($("synth-vars").value);
+  const wrap = $("synth-grid-wrap");
+  clearChildren(wrap);
+  gridState = [];
+
+  if (vars.length === 0) {
+    const msg = document.createElement("p");
+    msg.className = "hint";
+    msg.textContent = "Enter 1-4 variables above to build the truth table grid.";
+    wrap.appendChild(msg);
+    return;
+  }
+  if (vars.length > 4) {
+    const msg = document.createElement("p");
+    msg.className = "hint";
+    msg.textContent = "The grid supports up to 4 variables (M1 scope); use fewer, or enter the truth table manually below.";
+    wrap.appendChild(msg);
+    return;
+  }
+
+  const n = vars.length;
+  const rows = 1 << n;
+  gridState = new Array(rows).fill("0");
+
+  const table = document.createElement("table");
+  table.className = "truth-grid";
+
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  vars.forEach(v => {
+    const th = document.createElement("th");
+    th.textContent = v;
+    headRow.appendChild(th);
+  });
+  const outTh = document.createElement("th");
+  outTh.textContent = "Output";
+  headRow.appendChild(outTh);
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (let i = 0; i < rows; i++) {
+    const tr = document.createElement("tr");
+    const bits = i.toString(2).padStart(n, "0");
+    for (const b of bits) {
+      const td = document.createElement("td");
+      td.textContent = b;
+      tr.appendChild(td);
+    }
+    const outTd = document.createElement("td");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cell-btn";
+    btn.textContent = "0";
+    btn.dataset.val = "0";
+    btn.setAttribute("aria-label", vars.join("") + "=" + bits + " output, currently 0. Press to cycle 0, 1, X.");
+    btn.addEventListener("click", () => cycleCell(i, btn));
+    outTd.appendChild(btn);
+    tr.appendChild(outTd);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+}
+
+function cycleCell(i, btn) {
+  const next = { "0": "1", "1": "X", "X": "0" };
+  gridState[i] = next[gridState[i]];
+  btn.textContent = gridState[i];
+  btn.dataset.val = gridState[i];
+  btn.setAttribute("aria-label", "output, currently " + gridState[i] + ". Press to cycle 0, 1, X.");
+}
+
+function gridToBitString() {
+  return gridState.join("");
+}
+
+$("synth-vars").addEventListener("input", buildGrid);
+
+// --- Requests ------------------------------------------------------------------
+
 async function postJSON(url, payload) {
   try {
     const res = await fetch(url, {
@@ -191,13 +412,6 @@ async function postJSON(url, payload) {
   }
 }
 
-function showResult(result) {
-  const out = $("output");
-  out.classList.remove("empty");
-  out.classList.toggle("error", !result.ok);
-  out.textContent = result.ok ? result.output : "error: " + result.error;
-}
-
 $("panel-tt").addEventListener("submit", async (e) => {
   e.preventDefault();
   const colsMode = checkedValue("tt-cols");
@@ -208,28 +422,188 @@ $("panel-tt").addEventListener("submit", async (e) => {
     terse: colsMode === "terse",
     cols: colsMode === "custom" ? $("tt-cols-input").value : null,
   };
-  showResult(await postJSON("/api/tt", payload));
+  const result = await postJSON("/api/tt", payload);
+  const out = $("tt-output");
+  out.classList.remove("empty");
+  out.classList.toggle("error", !result.ok);
+  out.textContent = result.ok ? result.output : "error: " + result.error;
 });
+
+// --- Synth result rendering ------------------------------------------------------
+
+let lastSolutionText = "";
+let lastAdvancedText = "";
+
+function renderSynthResult(view, rawOutput) {
+  $("res-gate-line").textContent = `${view.gate_name} — ${view.total_transistors} transistors`;
+  $("res-function-line").textContent = view.function;
+  $("res-topology-line").textContent = view.topology_note || "";
+  $("res-topology-line").style.display = view.topology_note ? "block" : "none";
+  $("res-verified-line").textContent = view.verified_summary;
+
+  const dcNote = $("res-dont-care-note");
+  if (view.function_uses_dont_cares) {
+    dcNote.textContent = "This is the function Ohmwork implemented after freely assigning the don't-care rows (see Advanced details).";
+    dcNote.style.display = "block";
+  } else {
+    dcNote.textContent = "";
+    dcNote.style.display = "none";
+  }
+
+  $("res-pdn-expr").textContent = view.pdn.expression;
+  $("res-pun-expr").textContent = view.pun.expression;
+  $("res-nmos").textContent = view.pdn.transistors;
+  $("res-pmos").textContent = view.pun.transistors;
+  $("res-inverters").textContent = view.inverters.count === 0
+    ? "0"
+    : `${view.inverters.count} (shared: ${view.inverters.literals.map(l => l + "'").join(", ")})`;
+  $("res-stacks").textContent = `PDN ${view.pdn.stack_height}, PUN ${view.pun.stack_height}` + (view.stack_advisory ? ` — ${view.stack_advisory}` : "");
+
+  $("res-selection-note").textContent = view.reasoning.selection_note;
+  $("res-minimality").textContent = view.reasoning.minimality_summary;
+
+  const altList = $("res-alternatives");
+  clearChildren(altList);
+  if (view.reasoning.alternatives.length > 1) {
+    view.reasoning.alternatives.forEach(alt => {
+      const li = document.createElement("li");
+      if (alt.is_chosen) li.classList.add("chosen");
+      const label = alt.labels.join("/");
+      li.textContent = `${label}: F' = ${alt.expression} (${alt.total_cost} transistors)` + (alt.is_chosen ? " — chosen" : "");
+      altList.appendChild(li);
+    });
+  }
+
+  $("res-advanced").textContent = rawOutput;
+
+  lastSolutionText = [
+    `${view.gate_name} — ${view.total_transistors} transistors`,
+    view.function,
+    view.topology_note || "",
+    view.verified_summary,
+  ].filter(Boolean).join("\n");
+  lastAdvancedText = rawOutput;
+}
 
 $("panel-synth").addEventListener("submit", async (e) => {
   e.preventDefault();
   const payload = {
     dual_rail: $("synth-dual-rail").checked,
     max_stack: $("synth-max-stack").value || null,
+    output_name: $("synth-output-name").value || null,
   };
   if (checkedValue("synth-mode") === "expr") {
     payload.expr = $("synth-expr").value;
   } else {
     payload.variables = $("synth-vars").value;
-    if (checkedValue("synth-table-mode") === "bits") {
+    const manualOpen = $("synth-manual-details").open;
+    if (manualOpen && checkedValue("synth-table-mode") === "bits") {
       payload.table = $("synth-table").value;
-    } else {
+    } else if (manualOpen) {
       payload.ones = $("synth-ones").value;
       payload.dc = $("synth-dc").value || null;
+    } else if (gridState.length > 0) {
+      payload.table = gridToBitString();
+    } else {
+      $("synth-error").classList.remove("empty");
+      $("synth-error").textContent = "error: enter 1-4 variables to build the truth table grid (or use manual entry below).";
+      $("synth-result").classList.add("empty");
+      return;
     }
   }
-  showResult(await postJSON("/api/synth", payload));
+
+  const result = await postJSON("/api/synth", payload);
+  const errEl = $("synth-error");
+  const resEl = $("synth-result");
+  if (!result.ok) {
+    errEl.classList.remove("empty");
+    errEl.textContent = "error: " + result.error;
+    resEl.classList.add("empty");
+    return;
+  }
+  errEl.classList.add("empty");
+  errEl.textContent = "";
+  resEl.classList.remove("empty");
+  renderSynthResult(result.result, result.output);
 });
+
+// --- Copy buttons ----------------------------------------------------------------
+
+function showCopyFallback(btn, text) {
+  // Last resort: neither the Clipboard API nor execCommand nor prompt()
+  // worked in this environment (seen for real in one embedded/automated
+  // browser context during testing) -- show the text inline, selected,
+  // so the user can copy it by hand. Never throws.
+  const existing = btn.parentElement.querySelector(".copy-fallback");
+  if (existing) existing.remove();
+  const box = document.createElement("pre");
+  box.className = "copy-fallback";
+  box.textContent = text;
+  btn.insertAdjacentElement("afterend", box);
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(box);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch (e) {
+    // Selecting it for them is a nicety, not required -- the text is
+    // visible either way.
+  }
+}
+
+async function copyText(text, btn) {
+  let copied = false;
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    } catch (e) {
+      // Permissions, insecure context, etc. -- try the next strategy.
+    }
+  }
+
+  if (!copied) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      copied = document.execCommand("copy");
+      document.body.removeChild(ta);
+    } catch (e) {
+      // execCommand unavailable or disabled -- try the next strategy.
+    }
+  }
+
+  if (!copied) {
+    try {
+      window.prompt("Copy failed automatically; copy this manually:", text);
+      copied = true; // the user had a chance to copy, even if we can't confirm it
+    } catch (e) {
+      // prompt() itself can be unsupported in some embedded/automated
+      // browser contexts -- fall through to the visible-text fallback
+      // rather than leaving an uncaught exception.
+    }
+  }
+
+  if (!copied) {
+    showCopyFallback(btn, text);
+    return;
+  }
+
+  const original = btn.textContent;
+  btn.textContent = "Copied!";
+  btn.classList.add("copied");
+  setTimeout(() => { btn.textContent = original; btn.classList.remove("copied"); }, 1500);
+}
+
+$("copy-solution").addEventListener("click", () => copyText(lastSolutionText, $("copy-solution")));
+$("copy-advanced").addEventListener("click", () => copyText(lastAdvancedText, $("copy-advanced")));
 </script>
 </body>
 </html>

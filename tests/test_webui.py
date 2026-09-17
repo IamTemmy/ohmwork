@@ -45,6 +45,55 @@ def test_index_page_serves_html(server_url):
     assert "Synthesis" in body
 
 
+def test_index_page_script_is_valid_javascript(server_url):
+    # Regression: _PAGE is embedded as a Python string literal (webui.py);
+    # a non-raw string interprets "\n" etc. inside the JS source as Python
+    # escapes at import time, silently corrupting the served script (found
+    # by hand during M1.2's manual browser testing -- every button broke
+    # with a JS SyntaxError, since a literal newline landed inside a JS
+    # string literal). If Node is available, actually parse the served
+    # script; the raw-string requirement itself is covered unconditionally
+    # by the string-check test below.
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available to check JS syntax")
+
+    with urllib.request.urlopen(server_url + "/", timeout=5) as resp:
+        body = resp.read().decode("utf-8")
+    script = body.split("<script>", 1)[1].split("</script>", 1)[0]
+    result = subprocess.run([node, "--check", "-"], input=script, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_page_source_uses_a_raw_string_literal():
+    # The actual root-cause guard for the bug above: _PAGE must be declared
+    # with `r"""` (raw), not `"""`, so no future edit can reintroduce a
+    # Python-escape-vs-JS-escape collision.
+    import ohmwork.webui as webui_module
+    import inspect
+
+    src = inspect.getsource(webui_module)
+    assert 'r"""<!doctype html>' in src, "_PAGE must stay a raw string (r\"\"\") -- see the docstring on this test"
+
+
+def test_index_page_has_synth_ui_elements(server_url):
+    # M1.2: the restructured synthesis panel's key elements should exist,
+    # as a lightweight structural regression check (this repo has no
+    # headless-browser test framework -- see M1.2's plan review for why).
+    with urllib.request.urlopen(server_url + "/", timeout=5) as resp:
+        body = resp.read().decode("utf-8")
+    for expected_id in [
+        "synth-output-name", "synth-grid-wrap", "synth-manual-details",
+        "res-gate-line", "res-function-line", "res-pdn-expr", "res-pun-expr",
+        "res-selection-note", "res-alternatives", "res-advanced",
+        "copy-solution", "copy-advanced",
+    ]:
+        assert f'id="{expected_id}"' in body, expected_id
+
+
 def test_unknown_path_is_404(server_url):
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         urllib.request.urlopen(server_url + "/nope", timeout=5)
