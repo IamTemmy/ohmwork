@@ -1,0 +1,219 @@
+"""Tests for presenter.py — the student-facing structured view of a
+SynthesisResult. Everything here checks facts read off the result object
+graph, never text parsed from the CLI report."""
+
+import pytest
+
+from ohmwork.api import synthesize_from_input
+from ohmwork.presenter import build_synth_view, validate_output_name
+
+
+# --- validate_output_name ----------------------------------------------------
+
+
+def test_default_output_name_is_f():
+    assert validate_output_name(None, ["a", "b"]) == "F"
+    assert validate_output_name("", ["a", "b"]) == "F"
+    assert validate_output_name("   ", ["a", "b"]) == "F"
+
+
+def test_bare_f_is_a_valid_output_name():
+    # D15 reserves "F" as an INPUT variable name (tt's derivation table);
+    # it must NOT be rejected here, since it's the default output name.
+    assert validate_output_name("F", ["a", "b"]) == "F"
+
+
+def test_accepts_letter_plus_optional_digit():
+    assert validate_output_name("Y", ["a", "b"]) == "Y"
+    assert validate_output_name("M0", ["a", "b"]) == "M0"
+
+
+def test_rejects_multi_character_name():
+    with pytest.raises(ValueError, match="not a valid output name"):
+        validate_output_name("Out", ["a", "b"])
+
+
+def test_rejects_two_digit_suffix():
+    with pytest.raises(ValueError, match="not a valid output name"):
+        validate_output_name("M12", ["a", "b"])
+
+
+def test_rejects_name_colliding_with_input_variable():
+    with pytest.raises(ValueError, match="duplicates an input variable"):
+        validate_output_name("a", ["a", "b"])
+
+
+def test_strips_whitespace():
+    assert validate_output_name("  Y  ", ["a", "b"]) == "Y"
+
+
+# --- build_synth_view: the three exam questions -----------------------------
+
+
+def test_q1_3_input_nand():
+    result = synthesize_from_input(expr="(ABC)'")
+    view = build_synth_view(result)
+    assert view["gate_name"] == "3-input NAND"
+    assert view["function"] == "F = (ABC)'"
+    assert view["total_transistors"] == 6
+    assert view["pdn"] == {"expression": "A·B·C", "transistors": 3, "stack_height": 3}
+    assert view["pun"] == {"expression": "A + B + C", "transistors": 3, "stack_height": 1}
+    assert view["inverters"] == {"count": 0, "literals": []}
+    assert view["verification"]["vector_count"] == 8
+    assert view["verification"]["functional_pass"] is True
+    assert view["verification"]["structural_pass"] is True
+
+
+def test_q1_candidates_are_deduplicated_with_provenance_preserved():
+    result = synthesize_from_input(expr="(ABC)'")
+    view = build_synth_view(result)
+    alts = view["reasoning"]["alternatives"]
+    # AOI and OAI both land on F'=ABC at 6 transistors -- one row, not two.
+    assert len(alts) == 1
+    assert alts[0]["expression"] == "ABC"
+    assert set(alts[0]["labels"]) == {"AOI", "OAI"}
+    assert alts[0]["is_chosen"] is True
+    # The underlying (undeduplicated) list is untouched.
+    assert len(result.other_candidates) == 2
+
+
+def test_q1_selection_reasoning_notes_both_construction_paths():
+    result = synthesize_from_input(expr="(ABC)'")
+    view = build_synth_view(result)
+    note = view["reasoning"]["selection_note"]
+    assert "only one distinct realization" in note.lower()
+    assert "AOI" in note and "OAI" in note
+
+
+def test_q2_4_input_nor():
+    result = synthesize_from_input(variables="A,B,C,D", table="1000000000000000")
+    view = build_synth_view(result)
+    assert view["gate_name"] == "4-input NOR"
+    assert view["function"] == "F = (A + B + C + D)'"
+    assert view["total_transistors"] == 8
+
+
+def test_q3_aoi31_shows_a_strictly_cheaper_reasoning():
+    result = synthesize_from_input(expr="(ABC+D)'")
+    view = build_synth_view(result)
+    assert view["gate_name"] == "AOI31"
+    assert view["function"] == "F = (ABC + D)'"
+    assert view["total_transistors"] == 8
+    note = view["reasoning"]["selection_note"]
+    assert "strictly lower" in note.lower()
+    assert "8" in note and "12" in note  # 8 chosen vs 12 for the OAI alternative
+    alts = view["reasoning"]["alternatives"]
+    assert len(alts) == 2  # AOI (chosen, 8T) and OAI (12T) are genuinely different here
+
+
+# --- Custom output names -----------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["F", "Y", "M"])
+def test_custom_output_names(name):
+    result = synthesize_from_input(expr="(ABC)'")
+    view = build_synth_view(result, output_name=name)
+    assert view["function"] == f"{name} = (ABC)'"
+    assert view["output_name"] == name
+    # Nothing else about the result changes with the display name.
+    assert view["gate_name"] == "3-input NAND"
+    assert view["total_transistors"] == 6
+
+
+def test_output_name_does_not_affect_the_underlying_result():
+    result = synthesize_from_input(expr="(ABC)'")
+    view_f = build_synth_view(result, output_name="F")
+    view_y = build_synth_view(result, output_name="Y")
+    assert view_f["total_transistors"] == view_y["total_transistors"]
+    assert view_f["pdn"] == view_y["pdn"]
+    assert view_f["function"] != view_y["function"]
+
+
+# --- Double-negation collapse for the degenerate buffer case ----------------
+
+
+def test_buffer_case_collapses_double_negation():
+    # F' = a' (a degenerate "buffer" gate): naively F = NOT(a') = a'' is
+    # correct but unreadable -- must collapse to F = a.
+    result = synthesize_from_input(expr="a")
+    assert result.gate_name.startswith("buffer")
+    view = build_synth_view(result)
+    assert view["function"] == "F = a"
+
+
+def test_inverter_case_is_not_affected_by_double_negation_logic():
+    # F' = a (plain inverter): F = NOT(a) = a', no double negation involved.
+    result = synthesize_from_input(expr="a'")
+    assert result.gate_name.startswith("inverter")
+    view = build_synth_view(result)
+    assert view["function"] == "F = a'"
+
+
+# --- Don't-cares --------------------------------------------------------------
+
+
+def test_dont_care_assignments_are_surfaced_and_flagged():
+    result = synthesize_from_input(variables="a,b", ones="0", dc="1")
+    view = build_synth_view(result)
+    assert view["function_uses_dont_cares"] is True
+    assert view["verification"]["dont_care_assignments"] == {"1": True}
+
+
+def test_no_dont_cares_flag_is_false_when_there_are_none():
+    result = synthesize_from_input(expr="(ABC)'")
+    view = build_synth_view(result)
+    assert view["function_uses_dont_cares"] is False
+    assert view["verification"]["dont_care_assignments"] == {}
+
+
+# --- Inverters (D12) -----------------------------------------------------------
+
+
+def test_inverter_literals_and_count_are_surfaced():
+    result = synthesize_from_input(expr="(a'b+c)'")
+    view = build_synth_view(result)
+    assert view["inverters"]["literals"] == ["a"]
+    assert view["inverters"]["count"] == 2
+
+
+def test_dual_rail_shows_zero_inverter_count_cleanly():
+    result = synthesize_from_input(expr="(a'b+c)'", dual_rail=True)
+    view = build_synth_view(result)
+    assert view["inverters"]["count"] == 0
+    # Unlike the legacy report's own wording quirk, this doesn't claim an
+    # inverter is needed while also saying the count is 0.
+    assert view["inverters"]["literals"] == ["a"]  # still true a complement is used
+
+
+# --- max_stack wording --------------------------------------------------------
+
+
+def test_max_stack_reasoning_notes_the_constraint():
+    result = synthesize_from_input(expr="(a+b)'", max_stack=2)
+    view = build_synth_view(result, max_stack_applied=True)
+    assert "--max-stack" in view["reasoning"]["selection_note"]
+
+
+def test_no_max_stack_reasoning_has_no_constraint_caveat():
+    result = synthesize_from_input(expr="(a+b)'")
+    view = build_synth_view(result, max_stack_applied=False)
+    assert "--max-stack" not in view["reasoning"]["selection_note"]
+
+
+# --- Minimality summary -------------------------------------------------------
+
+
+def test_minimality_summary_when_proven():
+    result = synthesize_from_input(expr="(ABC)'")
+    view = build_synth_view(result)
+    assert "proven minimal" in view["reasoning"]["minimality_summary"].lower()
+    assert "3 essential variable" in view["reasoning"]["minimality_summary"]
+    assert "3 literal" in view["reasoning"]["minimality_summary"]
+    assert view["reasoning"]["minimality_detail"] == result.minimality_proof
+
+
+def test_minimality_summary_when_not_proven():
+    result = synthesize_from_input(variables="a,b", ones="0", dc="1")
+    view = build_synth_view(result)
+    assert "not proven" in view["reasoning"]["minimality_summary"].lower()
+    assert view["reasoning"]["minimality_detail"] is None

@@ -24,7 +24,7 @@ from ohmwork.parser import parse
 from ohmwork.render import format_latex, format_markdown, format_terminal
 from ohmwork.report import format_synth_report
 from ohmwork.simplify import simplify
-from ohmwork.synth import synthesize
+from ohmwork.synth import SynthesisResult, synthesize
 from ohmwork.truth_table import parse_index_list, parse_table_string, parse_var_list
 
 
@@ -108,6 +108,33 @@ def resolve_truth_table(
     return var_order, minterm_set, dont_care_set
 
 
+def synthesize_from_input(
+    *,
+    expr: str | None = None,
+    variables: str | None = None,
+    ones: str | None = None,
+    dc: str | None = None,
+    table: str | None = None,
+    dual_rail: bool = False,
+    max_stack: int | None = None,
+) -> SynthesisResult:
+    """Resolve truth-table input and synthesize it — the raw, structured
+    result, not text. Both ``render_synth`` below (the CLI's text report)
+    and M1.2's ``presenter`` module (the web UI's structured student view)
+    build on this single call, so a given request is synthesized exactly
+    once and both presentations come from the *same* verified object —
+    never two independent computations that could theoretically disagree.
+
+    Raises ``ValueError`` (bad input, unsupported variable count, or no
+    candidate fits ``max_stack``) or ``RuntimeError`` (D7 verification
+    failed inside ``synthesize`` itself — a bug in ohmwork, never a valid
+    design; see ``synth.synthesize``'s own docstring)."""
+    var_order, minterms, dont_cares = resolve_truth_table(
+        expr=expr, variables=variables, ones=ones, dc=dc, table=table
+    )
+    return synthesize(var_order, minterms, dont_cares, dual_rail=dual_rail, max_stack=max_stack)
+
+
 def render_synth(
     *,
     expr: str | None = None,
@@ -119,14 +146,12 @@ def render_synth(
     max_stack: int | None = None,
 ) -> str:
     """The full text ``ohmwork synth`` prints: candidates, gate name,
-    transistor breakdown, schematic, and D7 verification. Raises
-    ``ValueError`` (bad input, unsupported variable count, or no candidate
-    fits ``max_stack``) or ``RuntimeError`` (D7 verification failed inside
-    ``synthesize`` itself — a bug in ohmwork, never a valid design)."""
-    var_order, minterms, dont_cares = resolve_truth_table(
-        expr=expr, variables=variables, ones=ones, dc=dc, table=table
+    transistor breakdown, schematic, and D7 verification. See
+    ``synthesize_from_input`` for the exceptions this can raise."""
+    result = synthesize_from_input(
+        expr=expr, variables=variables, ones=ones, dc=dc, table=table,
+        dual_rail=dual_rail, max_stack=max_stack,
     )
-    result = synthesize(var_order, minterms, dont_cares, dual_rail=dual_rail, max_stack=max_stack)
     # synthesize() already verified this design (D7) before returning it —
     # result.verification is guaranteed to have passed, or it would have
     # raised RuntimeError above instead of reaching this line.
