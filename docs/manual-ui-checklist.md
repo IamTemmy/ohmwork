@@ -90,9 +90,11 @@ For each of Q1 (`(ABC)'`), Q2 (`A,B,C,D` / `1000000000000000`), Q3 (`(ABC+D)'`):
 ## New problem / stale results
 
 - [ ] "New problem" in the Synthesis tab clears the expression, variables,
-      grid, manual entry fields, output name, dual-rail, max stack, and
-      the result/error — but keeps you on "From expression" or "From
-      truth table," whichever you had selected. **(automated)**
+      grid, manual entry field *values*, output name, dual-rail, max
+      stack, and the result/error — but keeps you on "From expression" or
+      "From truth table," and preserves whether manual entry was open and
+      its Minterms/Bit string selection, all as workflow choices rather
+      than per-problem data. **(automated)**
 - [ ] After "New problem," focus lands on the first relevant field for
       the preserved mode (`Expression` or `Variables`). **(automated)**
 - [ ] "New problem" in the Derivation table tab clears the expression and
@@ -104,6 +106,21 @@ For each of Q1 (`(ABC)'`), Q2 (`A,B,C,D` / `1000000000000000`), Q3 (`(ABC+D)'`):
       stack immediately hides the old result — without re-synthesizing
       on its own. **(automated: expression and one grid cell; the rest of
       the field list shares the same code path)**
+- [ ] Opening or closing "Enter the truth table manually instead" after a
+      result is showing clears that result too — it changes which fields
+      the next Synthesize actually reads, so it's a material input-mode
+      change like From expression/From truth table. **(automated, both
+      directions)**
+- [ ] Editing the Derivation table's expression, or changing its
+      format/columns mode, after a result is showing clears that result
+      too. **(automated: expression edit and format change)**
+- [ ] If you submit, then edit the form (or click New problem) before the
+      response comes back, the eventual response must never repopulate
+      the old or a stale answer — the display should reflect only your
+      latest edit or the cleared state. Same for submitting twice in a
+      row where the responses arrive out of order: the second submission
+      always wins, regardless of network timing. **(automated via a
+      controllable mocked fetch, for both Synthesis and Derivation table)**
 
 ## Cross-cutting
 

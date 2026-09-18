@@ -16,6 +16,7 @@ per Python version.
 
 from __future__ import annotations
 
+import json
 import threading
 from wsgiref.simple_server import make_server
 
@@ -96,6 +97,49 @@ def _submit_via_expression(page, expression: str = "(abc)'") -> None:
     page.fill("#synth-expr", expression)
     page.click("#panel-synth button.submit")
     page.wait_for_selector("#synth-result:not(.empty)")
+
+
+# --- Real responses + a controllable fetch mock, for the request-race tests ----------
+#
+# Uses Playwright's own APIRequestContext (page.request) to fetch a real,
+# schema-correct response body directly over HTTP -- independent of
+# whatever the page's own `window.fetch` has been monkeypatched to, so
+# this always reflects the real server, never a hand-maintained fake of
+# presenter.py's JSON shape.
+
+
+def _real_json(page, path: str, payload: dict) -> dict:
+    resp = page.request.post(
+        page.url.rstrip("/") + path,
+        data=json.dumps(payload),
+        headers={"Content-Type": "application/json"},
+    )
+    return resp.json()
+
+
+def _install_fetch_mock(page) -> None:
+    # Replaces window.fetch with one that never resolves on its own --
+    # each call is queued, and the test resolves specific queue entries,
+    # in whatever order it chooses, via _resolve_fetch below.
+    page.evaluate(
+        """() => {
+            window.__fetchQueue = [];
+            window.fetch = (url, opts) => new Promise((resolve) => {
+                window.__fetchQueue.push({ url, resolve });
+            });
+        }"""
+    )
+
+
+def _resolve_fetch(page, index: int, response_body: dict) -> None:
+    page.evaluate(
+        """({index, body}) => {
+            const entry = window.__fetchQueue[index];
+            window.__fetchQueue[index] = null;
+            entry.resolve({ json: async () => body });
+        }""",
+        {"index": index, "body": response_body},
+    )
 
 
 # --- Tab / result isolation --------------------------------------------------------
@@ -446,3 +490,192 @@ def test_new_problem_button_is_type_button_and_never_submits(page):
     page.click("#synth-new-problem")
     page.wait_for_timeout(200)  # give any (incorrect) submit a moment to fire
     assert not any("/api/synth" in url or "/api/tt" in url for url in requests)
+
+
+# --- Manual-entry disclosure is a material input-mode change --------------------------
+#
+# The bug: `manualOpen = $("synth-manual-details").open` decides which
+# fields the next submit actually reads, so toggling it changes what
+# Synthesize would produce -- but nothing invalidated a result already on
+# screen when you opened or closed it.
+
+
+def test_opening_manual_entry_after_a_grid_result_clears_it(page):
+    _submit_q1(page)
+    assert page.is_visible("#synth-result")
+
+    page.click("#synth-manual-details summary")  # closed -> open
+    # <details>'s "toggle" event is fired as an async queued task, not
+    # synchronously with the click -- wait for its effect rather than a
+    # fixed sleep. (Not wait_for_selector(".empty"): that selector match
+    # is exactly what CSS makes invisible, so waiting on visibility for it
+    # would never resolve.)
+    page.wait_for_function("document.getElementById('synth-result').classList.contains('empty')")
+
+    assert page.get_attribute("#synth-manual-details", "open") is not None
+    assert not page.is_visible("#synth-result")
+    assert page.text_content("#res-gate-line") == ""
+
+
+def test_closing_manual_entry_after_a_manual_result_clears_it(page):
+    _switch_tab(page, "synth")
+    page.check('input[name="synth-mode"][value="table"]')
+    page.fill("#synth-vars", _Q1_VARS)
+    page.click("#synth-manual-details summary")  # open manual entry
+    page.fill("#synth-ones", "0,1,2,3,4,5,6")  # Q1 pattern: everything but row 7
+    page.click("#panel-synth button.submit")
+    page.wait_for_selector("#synth-result:not(.empty)")
+    assert "NAND" in page.text_content("#res-gate-line")
+
+    page.click("#synth-manual-details summary")  # open -> closed
+    page.wait_for_function("document.getElementById('synth-result').classList.contains('empty')")  # see the note above
+
+    assert page.get_attribute("#synth-manual-details", "open") is None
+
+    assert not page.is_visible("#synth-result")
+    assert page.text_content("#res-gate-line") == ""
+
+
+# --- New problem preserves manual-entry state (UX adjustment) ------------------------
+
+
+def test_new_problem_preserves_manual_entry_open_state_and_table_mode(page):
+    _switch_tab(page, "synth")
+    page.check('input[name="synth-mode"][value="table"]')
+    page.click("#synth-manual-details summary")  # open it
+    page.check('input[name="synth-table-mode"][value="bits"]')
+    page.fill("#synth-table", "1x01")
+
+    page.click("#synth-new-problem")
+
+    assert page.get_attribute("#synth-manual-details", "open") is not None
+    assert page.is_checked('input[name="synth-table-mode"][value="bits"]')
+    assert page.input_value("#synth-table") == ""  # the value itself is still cleared
+
+
+# --- Derivation table: same stale-output principle (optional improvement, applied) ----
+
+
+def test_editing_tt_expression_after_a_result_hides_the_stale_output(page):
+    _run_derivation(page, "xy + xy'")
+    assert page.is_visible("#tt-output")
+
+    page.fill("#tt-expr", "a+b+c")
+
+    assert not page.is_visible("#tt-output")
+
+
+def test_changing_tt_format_after_a_result_hides_the_stale_output(page):
+    _run_derivation(page, "xy + xy'")
+    page.check('input[name="tt-format"][value="md"]')
+    assert not page.is_visible("#tt-output")
+
+
+# --- In-flight request races -----------------------------------------------------------
+#
+# The bug: neither submit handler invalidated an outstanding request. If
+# you edited the form (or clicked New Problem) while a request was still
+# in flight, the eventual response unconditionally rendered -- silently
+# repopulating a cleared or changed form with a stale answer. Fixed with a
+# per-form monotonic token: a response only renders if its token is still
+# the live one. These use a controllable mocked fetch (see
+# _install_fetch_mock above) instead of slowing down the real engine.
+
+
+def test_editing_during_inflight_synth_request_prevents_stale_render(page):
+    real_response = _real_json(page, "/api/synth", {"expr": "(abc)'"})
+
+    _switch_tab(page, "synth")
+    page.check('input[name="synth-mode"][value="expr"]')
+    _install_fetch_mock(page)
+
+    page.fill("#synth-expr", "(abc)'")
+    page.click("#panel-synth button.submit")  # request queued, stays pending
+
+    page.fill("#synth-expr", "a+b")  # edited before the response arrives
+
+    _resolve_fetch(page, 0, real_response)
+    page.wait_for_timeout(200)
+
+    assert not page.is_visible("#synth-result")
+    assert page.text_content("#res-gate-line") == ""
+    assert page.input_value("#synth-expr") == "a+b"  # the edit itself is untouched
+
+
+def test_new_problem_during_inflight_synth_request_prevents_stale_render(page):
+    real_response = _real_json(page, "/api/synth", {"expr": "(abc)'"})
+
+    _switch_tab(page, "synth")
+    page.check('input[name="synth-mode"][value="expr"]')
+    page.fill("#synth-expr", "(abc)'")
+    _install_fetch_mock(page)
+
+    page.click("#panel-synth button.submit")  # request queued, stays pending
+    page.click("#synth-new-problem")
+
+    _resolve_fetch(page, 0, real_response)
+    page.wait_for_timeout(200)
+
+    assert not page.is_visible("#synth-result")
+    assert page.input_value("#synth-expr") == ""
+    assert page.text_content("#res-gate-line") == ""
+
+
+def test_later_submission_wins_regardless_of_response_order(page):
+    response_a = _real_json(page, "/api/synth", {"expr": "(abc)'"})
+    response_b = _real_json(page, "/api/synth", {"expr": "a+b"})
+    assert response_a["result"]["gate_name"] != response_b["result"]["gate_name"]
+
+    _switch_tab(page, "synth")
+    page.check('input[name="synth-mode"][value="expr"]')
+    _install_fetch_mock(page)
+
+    page.fill("#synth-expr", "(abc)'")
+    page.click("#panel-synth button.submit")  # request A, index 0
+
+    page.fill("#synth-expr", "a+b")
+    page.click("#panel-synth button.submit")  # request B, index 1
+
+    _resolve_fetch(page, 1, response_b)  # B resolves first
+    page.wait_for_timeout(200)
+    assert page.text_content("#res-gate-line") == (
+        f"{response_b['result']['gate_name']} — {response_b['result']['total_transistors']} transistors"
+    )
+
+    _resolve_fetch(page, 0, response_a)  # A (stale) resolves second -- must not overwrite B
+    page.wait_for_timeout(200)
+    assert page.text_content("#res-gate-line") == (
+        f"{response_b['result']['gate_name']} — {response_b['result']['total_transistors']} transistors"
+    )
+
+
+def test_editing_during_inflight_tt_request_prevents_stale_render(page):
+    real_response = _real_json(page, "/api/tt", {"expression": "xy + xy'"})
+
+    page.fill("#tt-expr", "xy + xy'")
+    _install_fetch_mock(page)
+
+    page.click("#panel-tt button.submit")  # request queued, stays pending
+    page.fill("#tt-expr", "a+b")  # edited before the response arrives
+
+    _resolve_fetch(page, 0, real_response)
+    page.wait_for_timeout(200)
+
+    assert not page.is_visible("#tt-output")
+    assert page.input_value("#tt-expr") == "a+b"
+
+
+def test_new_problem_during_inflight_tt_request_prevents_stale_render(page):
+    real_response = _real_json(page, "/api/tt", {"expression": "xy + xy'"})
+
+    page.fill("#tt-expr", "xy + xy'")
+    _install_fetch_mock(page)
+
+    page.click("#panel-tt button.submit")  # request queued, stays pending
+    page.click("#tt-new-problem")
+
+    _resolve_fetch(page, 0, real_response)
+    page.wait_for_timeout(200)
+
+    assert not page.is_visible("#tt-output")
+    assert page.input_value("#tt-expr") == ""

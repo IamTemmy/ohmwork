@@ -455,8 +455,29 @@ async function postJSON(url, payload) {
   }
 }
 
+// A monotonically increasing token per form. Submitting captures the
+// current value; any result-affecting edit, New Problem, or later
+// submission bumps it. A response is only rendered if its captured token
+// still equals the live one -- otherwise it's an in-flight request that's
+// been superseded (by an edit, a New Problem, or a newer submission) and
+// must be discarded rather than repopulating stale text into the DOM.
+let ttRequestToken = 0;
+
+function clearTtOutputDisplay() {
+  ttRequestToken++;
+  const out = $("tt-output");
+  out.classList.add("empty");
+  out.classList.remove("error");
+  out.textContent = "";
+}
+$("tt-expr").addEventListener("input", clearTtOutputDisplay);
+$("tt-cols-input").addEventListener("input", clearTtOutputDisplay);
+document.querySelectorAll("input[name=tt-format]").forEach(r => r.addEventListener("change", clearTtOutputDisplay));
+document.querySelectorAll("input[name=tt-cols]").forEach(r => r.addEventListener("change", clearTtOutputDisplay));
+
 $("panel-tt").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const myToken = ++ttRequestToken;
   const colsMode = checkedValue("tt-cols");
   const payload = {
     expression: $("tt-expr").value,
@@ -466,6 +487,7 @@ $("panel-tt").addEventListener("submit", async (e) => {
     cols: colsMode === "custom" ? $("tt-cols-input").value : null,
   };
   const result = await postJSON("/api/tt", payload);
+  if (myToken !== ttRequestToken) return; // superseded while this request was in flight
   const out = $("tt-output");
   out.classList.remove("empty");
   out.classList.toggle("error", !result.ok);
@@ -478,10 +500,7 @@ function resetTtForm() {
   // data, so they're deliberately left alone.
   $("tt-expr").value = "";
   $("tt-cols-input").value = "";
-  const out = $("tt-output");
-  out.classList.add("empty");
-  out.classList.remove("error");
-  out.textContent = "";
+  clearTtOutputDisplay();
   $("tt-expr").focus();
 }
 $("tt-new-problem").addEventListener("click", resetTtForm);
@@ -568,8 +587,12 @@ function renderSynthResult(view, rawOutput) {
   lastAdvancedText = rawOutput;
 }
 
+// Same request-token pattern as tt's above -- see the comment there.
+let synthRequestToken = 0;
+
 $("panel-synth").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const myToken = ++synthRequestToken;
   const payload = {
     dual_rail: $("synth-dual-rail").checked,
     max_stack: $("synth-max-stack").value || null,
@@ -596,6 +619,7 @@ $("panel-synth").addEventListener("submit", async (e) => {
   }
 
   const result = await postJSON("/api/synth", payload);
+  if (myToken !== synthRequestToken) return; // superseded while this request was in flight
   const errEl = $("synth-error");
   const resEl = $("synth-result");
   if (!result.ok) {
@@ -625,6 +649,7 @@ const _RESULT_TEXT_FIELD_IDS = [
 ];
 
 function clearSynthResultDisplay() {
+  synthRequestToken++; // invalidate any in-flight /api/synth request
   const errEl = $("synth-error");
   const resEl = $("synth-result");
   errEl.classList.add("empty");
@@ -657,12 +682,19 @@ function clearSynthResultDisplay() {
 $("synth-dual-rail").addEventListener("change", clearSynthResultDisplay);
 document.querySelectorAll("input[name=synth-mode]").forEach(r => r.addEventListener("change", clearSynthResultDisplay));
 document.querySelectorAll("input[name=synth-table-mode]").forEach(r => r.addEventListener("change", clearSynthResultDisplay));
+// Opening/closing manual entry changes which fields the next submit will
+// actually read (see the `manualOpen` branch above) -- that's a material
+// input-mode change exactly like synth-mode/synth-table-mode, so it must
+// invalidate a shown result the same way.
+$("synth-manual-details").addEventListener("toggle", clearSynthResultDisplay);
 
 function resetSynthForm() {
-  // The chosen synth-mode (From expression / From truth table) is a
-  // workflow choice, not per-problem data -- a student working through
-  // several questions of the same type shouldn't have to reselect it
-  // every time. Everything else here is problem-specific and gets cleared.
+  // The chosen synth-mode (From expression / From truth table), whether
+  // manual entry is open, and its Minterms/Bit string selection are all
+  // workflow choices, not per-problem data -- a student working through
+  // several questions of the same type shouldn't have to reselect any of
+  // them every time. Everything else here is problem-specific and gets
+  // cleared, including the manual-entry fields' actual values.
   const mode = checkedValue("synth-mode");
 
   $("synth-expr").value = "";
@@ -673,10 +705,6 @@ function resetSynthForm() {
   $("synth-output-name").value = "";
   $("synth-dual-rail").checked = false;
   $("synth-max-stack").value = "";
-
-  $("synth-manual-details").open = false;
-  document.querySelector('input[name="synth-table-mode"][value="minterms"]').checked = true;
-  updateSynthTableModeVisibility();
 
   buildGrid(); // synth-vars is now empty -> clears the grid and gridState
   clearSynthResultDisplay();
