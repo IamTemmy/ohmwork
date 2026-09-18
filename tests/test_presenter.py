@@ -224,13 +224,42 @@ def test_no_max_stack_reasoning_has_no_constraint_caveat():
 # --- Minimality summary -------------------------------------------------------
 
 
-def test_minimality_summary_when_proven():
+def test_minimality_summary_when_proven_and_no_inverters():
+    # A 2026-09-18 ChatGPT review (Q3 dogfooding) caught this summary
+    # always saying a flat "Proven minimal" even when the design needed
+    # inverter transistors the certificate doesn't cover -- see the
+    # core-only case below. This is the case where core cost == total
+    # cost (no inverters), so the summary is unqualified.
     result = synthesize_from_input(expr="(ABC)'")
     view = build_synth_view(result)
-    assert "proven minimal" in view["reasoning"]["minimality_summary"].lower()
-    assert "3 essential variable" in view["reasoning"]["minimality_summary"]
-    assert "3 literal" in view["reasoning"]["minimality_summary"]
+    summary = view["reasoning"]["minimality_summary"]
+    assert "proven minimal" in summary.lower()
+    assert "complementary static cmos" in summary.lower()
+    assert "3 essential variable" in summary
+    assert "6 transistors total" in summary
     assert view["reasoning"]["minimality_detail"] == result.minimality_proof
+
+
+def test_minimality_summary_core_only_when_inverters_needed():
+    # AOI21 for (a'b+c)': PDN/PUN use one literal per variable (the
+    # certificate's condition), but the complemented literal a' needs a
+    # shared inverter (D12) -- 6 core + 2 inverter = 8 total. The
+    # certificate only ever bounds the 6-transistor core; the summary
+    # must say the complete 8-transistor design is NOT proven minimal,
+    # not just omit a number and imply it is.
+    result = synthesize_from_input(expr="(a'b+c)'")
+    assert result.inverter_transistors == 2
+    assert result.total_transistors == 8
+    view = build_synth_view(result)
+    summary = view["reasoning"]["minimality_summary"]
+    assert "core proven minimal" in summary.lower()
+    assert "complementary static cmos" in summary.lower()
+    assert "6 core transistor" in summary
+    assert "2 inverter transistor" in summary
+    assert "not proven minimal" in summary.lower()
+    assert "8-transistor design" in summary
+    assert view["reasoning"]["minimality_detail"] == result.minimality_proof
+    assert "NOT proven minimal" in result.minimality_proof
 
 
 def test_minimality_summary_when_not_proven():

@@ -174,11 +174,31 @@ def _topology_note(result: SynthesisResult) -> str | None:
 
 
 def _minimality_summary(result: SynthesisResult) -> str:
+    """The short Reasoning-section line (also what Copy Solution copies).
+    Reads `result.inverter_transistors` (already computed by synth.py, D12)
+    rather than parsing `minimality_proof`'s text -- this module never
+    re-parses report text (see the module docstring). A 2026-09-18 ChatGPT
+    review caught this always saying a flat "Proven minimal" even when
+    inverter cost wasn't covered by that proof (see synth.py's
+    `_prove_minimal_or_none`): the certificate only ever bounds PDN+PUN
+    (core) transistors, so when this design also needs inverter
+    transistors, the *complete* cost is not proven minimal and must say so."""
     if result.minimality_proof:
         # pdn_transistors == the literal count of the chosen F' (one
         # transistor per literal, D16 point 1) -- PUN mirrors it exactly
         # (same literals, dual topology), so it's not counted twice here.
-        return f"Proven minimal — {len(result.var_order)} essential variable(s), {result.pdn_transistors} literal(s)."
+        core = result.pdn_transistors + result.pun_transistors
+        if result.inverter_transistors == 0:
+            return (
+                f"Proven minimal for complementary static CMOS — {len(result.var_order)} "
+                f"essential variable(s), {result.total_transistors} transistors total."
+            )
+        return (
+            f"PDN+PUN core proven minimal for complementary static CMOS — {len(result.var_order)} "
+            f"essential variable(s), {core} core transistor(s); the {result.inverter_transistors} "
+            "inverter transistor(s) aren't covered by this bound, so the full "
+            f"{result.total_transistors}-transistor design is not proven minimal."
+        )
     return "Not proven minimal within this search space (D6) — a different factoring might do better."
 
 

@@ -190,31 +190,45 @@ def _prove_minimal_or_none(chosen: Candidate, var_order: list[str]) -> str | Non
     """A narrow, honest minimality certificate (D6): if the chosen PDN uses
     exactly one literal per variable actually appearing in it, and that set
     covers every declared variable, no *complementary static CMOS*
-    realization (single- or multi-stage) can use fewer PDN+PUN transistors
-    — each variable the function depends on must control at least one
-    device in both networks. Returns the proof text, or None if this
-    particular bound doesn't apply (the result may still be minimal; we
-    just haven't proven it).
+    realization (single- or multi-stage) can use fewer PDN+PUN (core)
+    transistors — each variable the function depends on must control at
+    least one device in both networks. Returns the proof text, or None if
+    this particular bound doesn't apply (the result may still be minimal;
+    we just haven't proven it).
 
     Scoped deliberately to complementary static CMOS (a wording fix from a
     2026-09-18 ChatGPT review, Q3 dogfooding): the bound is on PDN+PUN
-    transistors specifically, not `total_cost`, because inverter_cost can
-    be nonzero here too (e.g. a single complemented literal, D12) — this
-    proof says nothing about that, or about any other circuit family
-    (pass-transistor, ratioed, dynamic, ...)."""
+    (core) transistors specifically, never on `total_cost`. This matters
+    because `inverter_cost` can be nonzero even when this exact certificate
+    fires (a chosen PDN can use one literal per variable *and* need a
+    shared inverter for a complemented one, D12) -- a second ChatGPT review
+    caught this proof text (and, worse, presenter.py's short summary)
+    implying the *whole* design was proven minimal in that case, when only
+    the core is bounded and the inverter cost is not covered at all. When
+    `chosen.inverter_cost` is nonzero, the text says so explicitly rather
+    than leaving it to be inferred from "PDN+PUN" wording alone."""
     pdn_literals = _count_literals(chosen.f_prime)
     used_vars = _variable_names(chosen.f_prime)
     if pdn_literals == len(var_order) and used_vars == set(var_order):
         n = len(var_order)
-        return (
+        core_bound = 2 * n
+        proof = (
             f"proven minimal for complementary static CMOS: every declared variable ({n}) "
             "appears exactly once as a literal, so each must control at least one "
             "transistor in both the pull-down and pull-up networks — no complementary "
-            f"static CMOS realization (single- or multi-stage) could use fewer than {2 * n} "
+            f"static CMOS realization (single- or multi-stage) could use fewer than {core_bound} "
             "PDN+PUN transistors for this function. This bound is specific to "
             "complementary static CMOS; it makes no claim about pass-transistor logic, "
             "ratioed logic, dynamic logic, or any other circuit family."
         )
+        if chosen.inverter_cost:
+            proof += (
+                f" This bound covers the {core_bound} PDN+PUN (core) transistors only — it "
+                f"does not cover the {chosen.inverter_cost} inverter transistor(s) this "
+                f"realization also needs (D12), so the {core_bound + chosen.inverter_cost}-"
+                "transistor total is NOT proven minimal by this argument."
+            )
+        return proof
     return None
 
 

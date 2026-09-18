@@ -288,6 +288,25 @@ general algebraic factoring (kernel/co-kernel extraction, à la Espresso/SIS). C
    makes; it happens to cover single-stage NAND/NOR/AOI/OAI gates with no repeated or
    redundant variables (including all three of M1b's acceptance-test gates), but nothing
    more.
+
+   **Update (2026-09-18):** Two wording problems in the paragraph above, both caught by
+   ChatGPT reviews of the same dogfooding round (CPE 635 Exam #1, then the AOI21 inverter
+   case): first, "minimal in *any* search space" overclaims — the argument (n variables need
+   at least n literals) only bounds **complementary static CMOS** specifically; it says
+   nothing about pass-transistor logic, ratioed logic, dynamic logic, or any other circuit
+   family, and the tool now says so. Second, and more substantive: the certificate bounds
+   **PDN+PUN (core) transistors only** — it was never a bound on *complete* cost (core +
+   shared inverters, point 5). The one-literal-per-variable condition can hold on a chosen
+   `F'` that still needs a shared inverter for a complemented literal (D12), and the code
+   was presenting that case as flatly "proven minimal" anyway, implying the *complete*
+   design (core + inverters) was certified when only the core was. `synth.py`'s
+   `_prove_minimal_or_none` and `presenter.py`'s `_minimality_summary` now distinguish the
+   two cases explicitly: when the chosen design needs no inverters, core cost *is* complete
+   cost and "proven minimal" applies to the whole design; when it needs inverters, the text
+   says the core is proven minimal but the complete (total) cost is not — Ohmwork has no
+   certificate covering inverter cost, so it says so rather than implying one. No candidate
+   generation, selection, transistor counting, or verification changed — wording and
+   presentation only.
 5. **Inverters (D2/D12).** Costed at 2 transistors each, once per distinct complemented
    literal appearing in the *chosen* candidate's `F'` (shared across every product term that
    uses it, never per use site), unless `--dual-rail` is given.

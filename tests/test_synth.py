@@ -85,6 +85,40 @@ def test_minimality_proof_is_scoped_to_complementary_static_cmos(var_order, expr
     assert "any search space" not in proof
 
 
+def test_minimality_proof_flags_uncovered_inverter_cost():
+    # A second, more substantive 2026-09-18 ChatGPT finding: the
+    # one-literal-per-variable condition can hold on a chosen F' that
+    # still needs a shared inverter (D12) for a complemented literal --
+    # AOI21 for (a'b+c)' is exactly this case (6 core + 2 inverter = 8
+    # total). The certificate only ever bounds PDN+PUN (core) transistors;
+    # it must say the complete (total) cost is NOT proven minimal here,
+    # not silently omit the distinction.
+    var_order = ["a", "b", "c"]
+    minterms = minterms_from_expr(var_order, "(a'b+c)'")
+    result = synthesize(var_order, minterms)
+    assert result.inverter_transistors == 2
+    assert result.total_transistors == 8
+    proof = result.minimality_proof
+    assert proof is not None
+    assert "complementary static CMOS" in proof
+    assert "6 PDN+PUN transistors" in proof  # the core bound itself, unchanged
+    assert "NOT proven minimal" in proof
+    assert "8-transistor" in proof
+
+
+def test_minimality_proof_omits_inverter_caveat_when_none_needed():
+    # The flip side: when the same certificate fires and no inverter is
+    # needed (core cost == total cost), the proof should not carry a
+    # caveat that doesn't apply.
+    var_order = ["a", "b", "c"]
+    minterms = minterms_from_expr(var_order, "(abc)'")
+    result = synthesize(var_order, minterms)
+    assert result.inverter_transistors == 0
+    proof = result.minimality_proof
+    assert proof is not None
+    assert "NOT proven minimal" not in proof
+
+
 # --- de_morgan_complement ----------------------------------------------------
 
 
