@@ -81,10 +81,16 @@ _PAGE = r"""<!doctype html>
   .row { display: flex; gap: 1.4rem; flex-wrap: wrap; margin-top: .6rem; align-items: center; }
   .row label { margin-top: 0; display: inline-flex; align-items: center; gap: .35rem; font-weight: normal; }
   button.submit {
-    margin-top: 1.1rem; padding: .55rem 1.4rem; font-size: 1rem; cursor: pointer;
+    padding: .55rem 1.4rem; font-size: 1rem; cursor: pointer;
     border-radius: 6px; border: 1px solid #8886; background: #8882; color: inherit; font-family: inherit;
   }
   button.submit:hover { background: #8884; }
+  .action-row { margin-top: 1.1rem; }
+  button.btn-secondary {
+    padding: .55rem 1.2rem; font-size: .95rem; cursor: pointer; opacity: .7;
+    border-radius: 6px; border: 1px solid #8884; background: transparent; color: inherit; font-family: inherit;
+  }
+  button.btn-secondary:hover { opacity: 1; background: #8882; }
   pre#tt-output {
     white-space: pre-wrap; background: #8881; padding: 1rem; border-radius: 6px;
     margin-top: 1.25rem; min-height: 1.5rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -195,7 +201,10 @@ _PAGE = r"""<!doctype html>
     <input type="text" id="tt-cols-input" placeholder="x,y,xy">
   </label>
 
-  <button type="submit" class="submit">Run</button>
+  <div class="row action-row">
+    <button type="submit" class="submit">Run</button>
+    <button type="button" class="btn-secondary" id="tt-new-problem">New problem</button>
+  </div>
 
   <pre id="tt-output" class="empty"></pre>
 </form>
@@ -252,7 +261,10 @@ _PAGE = r"""<!doctype html>
     <input type="number" id="synth-max-stack" min="1">
   </label>
 
-  <button type="submit" class="submit">Synthesize</button>
+  <div class="row action-row">
+    <button type="submit" class="submit">Synthesize</button>
+    <button type="button" class="btn-secondary" id="synth-new-problem">New problem</button>
+  </div>
 
   <pre id="synth-error" class="empty"></pre>
 
@@ -419,13 +431,14 @@ function cycleCell(i, btn) {
   btn.textContent = gridState[i];
   btn.dataset.val = gridState[i];
   btn.setAttribute("aria-label", "output, currently " + gridState[i] + ". Press to cycle 0, 1, X.");
+  clearSynthResultDisplay();
 }
 
 function gridToBitString() {
   return gridState.join("");
 }
 
-$("synth-vars").addEventListener("input", buildGrid);
+$("synth-vars").addEventListener("input", () => { buildGrid(); clearSynthResultDisplay(); });
 
 // --- Requests ------------------------------------------------------------------
 
@@ -458,6 +471,20 @@ $("panel-tt").addEventListener("submit", async (e) => {
   out.classList.toggle("error", !result.ok);
   out.textContent = result.ok ? result.output : "error: " + result.error;
 });
+
+function resetTtForm() {
+  // Clears this tab's own problem data only -- the format/columns radios
+  // are a workflow preference (like synth-mode below), not per-problem
+  // data, so they're deliberately left alone.
+  $("tt-expr").value = "";
+  $("tt-cols-input").value = "";
+  const out = $("tt-output");
+  out.classList.add("empty");
+  out.classList.remove("error");
+  out.textContent = "";
+  $("tt-expr").focus();
+}
+$("tt-new-problem").addEventListener("click", resetTtForm);
 
 // --- Synth result rendering ------------------------------------------------------
 
@@ -582,6 +609,81 @@ $("panel-synth").addEventListener("submit", async (e) => {
   resEl.classList.remove("empty");
   renderSynthResult(result.result, result.output);
 });
+
+// --- Stale-result prevention / New problem ----------------------------------------
+//
+// Once a result (or error) is on screen, editing any input that feeds the
+// synthesis call must hide it immediately -- otherwise the old answer
+// keeps showing as though it belongs to whatever's now in the form. This
+// never re-synthesizes on its own; it only clears the display. The user
+// still has to press Synthesize for a new answer.
+
+const _RESULT_TEXT_FIELD_IDS = [
+  "res-gate-line", "res-function-line", "res-topology-line", "res-verified-line", "res-dont-care-note",
+  "res-pdn-expr", "res-pun-expr", "res-nmos", "res-pmos", "res-inverters", "res-stacks",
+  "res-selection-note", "res-minimality", "res-advanced",
+];
+
+function clearSynthResultDisplay() {
+  const errEl = $("synth-error");
+  const resEl = $("synth-result");
+  errEl.classList.add("empty");
+  errEl.textContent = "";
+  resEl.classList.add("empty");
+
+  // Actually clear the stale content, not just hide it -- "empty" is a
+  // display toggle, and leaving old text underneath it would still be a
+  // stale answer sitting in the DOM (and briefly visible if something
+  // ever removed the .empty class without re-rendering first).
+  _RESULT_TEXT_FIELD_IDS.forEach(id => { $(id).textContent = ""; });
+  clearChildren($("res-alternatives"));
+
+  const advancedDetails = document.querySelector("#synth-result details.section");
+  if (advancedDetails) advancedDetails.open = false;
+
+  document.querySelectorAll("#synth-result .copy-fallback").forEach(el => el.remove());
+  $("copy-solution").classList.remove("copied");
+  $("copy-solution").textContent = "Copy solution";
+  $("copy-advanced").classList.remove("copied");
+  $("copy-advanced").textContent = "Copy advanced report";
+
+  lastSolutionText = "";
+  lastAdvancedText = "";
+}
+
+[
+  "synth-expr", "synth-ones", "synth-dc", "synth-table", "synth-output-name", "synth-max-stack",
+].forEach(id => $(id).addEventListener("input", clearSynthResultDisplay));
+$("synth-dual-rail").addEventListener("change", clearSynthResultDisplay);
+document.querySelectorAll("input[name=synth-mode]").forEach(r => r.addEventListener("change", clearSynthResultDisplay));
+document.querySelectorAll("input[name=synth-table-mode]").forEach(r => r.addEventListener("change", clearSynthResultDisplay));
+
+function resetSynthForm() {
+  // The chosen synth-mode (From expression / From truth table) is a
+  // workflow choice, not per-problem data -- a student working through
+  // several questions of the same type shouldn't have to reselect it
+  // every time. Everything else here is problem-specific and gets cleared.
+  const mode = checkedValue("synth-mode");
+
+  $("synth-expr").value = "";
+  $("synth-vars").value = "";
+  $("synth-ones").value = "";
+  $("synth-dc").value = "";
+  $("synth-table").value = "";
+  $("synth-output-name").value = "";
+  $("synth-dual-rail").checked = false;
+  $("synth-max-stack").value = "";
+
+  $("synth-manual-details").open = false;
+  document.querySelector('input[name="synth-table-mode"][value="minterms"]').checked = true;
+  updateSynthTableModeVisibility();
+
+  buildGrid(); // synth-vars is now empty -> clears the grid and gridState
+  clearSynthResultDisplay();
+
+  (mode === "table" ? $("synth-vars") : $("synth-expr")).focus();
+}
+$("synth-new-problem").addEventListener("click", resetSynthForm);
 
 // --- Copy buttons ----------------------------------------------------------------
 

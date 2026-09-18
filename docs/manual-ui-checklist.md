@@ -87,6 +87,24 @@ For each of Q1 (`(ABC)'`), Q2 (`A,B,C,D` / `1000000000000000`), Q3 (`(ABC+D)'`):
       then a prompt, then visible selected text) rather than a silent
       failure or an uncaught console error.
 
+## New problem / stale results
+
+- [ ] "New problem" in the Synthesis tab clears the expression, variables,
+      grid, manual entry fields, output name, dual-rail, max stack, and
+      the result/error — but keeps you on "From expression" or "From
+      truth table," whichever you had selected. **(automated)**
+- [ ] After "New problem," focus lands on the first relevant field for
+      the preserved mode (`Expression` or `Variables`). **(automated)**
+- [ ] "New problem" in the Derivation table tab clears the expression and
+      output, and focuses `Expression`. **(automated)**
+- [ ] "New problem" in one tab never touches the other tab's inputs or
+      result. **(automated)**
+- [ ] After a result is showing, editing the expression, variables, a
+      grid cell, a manual-entry field, output name, dual-rail, or max
+      stack immediately hides the old result — without re-synthesizing
+      on its own. **(automated: expression and one grid cell; the rest of
+      the field list shares the same code path)**
+
 ## Cross-cutting
 
 - [ ] Light and dark mode (OS/browser preference) both render legibly —

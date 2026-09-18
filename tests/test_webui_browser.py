@@ -90,6 +90,14 @@ def _submit_q1(page) -> None:
     page.wait_for_selector("#synth-result:not(.empty)")
 
 
+def _submit_via_expression(page, expression: str = "(abc)'") -> None:
+    _switch_tab(page, "synth")
+    page.check('input[name="synth-mode"][value="expr"]')
+    page.fill("#synth-expr", expression)
+    page.click("#panel-synth button.submit")
+    page.wait_for_selector("#synth-result:not(.empty)")
+
+
 # --- Tab / result isolation --------------------------------------------------------
 #
 # The bug: tt-output/synth-error/synth-result lived outside the .panel
@@ -305,3 +313,136 @@ def test_copy_solution_uses_the_custom_output_name(page):
     _hijack_clipboard(page)
     advanced_copy = _click_and_read_copy(page, "#copy-advanced")
     assert "F' = ABC" in advanced_copy  # advanced report always says F/F', regardless of output name
+
+
+# --- "New problem" and stale-result prevention ---------------------------------------
+#
+# Reproduced live before fixing: solve Q1 via expression mode, then edit
+# the expression field without resubmitting -- the Q1 answer stayed fully
+# displayed as though it belonged to the new (unsubmitted) input, and
+# there was no way to clear a solved problem short of reloading the page.
+
+
+def test_new_problem_clears_all_synthesis_result_sections(page):
+    _submit_q1(page)
+    assert page.is_visible("#synth-result")
+
+    page.click("#synth-new-problem")
+
+    assert not page.is_visible("#synth-result")
+    assert not page.is_visible("#synth-error")
+    assert page.text_content("#res-gate-line") == ""
+    assert page.text_content("#res-function-line") == ""
+    assert page.locator("#res-alternatives li").count() == 0
+    assert page.text_content("#res-advanced") == ""
+
+
+def test_new_problem_restores_synthesis_defaults(page):
+    _build_q1_grid(page)
+    page.fill("#synth-output-name", "Y")
+    page.check("#synth-dual-rail")
+    page.fill("#synth-max-stack", "4")  # Q1's AOI/OAI need stack height 3 -- permissive, not excluded
+    page.click("#panel-synth button.submit")
+    page.wait_for_selector("#synth-result:not(.empty)")
+
+    page.click("#synth-new-problem")
+
+    assert page.input_value("#synth-vars") == ""
+    assert page.input_value("#synth-output-name") == ""
+    assert page.is_checked("#synth-dual-rail") is False
+    assert page.input_value("#synth-max-stack") == ""
+    assert page.get_attribute("#synth-manual-details", "open") is None
+    assert page.is_checked('input[name="synth-table-mode"][value="minterms"]')
+    # the grid itself is gone -- rebuilt empty, showing the "enter variables" hint
+    assert page.locator("table.truth-grid").count() == 0
+
+
+def test_new_problem_preserves_the_selected_input_mode_table(page):
+    _submit_q1(page)
+    page.click("#synth-new-problem")
+    assert page.is_checked('input[name="synth-mode"][value="table"]')
+    assert page.is_hidden("#synth-expr-fields")
+    assert page.is_visible("#synth-table-fields")
+
+
+def test_new_problem_preserves_the_selected_input_mode_expression(page):
+    _submit_via_expression(page)
+    page.click("#synth-new-problem")
+    assert page.is_checked('input[name="synth-mode"][value="expr"]')
+    assert page.is_visible("#synth-expr-fields")
+    assert page.input_value("#synth-expr") == ""
+
+
+def test_new_problem_focuses_the_first_relevant_field_expression_mode(page):
+    _submit_via_expression(page)
+    page.click("#synth-new-problem")
+    assert page.evaluate("document.activeElement.id") == "synth-expr"
+
+
+def test_new_problem_focuses_the_first_relevant_field_table_mode(page):
+    _submit_q1(page)
+    page.click("#synth-new-problem")
+    assert page.evaluate("document.activeElement.id") == "synth-vars"
+
+
+def test_derivation_new_problem_focuses_its_input_field(page):
+    _run_derivation(page, "xy + xy'")
+    page.click("#tt-new-problem")
+    assert page.evaluate("document.activeElement.id") == "tt-expr"
+    assert page.input_value("#tt-expr") == ""
+    assert not page.is_visible("#tt-output")
+
+
+def test_new_problem_in_synthesis_does_not_touch_derivation_tab(page):
+    _run_derivation(page, "xy + xy'")
+    _submit_q1(page)
+
+    page.click("#synth-new-problem")
+
+    _switch_tab(page, "tt")
+    assert page.input_value("#tt-expr") == "xy + xy'"
+    assert "F = x" in page.text_content("#tt-output")
+
+
+def test_new_problem_in_derivation_does_not_touch_synthesis_tab(page):
+    _submit_q1(page)
+    _switch_tab(page, "tt")
+    _run_derivation(page, "xy + xy'")
+
+    page.click("#tt-new-problem")
+
+    _switch_tab(page, "synth")
+    assert page.is_visible("#synth-result")
+    assert "3-input NAND" in page.text_content("#res-gate-line")
+
+
+def test_editing_expression_after_a_result_hides_the_stale_answer(page):
+    _submit_via_expression(page)
+    assert page.is_visible("#synth-result")
+
+    page.fill("#synth-expr", "a+b+c+d")  # a different, unsubmitted problem
+
+    assert not page.is_visible("#synth-result")
+    # the new (unsubmitted) input is untouched -- only the display cleared
+    assert page.input_value("#synth-expr") == "a+b+c+d"
+
+
+def test_editing_a_grid_cell_after_a_result_hides_the_stale_answer(page):
+    _submit_q1(page)
+    assert page.is_visible("#synth-result")
+
+    page.locator("table.truth-grid button.cell-btn").first.click()
+
+    assert not page.is_visible("#synth-result")
+
+
+def test_new_problem_button_is_type_button_and_never_submits(page):
+    assert page.get_attribute("#tt-new-problem", "type") == "button"
+    assert page.get_attribute("#synth-new-problem", "type") == "button"
+
+    _submit_q1(page)
+    requests = []
+    page.on("request", lambda req: requests.append(req.url))
+    page.click("#synth-new-problem")
+    page.wait_for_timeout(200)  # give any (incorrect) submit a moment to fire
+    assert not any("/api/synth" in url or "/api/tt" in url for url in requests)
