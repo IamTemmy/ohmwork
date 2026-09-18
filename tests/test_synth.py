@@ -57,6 +57,34 @@ def test_acceptance_aoi31():
     assert result.minimality_proof is not None
 
 
+# --- Minimality proof wording is scoped to complementary static CMOS ---------
+#
+# A 2026-09-18 ChatGPT review (Q3 dogfooding against the exam) flagged the
+# proof's old wording -- "no design in any search space could use fewer
+# transistors" -- as broader than what's actually proven: the D6 argument
+# only bounds complementary static CMOS (PDN+PUN transistors), not
+# pass-transistor logic, ratioed logic, dynamic logic, or any other
+# circuit family. Wording-only fix; the proof still fires on exactly the
+# same cases (see the three acceptance tests above, all unaffected).
+
+
+@pytest.mark.parametrize(
+    "var_order,expr_text",
+    [
+        (["a", "b", "c"], "(abc)'"),
+        (["a", "b", "c", "d"], "(a+b+c+d)'"),
+        (["a", "b", "c", "d"], "(abc+d)'"),
+    ],
+)
+def test_minimality_proof_is_scoped_to_complementary_static_cmos(var_order, expr_text):
+    minterms = minterms_from_expr(var_order, expr_text)
+    result = synthesize(var_order, minterms)
+    proof = result.minimality_proof
+    assert proof is not None
+    assert "complementary static CMOS" in proof
+    assert "any search space" not in proof
+
+
 # --- de_morgan_complement ----------------------------------------------------
 
 

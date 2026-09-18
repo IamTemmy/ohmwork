@@ -197,6 +197,14 @@ def test_api_synth_result_field_matches_the_three_exam_questions(server_url):
         assert "output" in result  # legacy field still present, additive change
         assert result["result"]["gate_name"] == gate_name
         assert result["result"]["total_transistors"] == total
+        # The minimality proof (raw text, in the Advanced Report/"output" and
+        # the JSON detail field both) must stay scoped to complementary
+        # static CMOS -- not overclaim across every possible circuit family.
+        minimality_detail = result["result"]["reasoning"]["minimality_detail"]
+        assert "complementary static CMOS" in minimality_detail
+        assert "any search space" not in minimality_detail
+        assert "complementary static CMOS" in result["output"]
+        assert "any search space" not in result["output"]
 
 
 def test_api_synth_q1_alternatives_are_deduplicated_via_the_api(server_url):

@@ -189,19 +189,31 @@ def _select(candidates: list[Candidate]) -> Candidate:
 def _prove_minimal_or_none(chosen: Candidate, var_order: list[str]) -> str | None:
     """A narrow, honest minimality certificate (D6): if the chosen PDN uses
     exactly one literal per variable actually appearing in it, and that set
-    covers every declared variable, no realization (in ANY search space,
-    single- or multi-stage) can use fewer transistors — each variable the
-    function depends on must appear as at least one literal somewhere.
-    Returns the proof text, or None if this particular bound doesn't apply
-    (the result may still be minimal; we just haven't proven it)."""
+    covers every declared variable, no *complementary static CMOS*
+    realization (single- or multi-stage) can use fewer PDN+PUN transistors
+    — each variable the function depends on must control at least one
+    device in both networks. Returns the proof text, or None if this
+    particular bound doesn't apply (the result may still be minimal; we
+    just haven't proven it).
+
+    Scoped deliberately to complementary static CMOS (a wording fix from a
+    2026-09-18 ChatGPT review, Q3 dogfooding): the bound is on PDN+PUN
+    transistors specifically, not `total_cost`, because inverter_cost can
+    be nonzero here too (e.g. a single complemented literal, D12) — this
+    proof says nothing about that, or about any other circuit family
+    (pass-transistor, ratioed, dynamic, ...)."""
     pdn_literals = _count_literals(chosen.f_prime)
     used_vars = _variable_names(chosen.f_prime)
     if pdn_literals == len(var_order) and used_vars == set(var_order):
+        n = len(var_order)
         return (
-            f"proven minimal: every declared variable ({len(var_order)}) appears exactly "
-            "once as a literal, and a network realizing a function that depends on n "
-            "variables needs at least n literals — no design in any search space could "
-            "use fewer transistors."
+            f"proven minimal for complementary static CMOS: every declared variable ({n}) "
+            "appears exactly once as a literal, so each must control at least one "
+            "transistor in both the pull-down and pull-up networks — no complementary "
+            f"static CMOS realization (single- or multi-stage) could use fewer than {2 * n} "
+            "PDN+PUN transistors for this function. This bound is specific to "
+            "complementary static CMOS; it makes no claim about pass-transistor logic, "
+            "ratioed logic, dynamic logic, or any other circuit family."
         )
     return None
 
