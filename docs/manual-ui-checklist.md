@@ -61,8 +61,7 @@ For each of Q1 (`(ABC)'`), Q2 (`A,B,C,D` / `1000000000000000`), Q3 (`(ABC+D)'`):
       "strictly lower... 8 vs 12" reasoning sentence.
 - [ ] Reasoning's minimality line matches what's in Advanced Details' full text.
 - [ ] "Advanced details" is collapsed by default; expanding it shows the
-      exact legacy CLI report (candidates, schematic, D7 verification block). **(automated,
-      collapsed-by-default only — the expand-and-compare-text part is still manual)**
+      exact legacy CLI report (candidates, schematic, D7 verification block). **(automated)**
 
 ## Output name
 
@@ -78,8 +77,8 @@ For each of Q1 (`(ABC)'`), Q2 (`A,B,C,D` / `1000000000000000`), Q3 (`(ABC+D)'`):
 - [ ] "Copy solution" shows "Copied!" feedback and the copied text uses the
       chosen output name, and includes the full student-facing solution
       (CMOS implementation, reasoning, alternatives — not just the four
-      summary lines). **(automated: content coverage, not the "Copied!"
-      visual feedback)**
+      summary lines). **(automated: output name + content coverage, not the
+      "Copied!" visual feedback)**
 - [ ] "Copy advanced report" shows "Copied!" and copies the exact legacy
       report text (always "F"/"F'", regardless of output name). **(automated:
       content coverage, not the "Copied!" visual feedback)**
@@ -96,4 +95,7 @@ For each of Q1 (`(ABC)'`), Q2 (`A,B,C,D` / `1000000000000000`), Q3 (`(ABC+D)'`):
 - [ ] Tab switching (Derivation table / Synthesis) preserves each panel's
       own state independently, and a result from one tab never shows while
       the other tab is active. **(automated)**
-- [ ] No uncaught console errors at any point in the above.
+- [ ] No uncaught console errors at any point in the above. **(automated for
+      every scenario the Chromium smoke test exercises — the `page` fixture
+      itself fails a test on any uncaught JS exception; light/dark mode and
+      anything manual-only above is still uncovered)**

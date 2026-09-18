@@ -35,8 +35,20 @@ from ohmwork.report import format_synth_report
 # capping the request body size. ``tt`` additionally has no engine-level
 # variable cap (unlike synth's D-scoped 3-4), so the web endpoint caps it
 # separately -- the CLI's behavior (tested byte-for-byte) is untouched.
+#
+# The Origin check must not trust the request's own ``Host`` header as
+# "what this server's origin is" -- that header is client-supplied, so a
+# DNS-rebinding attacker (a hostname that resolves to their server, then
+# to 127.0.0.1) can make the browser send both a ``Host`` and an
+# ``Origin`` that match each other while neither is actually this server.
+# ``environ["SERVER_PORT"]`` is the one thing here the WSGI server itself
+# sets from the real listening socket, not from any client header, so
+# "self" is defined against loopback hostnames + that port, not the
+# request's own Host.
 _MAX_BODY_BYTES = 65_536
-_MAX_TT_VARIABLES = 16
+_MAX_TT_VARIABLES = 8  # 9 vars ~11s, 10 vars ~108s on this machine (measured) --
+# wsgiref's server is single-threaded, so that blocks the whole UI, not just the request.
+_LOOPBACK_HOSTNAMES = ("127.0.0.1", "localhost", "[::1]", "::1")
 
 _PAGE = r"""<!doctype html>
 <html lang="en">
@@ -756,23 +768,46 @@ def _plain_text_error(start_response, status: str, message: str):
     return [body]
 
 
+def _expected_hosts(environ) -> tuple[str, ...]:
+    """The ``Host``/``Origin`` values a legitimate request to *this* server
+    can carry: a loopback hostname plus the port the WSGI server actually
+    bound (``SERVER_PORT``, set by the server itself from the real socket
+    — never from a client-supplied header, unlike ``HTTP_HOST``)."""
+    port = environ.get("SERVER_PORT", "")
+    return tuple(f"{host}:{port}" for host in _LOOPBACK_HOSTNAMES)
+
+
+def _host_is_allowed(environ) -> bool:
+    """Rejects a spoofed ``Host`` header outright (e.g. DNS rebinding: a
+    hostname that resolves to an attacker's server for the initial page
+    load, then to 127.0.0.1 for the actual request, while the browser
+    still sends the original hostname as ``Host``). Comparing ``Origin``
+    against ``HTTP_HOST`` alone can't catch this, since both would carry
+    the same spoofed name -- ``Host`` itself must be a loopback address
+    first."""
+    return environ.get("HTTP_HOST", "") in _expected_hosts(environ)
+
+
 def _origin_is_allowed(environ) -> bool:
     """No ``Origin`` header (a same-origin form submit, a direct API call,
-    curl) is allowed; a present one must match this server's own host —
-    anything else is a page from elsewhere asking this loopback server to
-    do work."""
+    curl) is allowed; a present one must match a loopback origin at this
+    server's actual port — anything else is a page from elsewhere asking
+    this loopback server to do work."""
     origin = environ.get("HTTP_ORIGIN")
     if not origin:
         return True
-    host = environ.get("HTTP_HOST", "")
-    return origin in (f"http://{host}", f"https://{host}")
+    expected = _expected_hosts(environ)
+    return any(origin in (f"http://{host}", f"https://{host}") for host in expected)
 
 
 def _reject_hostile_post(environ, start_response):
     """Guards applied to every POST before it reaches a handler. Returns a
     WSGI response iterable to short-circuit the request, or ``None`` to let
     it proceed. See the module-level comment above ``_MAX_BODY_BYTES`` for
-    why these three checks exist together."""
+    why these checks exist together."""
+    if not _host_is_allowed(environ):
+        return _plain_text_error(start_response, "403 Forbidden", "unrecognized Host header")
+
     if not _origin_is_allowed(environ):
         return _plain_text_error(start_response, "403 Forbidden", "cross-origin requests are not allowed")
 

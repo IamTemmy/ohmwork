@@ -292,10 +292,14 @@ def test_grid_equivalent_bit_string_produces_the_acceptance_result(server_url):
 # unlike synth's D-scoped 3-4).
 
 
-def _raw_post(url: str, data: bytes, *, content_type: str, origin: str | None = None) -> tuple[int, bytes]:
+def _raw_post(
+    url: str, data: bytes, *, content_type: str, origin: str | None = None, host: str | None = None
+) -> tuple[int, bytes]:
     headers = {"Content-Type": content_type}
     if origin is not None:
         headers["Origin"] = origin
+    if host is not None:
+        headers["Host"] = host
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -337,13 +341,52 @@ def test_rejects_oversized_body(server_url):
     assert status == 413
 
 
+def test_rejects_spoofed_host_header(server_url):
+    # Simulates DNS rebinding: the TCP connection lands on this loopback
+    # server, but Host (and an attacker's page would have a matching
+    # Origin too, since both reflect whatever hostname the browser was
+    # navigated to) names something else entirely. Trusting Origin ==
+    # Host alone can't catch this -- Host itself must be loopback.
+    status, _ = _raw_post(
+        server_url + "/api/tt",
+        b'{"expression": "x"}',
+        content_type="application/json",
+        host="evil.example:1234",
+    )
+    assert status == 403
+
+
+def test_rejects_origin_matching_a_spoofed_host(server_url):
+    port = server_url.rsplit(":", 1)[1]
+    status, _ = _raw_post(
+        server_url + "/api/tt",
+        b'{"expression": "x"}',
+        content_type="application/json",
+        host=f"evil.example:{port}",
+        origin=f"http://evil.example:{port}",
+    )
+    assert status == 403
+
+
 def test_api_tt_rejects_expressions_over_the_web_variable_cap(server_url):
-    too_many_vars = "+".join("abcdefghijklmnopqrstuvwxyz"[:17])
+    too_many_vars = "+".join("abcdefghijklmnopqrstuvwxyz"[:9])
     result = post_json(server_url + "/api/tt", {"expression": too_many_vars})
     assert result["ok"] is False
-    assert "16" in result["error"]
+    assert "8" in result["error"]
 
 
 def test_api_tt_allows_expressions_within_the_web_variable_cap(server_url):
     result = post_json(server_url + "/api/tt", {"expression": "a+b"})
     assert result["ok"] is True
+
+
+def test_api_tt_web_variable_cap_exact_boundary(server_url):
+    eight_vars = "+".join("abcdefghijklmnopqrstuvwxyz"[:8])
+    nine_vars = "+".join("abcdefghijklmnopqrstuvwxyz"[:9])
+
+    ok_result = post_json(server_url + "/api/tt", {"expression": eight_vars})
+    assert ok_result["ok"] is True
+
+    rejected_result = post_json(server_url + "/api/tt", {"expression": nine_vars})
+    assert rejected_result["ok"] is False
+    assert "8" in rejected_result["error"]

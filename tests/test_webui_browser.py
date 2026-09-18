@@ -48,11 +48,19 @@ def server_url():
 
 @pytest.fixture
 def page(server_url):
+    # Tracks uncaught JS exceptions across every test that uses this
+    # fixture (not just a dedicated one) -- the manual checklist's own
+    # cross-cutting requirement is "no uncaught console errors at any
+    # point," and asserting it here covers that for every scenario the
+    # rest of this file already exercises.
     with sync_playwright() as p:
         browser = p.chromium.launch()
         pg = browser.new_page()
+        page_errors: list[str] = []
+        pg.on("pageerror", lambda exc: page_errors.append(str(exc)))
         pg.goto(server_url + "/")
         yield pg
+        assert not page_errors, f"uncaught JS error(s) during test: {page_errors}"
         browser.close()
 
 
@@ -190,6 +198,20 @@ def test_advanced_details_collapsed_by_default(page):
     assert not page.is_visible("#res-advanced")
 
 
+def test_advanced_details_expands_to_the_exact_legacy_report(page):
+    _submit_q1(page)
+    page.click("#synth-result details.section summary")
+    assert page.get_attribute("#synth-result details.section", "open") is not None
+    assert page.is_visible("#res-advanced")
+
+    advanced_text = page.text_content("#res-advanced")
+    # The exact legacy CLI report: candidates, chosen realization, and the
+    # D7 verification block -- unaffected by the student-facing view above it.
+    assert "F' = ABC" in advanced_text
+    assert "Verification" in advanced_text
+    assert "AOI" in advanced_text and "OAI" in advanced_text
+
+
 # --- Error-state cleanup -------------------------------------------------------------
 #
 # Checklist requirement: an invalid input shows a clear inline error with
@@ -219,9 +241,7 @@ def test_invalid_output_name_shows_error_and_clears_stale_result(page):
 # PDN/PUN/transistor breakdown/stack heights/reasoning.
 
 
-def test_copy_solution_includes_the_full_student_facing_solution(page):
-    _submit_q1(page)
-
+def _hijack_clipboard(page) -> None:
     page.evaluate(
         """() => {
             window.__copiedText = null;
@@ -231,9 +251,18 @@ def test_copy_solution_includes_the_full_student_facing_solution(page):
             };
         }"""
     )
-    page.click("#copy-solution")
+
+
+def _click_and_read_copy(page, button_selector: str) -> str:
+    page.click(button_selector)
     page.wait_for_function("window.__copiedText !== null")
-    copied = page.evaluate("window.__copiedText")
+    return page.evaluate("window.__copiedText")
+
+
+def test_copy_solution_includes_the_full_student_facing_solution(page):
+    _submit_q1(page)
+    _hijack_clipboard(page)
+    copied = _click_and_read_copy(page, "#copy-solution")
 
     for expected in [
         "3-input NAND",
@@ -252,19 +281,27 @@ def test_copy_solution_includes_the_full_student_facing_solution(page):
 
 def test_copy_advanced_report_is_unchanged_legacy_text(page):
     _submit_q1(page)
-
-    page.evaluate(
-        """() => {
-            window.__copiedText = null;
-            navigator.clipboard.writeText = (t) => {
-                window.__copiedText = t;
-                return Promise.resolve();
-            };
-        }"""
-    )
-    page.click("#copy-advanced")
-    page.wait_for_function("window.__copiedText !== null")
-    copied = page.evaluate("window.__copiedText")
+    _hijack_clipboard(page)
+    copied = _click_and_read_copy(page, "#copy-advanced")
 
     assert "F' = ABC" in copied or "F'=ABC" in copied
     assert "Verification" in copied or "verified" in copied.lower()
+
+
+def test_copy_solution_uses_the_custom_output_name(page):
+    # checklist requirement: "Copy solution"'s text uses the chosen output
+    # name (Advanced Details/Copy advanced report must NOT -- that's
+    # covered by test_copy_advanced_report_is_unchanged_legacy_text above).
+    _build_q1_grid(page)
+    page.fill("#synth-output-name", "Y")
+    page.click("#panel-synth button.submit")
+    page.wait_for_selector("#synth-result:not(.empty)")
+
+    _hijack_clipboard(page)
+    solution_copy = _click_and_read_copy(page, "#copy-solution")
+    assert "Y = (ABC)'" in solution_copy
+    assert "F = (ABC)'" not in solution_copy
+
+    _hijack_clipboard(page)
+    advanced_copy = _click_and_read_copy(page, "#copy-advanced")
+    assert "F' = ABC" in advanced_copy  # advanced report always says F/F', regardless of output name
