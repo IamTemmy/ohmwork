@@ -1226,22 +1226,53 @@ def test_copy_buttons_have_independent_feedback(page):
 # `/api/synth` response (`_real_json`, already used elsewhere in this file
 # for the same reason: it reflects the actual presenter/schematic code
 # path, never a hand-maintained fake of its JSON shape).
+#
+# This section also covers a ChatGPT review round on the first Phase B cut
+# (commit 3b97e18) that found four real gaps, closed here: (1) the visible
+# gate-connector line started exactly on the channel, depicting a gate/
+# channel short rather than an insulated MOSFET gate; (2) the downloaded SVG
+# had no styling of its own (all stroke/fill rules lived in the page's
+# stylesheet, not the file), so a standalone open showed invisible wires and
+# visible "invisible" terminal-anchor dots; (3) the bridge test only checked
+# elements already tagged data-role="wire"/used set equality (missing an
+# untagged extra conductive line or a duplicate id) and never checked nets
+# at all; (4) "responsive" meant shrinking a wide, many-transistor circuit
+# down to illegible labels rather than keeping symbols a constant, legible
+# size and letting the wrapper scroll.
 
 _AOI21_EXPR = "(a'b+c)'"  # D17 acceptance test 4's case: one shared inverter (a')
+
+# 4 shared inverters (a,b,c,d each complemented at least once), 40
+# transistors, a 16-cell-wide layout -- the wide/many-transistor case issue
+# 4's fix (a constant on-screen symbol/label size, wrapper scrolling instead
+# of shrinking) is specifically for.
+_WIDE_MULTI_INVERTER_EXPR = "a'b'c'd + a'b'cd' + a'bc'd' + ab'c'd'"
 
 
 _SCHEMATIC_SNAPSHOT_JS = """(rootSelector) => {
   const root = document.querySelector(rootSelector);
+
+  function lineCoords(el) {
+    return {
+      x1: Number(el.getAttribute('x1')), y1: Number(el.getAttribute('y1')),
+      x2: Number(el.getAttribute('x2')), y2: Number(el.getAttribute('y2')),
+    };
+  }
+
   const wires = Array.from(root.querySelectorAll('[data-role="wire"]')).map(el => ({
     id: el.getAttribute('data-wire-id'),
     net_id: el.getAttribute('data-net-id'),
-    x1: Number(el.getAttribute('x1')), y1: Number(el.getAttribute('y1')),
-    x2: Number(el.getAttribute('x2')), y2: Number(el.getAttribute('y2')),
+    ...lineCoords(el),
   }));
   const junctions = Array.from(root.querySelectorAll('[data-role="junction"]')).map(el => ({
     id: el.getAttribute('data-junction-id'),
     net_id: el.getAttribute('data-net-id'),
     x: Number(el.getAttribute('cx')), y: Number(el.getAttribute('cy')),
+  }));
+  const nets = Array.from(root.querySelectorAll('[data-role="net-inventory"] [data-role="net"]')).map(el => ({
+    id: el.getAttribute('data-net-id'),
+    kind: el.getAttribute('data-net-kind'),
+    label: el.getAttribute('data-net-label'),
   }));
   const devices = Array.from(root.querySelectorAll('.ow-device')).map(g => {
     const terminals = {};
@@ -1251,6 +1282,10 @@ _SCHEMATIC_SNAPSHOT_JS = """(rootSelector) => {
         x: Number(t.getAttribute('cx')), y: Number(t.getAttribute('cy')),
       };
     });
+    const channelEl = g.querySelector('[data-role="channel"]');
+    const electrodeEl = g.querySelector('[data-role="gate-electrode"]');
+    const connectorEl = g.querySelector('[data-role="gate-connector"]');
+    const labelEl = g.querySelector('[data-role="device-label"]');
     return {
       id: g.getAttribute('data-device-id'),
       kind: g.getAttribute('data-kind'),
@@ -1258,10 +1293,29 @@ _SCHEMATIC_SNAPSHOT_JS = """(rootSelector) => {
       gate_var: g.getAttribute('data-gate-var'),
       gate_complemented: g.getAttribute('data-gate-complemented') === 'true',
       has_gate_bubble: !!g.querySelector('[data-role="gate-bubble"]'),
+      label: labelEl ? labelEl.textContent : null,
+      channel: channelEl ? lineCoords(channelEl) : null,
+      gate_electrode: electrodeEl ? lineCoords(electrodeEl) : null,
+      gate_connector: connectorEl ? lineCoords(connectorEl) : null,
       terminals,
     };
   });
-  return { wires, junctions, devices };
+
+  // Every conductive primitive anywhere in the SVG, classified by its own
+  // data-role and (for a device-symbol part) the data-device-id of its
+  // containing .ow-device group -- lets a test reject anything untagged or
+  // unclassified, not just count the ones it already expects to find.
+  const primitives = Array.from(root.querySelectorAll('line, path, polyline')).map(el => {
+    const deviceGroup = el.closest('.ow-device');
+    return {
+      tag: el.tagName.toLowerCase(),
+      role: el.getAttribute('data-role'),
+      wire_id: el.getAttribute('data-wire-id'),
+      device_id: deviceGroup ? deviceGroup.getAttribute('data-device-id') : null,
+    };
+  });
+
+  return { wires, junctions, nets, devices, primitives };
 }"""
 
 
@@ -1269,13 +1323,35 @@ def _schematic_dom_snapshot(page, root_selector: str = "#schematic-svg") -> dict
     return page.evaluate(_SCHEMATIC_SNAPSHOT_JS, root_selector)
 
 
+def _seg(coords: dict) -> tuple:
+    return (coords["x1"], coords["y1"], coords["x2"], coords["y2"])
+
+
+def _segments_overlap(a: tuple, b: tuple) -> bool:
+    """Every line this renderer draws is horizontal or vertical, so a plain
+    bounding-box overlap test is an exact intersection test: an
+    axis-aligned segment's own bounding box IS the segment (zero-width in
+    the perpendicular direction), so two such boxes overlap iff the
+    segments themselves actually meet or cross."""
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    a_xs, a_ys = sorted((ax1, ax2)), sorted((ay1, ay2))
+    b_xs, b_ys = sorted((bx1, bx2)), sorted((by1, by2))
+    return a_xs[0] <= b_xs[1] and b_xs[0] <= a_xs[1] and a_ys[0] <= b_ys[1] and b_ys[0] <= a_ys[1]
+
+
 def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
-    """The full test-8 bridge check: every wire/device/junction the model
-    declares appears exactly once in `snapshot` (a DOM read of either the
-    live #schematic-svg or a parsed Download-SVG file), at the model's own
-    id, with the model's own coordinates -- and nothing extra."""
+    """The full test-8 bridge check: every wire/net/device/junction the
+    model declares appears exactly once (by count, not just by set, so a
+    duplicated id can't slip through) in `snapshot` (a DOM read of either
+    the live #schematic-svg or a parsed Download-SVG file), at the model's
+    own id, with the model's own coordinates -- and every conductive
+    primitive drawn anywhere is accounted for, with nothing extra/
+    untagged."""
     model_wires = {w["id"]: w for w in schematic["wires"]}
-    assert {w["id"] for w in snapshot["wires"]} == set(model_wires)  # no unmodeled wire, none missing
+    wire_ids = [w["id"] for w in snapshot["wires"]]
+    assert len(wire_ids) == len(model_wires)
+    assert set(wire_ids) == set(model_wires)  # no unmodeled wire, none missing
     for w in snapshot["wires"]:
         mw = model_wires[w["id"]]
         assert w["net_id"] == mw["net_id"]
@@ -1283,14 +1359,31 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
         assert (w["x2"], w["y2"]) == (mw["p2"]["x"], mw["p2"]["y"])
 
     model_junctions = {j["id"]: j for j in schematic["junctions"]}
-    assert {j["id"] for j in snapshot["junctions"]} == set(model_junctions)
+    junction_ids = [j["id"] for j in snapshot["junctions"]]
+    assert len(junction_ids) == len(model_junctions)
+    assert set(junction_ids) == set(model_junctions)
     for j in snapshot["junctions"]:
         mj = model_junctions[j["id"]]
         assert j["net_id"] == mj["net_id"]
         assert (j["x"], j["y"]) == (mj["point"]["x"], mj["point"]["y"])
 
+    # Net *presence* is checked through the dedicated inventory, not
+    # inferred from scattered data-net-id attributes -- a net touched by
+    # only one device and no bus wire (a single-transistor VDD, say) would
+    # never otherwise appear on any wire element.
+    model_nets = {n["id"]: n for n in schematic["nets"]}
+    net_ids = [n["id"] for n in snapshot["nets"]]
+    assert len(net_ids) == len(model_nets)
+    assert set(net_ids) == set(model_nets)
+    for n in snapshot["nets"]:
+        mn = model_nets[n["id"]]
+        assert n["kind"] == mn["kind"]
+        assert n["label"] == mn["label"]
+
     model_devices = {d["id"]: d for d in schematic["devices"]}
-    assert {d["id"] for d in snapshot["devices"]} == set(model_devices)
+    device_ids = [d["id"] for d in snapshot["devices"]]
+    assert len(device_ids) == len(model_devices)
+    assert set(device_ids) == set(model_devices)
     assert len(snapshot["devices"]) == schematic["total_transistors"]
     for d in snapshot["devices"]:
         md = model_devices[d["id"]]
@@ -1298,14 +1391,49 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
         assert d["role"] == md["role"]
         assert d["gate_var"] == md["gate_var"]
         assert d["gate_complemented"] == md["gate_complemented"]
+        assert d["label"] == md["literal"]  # visible label text matches device.literal
         # PMOS gate-bubble present, NMOS absent -- structurally, not visually.
         assert d["has_gate_bubble"] == (md["kind"] == "p")
+
         for term in ("gate", "source", "drain"):
             snap_term = d["terminals"][term]
             model_point = md[f"{term}_point"]
             model_net = md[f"{term}_net"]
             assert snap_term["net_id"] == model_net
             assert (snap_term["x"], snap_term["y"]) == (model_point["x"], model_point["y"])
+
+        # The visible channel's own endpoints match the model's source/
+        # drain points exactly.
+        assert d["channel"] is not None
+        channel_seg = _seg(d["channel"])
+        assert (channel_seg[0], channel_seg[1]) == (md["source_point"]["x"], md["source_point"]["y"])
+        assert (channel_seg[2], channel_seg[3]) == (md["drain_point"]["x"], md["drain_point"]["y"])
+
+        # The visible gate connector's far endpoint is exactly the model's
+        # own gate_point -- the external, model-declared gate connection.
+        assert d["gate_connector"] is not None
+        connector_seg = _seg(d["gate_connector"])
+        assert (connector_seg[2], connector_seg[3]) == (md["gate_point"]["x"], md["gate_point"]["y"])
+
+        # The gate path (electrode + connector) never intersects the
+        # visible channel -- an insulated gate, not a gate/channel short.
+        assert d["gate_electrode"] is not None
+        electrode_seg = _seg(d["gate_electrode"])
+        assert not _segments_overlap(channel_seg, electrode_seg)
+        assert not _segments_overlap(channel_seg, connector_seg)
+
+    # Every line/path/polyline anywhere in the SVG is classified as either a
+    # model-backed wire or one recognized part of exactly one model-backed
+    # device symbol -- an accidental untagged conductive primitive is
+    # rejected, not silently ignored.
+    recognized_device_roles = {"channel", "gate-electrode", "gate-connector"}
+    for prim in snapshot["primitives"]:
+        if prim["role"] == "wire":
+            assert prim["wire_id"] in model_wires
+        elif prim["role"] in recognized_device_roles:
+            assert prim["device_id"] in model_devices
+        else:
+            pytest.fail(f"unclassified conductive primitive in the schematic SVG: {prim!r}")
 
 
 def test_schematic_svg_matches_the_layout_model_exactly(page):
@@ -1353,6 +1481,42 @@ def test_download_svg_passes_the_same_semantic_assertions(page, tmp_path):
     _assert_snapshot_matches_model(snapshot, schematic)
 
 
+def test_download_svg_is_self_contained_with_visible_standalone_styles(page, tmp_path):
+    # The bug this pins: the downloaded file had no styling of its own (all
+    # stroke/fill rules lived only in the page's stylesheet), so opened
+    # standalone its wires/channels defaulted to invisible (SVG's own
+    # default stroke is "none") while the "invisible" terminal-anchor dots
+    # defaulted to solid visible black circles (SVG's own default fill).
+    _submit_via_expression(page, _AOI21_EXPR)
+
+    with page.expect_download() as download_info:
+        page.click("#download-svg-btn")
+    saved_path = tmp_path / "schematic.svg"
+    download_info.value.save_as(str(saved_path))
+    assert "<style" in saved_path.read_text(encoding="utf-8")  # the stylesheet travels with the file
+
+    page.goto(saved_path.as_uri())
+
+    def stroke(selector: str) -> str:
+        return page.evaluate(f"getComputedStyle(document.querySelector('{selector}')).stroke")
+
+    def fill(selector: str) -> str:
+        return page.evaluate(f"getComputedStyle(document.querySelector('{selector}')).fill")
+
+    for selector in (
+        '[data-role="wire"]',
+        '[data-role="channel"]',
+        '[data-role="gate-electrode"]',
+        '[data-role="gate-connector"]',
+        '.ow-device[data-kind="p"] [data-role="gate-bubble"]',
+    ):
+        assert stroke(selector) not in ("none", "")
+
+    assert fill('[data-role="junction"]') not in ("none", "", "rgba(0, 0, 0, 0)")  # junction dots stay visible
+    assert fill('[data-role="terminal"]') == "rgba(0, 0, 0, 0)"  # terminal anchors stay invisible
+    assert fill("text") not in ("none", "", "rgba(0, 0, 0, 0)")  # labels stay visible
+
+
 def test_schematic_output_label_follows_a_custom_output_name(page):
     _switch_tab(page, "synth")
     page.check('input[name="synth-mode"][value="expr"]')
@@ -1397,15 +1561,56 @@ def test_schematic_symbol_count_matches_the_reported_transistor_count(page):
     assert page.locator("#schematic-svg .ow-device").count() == 8
 
 
-def test_schematic_is_responsive_at_mobile_width(page):
-    _submit_via_expression(page, _AOI21_EXPR)
+def test_schematic_wide_circuit_scrolls_instead_of_shrinking_at_mobile_width(page):
+    # The bug this pins: the old fixed `width: 100%` rule shrank a wide,
+    # many-transistor circuit to fit the viewport, shrinking labels down to
+    # ~4-5px at a 360px viewport for this exact case. The fix renders every
+    # circuit at a fixed, content-driven pixel scale (constant symbol/label
+    # size) and lets .schematic-wrap scroll horizontally instead.
+    _submit_via_expression(page, _WIDE_MULTI_INVERTER_EXPR)
+    gate_line = page.text_content("#res-gate-line")
+    assert "40 transistors" in gate_line  # sanity: this really is the wide, multi-inverter case
+
     page.set_viewport_size({"width": 360, "height": 800})
+
     overflow = page.evaluate(
         "document.documentElement.scrollWidth > document.documentElement.clientWidth + 1"
     )
-    assert not overflow
-    svg_box = page.locator("#schematic-svg").bounding_box()
-    assert svg_box["width"] <= 360
+    assert not overflow  # the document itself never needs to scroll horizontally
+
+    wrap_scroll = page.evaluate(
+        """() => {
+            const wrap = document.querySelector('.schematic-wrap');
+            return { scrollWidth: wrap.scrollWidth, clientWidth: wrap.clientWidth };
+        }"""
+    )
+    assert wrap_scroll["scrollWidth"] > wrap_scroll["clientWidth"]  # the wrapper itself scrolls internally
+
+    label_height = page.evaluate(
+        "document.querySelector('.ow-device-label').getBoundingClientRect().height"
+    )
+    assert label_height >= 10  # legible -- not shrunk to the ~4-5px the old shrink-to-fit produced
+
+    channel_length_px = page.evaluate(
+        """() => {
+            const r = document.querySelector('[data-role="channel"]').getBoundingClientRect();
+            return Math.max(r.width, r.height);
+        }"""
+    )
+    assert channel_length_px >= 20  # transistor symbols stay a distinguishable on-screen size
+
+    any_text_clipped = page.evaluate(
+        """() => {
+            const svg = document.getElementById('schematic-svg');
+            const vb = svg.viewBox.baseVal;
+            return Array.from(svg.querySelectorAll('text')).some(t => {
+                const b = t.getBBox();
+                return b.x < vb.x || (b.x + b.width) > (vb.x + vb.width)
+                    || b.y < vb.y || (b.y + b.height) > (vb.y + vb.height);
+            });
+        }"""
+    )
+    assert not any_text_clipped  # no label spills outside the SVG's own viewBox
 
 
 def test_schematic_has_an_accessible_name(page):

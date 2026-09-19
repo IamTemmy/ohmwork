@@ -166,22 +166,16 @@ _PAGE = r"""<!doctype html>
   table.kv td:first-child { opacity: .65; white-space: nowrap; }
   table.kv td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
-  .schematic-wrap {
-    overflow-x: auto; border: 1px solid #8886; border-radius: 8px; padding: .75rem; background: #8880;
-  }
-  #schematic-svg { display: block; width: 100%; height: auto; min-width: 260px; color: inherit; }
-  #schematic-svg .ow-wire { stroke: currentColor; stroke-width: 2.5; fill: none; }
-  #schematic-svg .ow-wire.ow-rail { stroke-width: 4; }
-  #schematic-svg .ow-channel { stroke: currentColor; stroke-width: 4; fill: none; stroke-linecap: round; }
-  #schematic-svg .ow-gate-connector { stroke: currentColor; stroke-width: 2.5; fill: none; }
-  #schematic-svg .ow-gate-bubble { fill: Canvas; stroke: currentColor; stroke-width: 2; }
-  #schematic-svg .ow-junction-dot { fill: currentColor; stroke: none; }
-  #schematic-svg .ow-terminal-anchor { fill: transparent; stroke: none; }
-  #schematic-svg text {
-    fill: currentColor; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  }
-  #schematic-svg .ow-section-label { opacity: .6; }
-  #schematic-svg .ow-net-label { font-weight: 700; }
+  /* Per-element schematic styling (.ow-*) is NOT here -- it lives in an
+     embedded <style> the JS injects as the first child of #schematic-svg
+     itself (see SCHEMATIC_SVG_STYLE_CSS below), so the exact same rules
+     apply whether the SVG is inline on this page or opened standalone
+     after Download SVG (a page-level stylesheet wouldn't reach a
+     downloaded file, and a second, separately-maintained copy of the
+     rules could drift from this one). Only layout/sizing, which is
+     legitimately page-specific, stays here. */
+  .schematic-wrap { overflow-x: auto; max-width: 100%; border: 1px solid #8886; border-radius: 8px; padding: .75rem; background: #8880; }
+  #schematic-svg { display: block; height: auto; color: inherit; }
 
   .reasoning p { font-size: .9rem; margin: .3rem 0; }
   ul.alt-list { font-size: .85rem; padding-left: 1.2rem; margin: .5rem 0 0; }
@@ -814,14 +808,43 @@ $("tt-new-problem").addEventListener("click", resetTtForm);
 
 // --- Schematic rendering (D17 Phase B) ---------------------------------------------
 //
-// A mechanical, 1:1 rendering of the already-four-gates-validated layout
-// model the server sends as `schematic` (presenter.build_schematic_view) --
-// every coordinate drawn below is copied verbatim from the model (same
-// integer grid units as `schematic.CELL`, no transform, no re-derivation).
+// Every model-declared electrical anchor (a device's own gate/source/drain
+// points) and every WireSegment/Junction point is copied verbatim from the
+// `schematic` view the server sends (presenter.build_schematic_view) -- same
+// integer grid units as `schematic.CELL`, no transform, no re-derivation.
+// The one thing NOT copied 1:1 is a transistor's own glyph geometry: the
+// model gives three anchor points per device (gate/source/drain), not
+// pixel-level symbol art, so the channel/gate-electrode/gate-bubble strokes
+// that make a device *look* like a MOSFET are a fixed, deterministic
+// template positioned from those three anchors -- tested directly (the gate
+// path never touches the channel, PMOS-only bubble, label text), not just
+// asserted from the code. The SVG viewBox margin is the only other invented
+// number, and it's pure display padding that never touches a drawn
+// coordinate.
+//
 // Built entirely via createElementNS/textContent/setAttribute, never
-// innerHTML (D17 point 7) -- the same rule M1.3's HTML table follows.
+// innerHTML (D17 point 7) -- the same rule M1.3's HTML table follows. All
+// presentational (stroke/fill) rules live in one embedded <style>
+// (SCHEMATIC_SVG_STYLE_CSS), injected as part of the SVG subtree itself, so
+// the exact same representation renders whether the SVG is inline on this
+// page or opened standalone from a downloaded file -- there is no second,
+// separately-maintained export renderer or stylesheet.
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+
+const SCHEMATIC_SVG_STYLE_CSS = `
+  .ow-wire { stroke: currentColor; stroke-width: 2.5; fill: none; }
+  .ow-wire.ow-rail { stroke-width: 4; }
+  .ow-channel { stroke: currentColor; stroke-width: 4; fill: none; stroke-linecap: round; }
+  .ow-gate-electrode { stroke: currentColor; stroke-width: 3; fill: none; }
+  .ow-gate-connector { stroke: currentColor; stroke-width: 2.5; fill: none; }
+  .ow-gate-bubble { fill: Canvas; stroke: currentColor; stroke-width: 2; }
+  .ow-junction-dot { fill: currentColor; stroke: none; }
+  .ow-terminal-anchor { fill: transparent; stroke: none; }
+  text { fill: currentColor; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .ow-section-label { opacity: .6; }
+  .ow-net-label { font-weight: 700; }
+`;
 
 function svgEl(tag, attrs) {
   const el = document.createElementNS(SVG_NS, tag);
@@ -852,10 +875,22 @@ function schematicNetAnchor(view, netId, pick) {
   return points.reduce((best, p) => (sign * (best.y - p.y) > 0 || (best.y === p.y && best.x < p.x)) ? p : best);
 }
 
-// One device's fixed-template transistor symbol, anchored purely by that
-// device's own already-validated gate/source/drain points -- a standard
-// MOSFET glyph (channel + gate plate, PMOS gate bubble per D17 point 3),
-// never a logic-gate shape.
+// Fixed MOSFET-symbol template constants (display geometry, not model
+// data). GATE_GAP is the horizontal distance from the channel to the gate
+// electrode -- the thing that must be > 0 for the gate to read as
+// insulated, never touching the channel it controls.
+const GATE_GAP = 16;
+const GATE_PLATE_HALF_H = 18;
+const GATE_BUBBLE_R = 6;
+
+// One device's fixed-template MOSFET symbol, anchored purely by that
+// device's own already-validated gate/source/drain points. A standard
+// three-part glyph -- source-drain channel, a separate gate electrode, and
+// a connector from that electrode out to the model's own gate_point -- with
+// a PMOS-only inversion bubble (D17 point 3), never a logic-gate shape.
+// The electrode is offset GATE_GAP away from the channel's own x, so the
+// gate path (electrode + connector) never shares a point with the channel:
+// an insulated gate, not a gate/channel short.
 function schematicDeviceSymbol(d) {
   const g = svgEl("g", {
     class: "ow-device", "data-role": "device",
@@ -866,25 +901,29 @@ function schematicDeviceSymbol(d) {
     "data-gate-complemented": String(d.gate_complemented),
   });
 
-  const midX = d.source_point.x;
-  const midY = (d.source_point.y + d.drain_point.y) / 2;
+  // The model guarantees source_point.x === drain_point.x for every device
+  // (Phase A's _expected_device_points) -- read directly, not re-derived.
+  const channelX = d.source_point.x;
+  const gateY = d.gate_point.y; // === the channel's own vertical midpoint, by the same guarantee
+  const plateX = channelX + GATE_GAP;
 
   g.appendChild(svgEl("line", {
     class: "ow-channel", "data-role": "channel",
     x1: d.source_point.x, y1: d.source_point.y, x2: d.drain_point.x, y2: d.drain_point.y,
   }));
   g.appendChild(svgEl("line", {
+    class: "ow-gate-electrode", "data-role": "gate-electrode",
+    x1: plateX, y1: gateY - GATE_PLATE_HALF_H, x2: plateX, y2: gateY + GATE_PLATE_HALF_H,
+  }));
+  g.appendChild(svgEl("line", {
     class: "ow-gate-connector", "data-role": "gate-connector",
-    x1: midX, y1: midY, x2: d.gate_point.x, y2: d.gate_point.y,
+    x1: plateX, y1: gateY, x2: d.gate_point.x, y2: d.gate_point.y,
   }));
 
   if (d.kind === "p") {
-    const dx = d.gate_point.x - midX, dy = d.gate_point.y - midY;
-    const len = Math.hypot(dx, dy) || 1;
-    const r = 6;
     g.appendChild(svgEl("circle", {
       class: "ow-gate-bubble", "data-role": "gate-bubble",
-      cx: midX + (dx / len) * (len - r - 2), cy: midY + (dy / len) * (len - r - 2), r,
+      cx: plateX + GATE_BUBBLE_R + 2, cy: gateY, r: GATE_BUBBLE_R,
     }));
   }
 
@@ -907,6 +946,33 @@ function schematicDeviceSymbol(d) {
   return g;
 }
 
+// A hidden (display:none) but fully queryable per-net inventory: one
+// <g data-role="net"> per net the model declares, straight off `view.nets`.
+// Net *presence* isn't reliably recoverable from scattered data-net-id
+// attributes on wires/terminals alone -- a net touched by exactly one
+// device and no bus wire (e.g. a single-PMOS VDD with nothing to bus)
+// never appears on any wire element -- so this is the one stable place
+// "every model net appears, exactly once" is checkable directly.
+function schematicNetInventory(view) {
+  const inventory = svgEl("g", { "data-role": "net-inventory", style: "display:none" });
+  view.nets.forEach(n => {
+    inventory.appendChild(svgEl("g", {
+      "data-role": "net", "data-net-id": n.id, "data-net-kind": n.kind, "data-net-label": n.label,
+    }));
+  });
+  return inventory;
+}
+
+// Below this width (model content + margins, in model/viewBox units), a
+// circuit renders at MIN_DISPLAY_WIDTH regardless -- otherwise a 1-2
+// transistor circuit would render illegibly tiny. Above it, the SVG is
+// rendered at a fixed PIXELS_PER_UNIT scale (not shrunk to fit the
+// viewport), so a transistor symbol's on-screen size -- and label legibility
+// -- stays constant no matter how wide the circuit is; .schematic-wrap
+// scrolls horizontally instead of the labels shrinking to fit.
+const PIXELS_PER_UNIT = 0.55;
+const MIN_DISPLAY_WIDTH = 320;
+
 let lastSchematicView = null;
 
 function renderSchematic(view) {
@@ -914,6 +980,11 @@ function renderSchematic(view) {
   clearChildren(svg);
   lastSchematicView = view;
   if (!view) return;
+
+  const styleEl = svgEl("style", {});
+  styleEl.textContent = SCHEMATIC_SVG_STYLE_CSS;
+  svg.appendChild(styleEl);
+  svg.appendChild(schematicNetInventory(view));
 
   // Top/bottom margins are taller than left/right -- purely to give the
   // PUN/PDN section title and the VDD/GND rail label two clearly separate
@@ -929,6 +1000,7 @@ function renderSchematic(view) {
   const h = contentH + vMargin * 2;
   svg.setAttribute("viewBox", `${-sideMargin} ${-vMargin} ${w} ${h}`);
   svg.setAttribute("aria-label", `Transistor-level schematic: ${view.total_transistors} transistors`);
+  svg.style.width = `${Math.max(MIN_DISPLAY_WIDTH, Math.round(w * PIXELS_PER_UNIT))}px`;
 
   const netById = {};
   view.nets.forEach(n => { netById[n.id] = n; });
@@ -987,6 +1059,10 @@ function renderSchematic(view) {
   svg.appendChild(pdnLabel);
 }
 
+// The clone carries its own embedded <style> (appended in renderSchematic
+// above) as part of its subtree, so this produces a fully self-contained,
+// correctly-styled standalone file -- the exact same representation that's
+// on screen, not a separately-serialized copy that could drift.
 function serializeSchematicSvg() {
   const svg = $("schematic-svg");
   const clone = svg.cloneNode(true);
@@ -1176,7 +1252,11 @@ function clearSynthResultDisplay() {
   $("copy-advanced").classList.remove("copied");
   $("copy-advanced").textContent = "Copy advanced report";
 
-  clearChildren($("schematic-svg")); // same discipline -- clear, don't just hide, the stale SVG
+  const staleSvg = $("schematic-svg");
+  clearChildren(staleSvg); // same discipline -- clear, don't just hide, the stale SVG
+  staleSvg.removeAttribute("style"); // drop the previous render's content-driven width too
+  staleSvg.removeAttribute("viewBox");
+  staleSvg.removeAttribute("aria-label");
   lastSchematicView = null;
 
   lastSolutionText = "";
