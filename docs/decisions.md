@@ -399,9 +399,16 @@ restricted which *kind* of net a core device's source/drain terminal could refer
 PDN/PUN diffusion terminal could reuse a primary gate net in place of its own internal junction
 net — fully self-consistent wire geometry, invisible to electrical simulation and topology
 fidelity alike; closed with an explicit PUN/PDN terminal-domain allowlist, junction-ownership
-validation, and a full net-inventory closure check. All fixed, with regression tests, before
-Phase B began. **Phase B (SVG rendering, `presenter.py`/`webui.py` wiring, "Download SVG",
-acceptance tests 8 and 10) is not yet started.** This entry exists specifically so the schematic
+validation, and a full net-inventory closure check. Third round: `layout.vdd_net_id`/
+`gnd_net_id`/`output_net_id` and the VDD/GND nets' own labels were never pinned to the literal
+strings `"VDD"`/`"GND"`/`"OUT"` — every other check was purely relative to whatever those
+fields said, so a globally-consistent rename (e.g. to `SUPPLY`/`RETURN`) or a plain VDD/GND
+label swap passed every gate; closed with explicit literal-identity checks plus a
+`build_schematic`-level check that the OUT net's label matches the requested `output_name`
+(the one thing `validate_layout_geometry` alone can't verify, having no `output_name` to
+compare against). All three rounds fixed, with regression tests, before Phase B began.
+**Phase B (SVG rendering, `presenter.py`/`webui.py` wiring, "Download SVG", acceptance tests 8
+and 10) is not yet started.** This entry exists specifically so the schematic
 renderer described below was *not* built until this decision (and its acceptance tests) was
 reviewed and approved — a diagram encodes electrical connectivity and can be technically wrong
 even while looking attractive, which is a materially different risk than the wording-only

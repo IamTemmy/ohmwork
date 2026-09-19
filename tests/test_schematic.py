@@ -714,3 +714,79 @@ def test_regression_duplicate_vdd_net():
     broken = dataclasses.replace(layout, nets=layout.nets + (duplicate,))
     with pytest.raises(RuntimeError, match="expected exactly one VDD net"):
         validate_layout_geometry(broken)
+
+
+# --- Third corrective round: VDD/GND/OUT literal identity -------------------
+#
+# A sixth gap: nothing pinned layout.vdd_net_id/gnd_net_id/output_net_id, or
+# the VDD/GND nets' own labels, to the literal, stable strings D17's fixed
+# schematic semantics require -- every other check here is purely relative
+# to whatever those fields happen to say, so a globally-consistent rename or
+# a plain label swap was invisible to validate_layout_geometry,
+# simulate_layout, and _validate_topology_fidelity alike. Phase B's
+# model-to-SVG bridge would then faithfully render an already-mislabeled
+# model, since correctness there is defined relative to this one.
+
+
+def test_regression_vdd_gnd_labels_swapped():
+    var_order, minterms, layout = _built_layout()
+    swapped = tuple(
+        dataclasses.replace(n, label="GND")
+        if n.id == "VDD"
+        else dataclasses.replace(n, label="VDD")
+        if n.id == "GND"
+        else n
+        for n in layout.nets
+    )
+    broken = dataclasses.replace(layout, nets=swapped)
+    with pytest.raises(RuntimeError, match="VDD net's label must be exactly 'VDD'"):
+        validate_layout_geometry(broken)
+
+
+def test_regression_special_net_ids_consistently_renamed():
+    """VDD/GND renamed to SUPPLY/RETURN everywhere -- Layout.vdd_net_id/
+    gnd_net_id, every Net/Device/WireSegment/Junction that referenced them --
+    a fully self-consistent global rename, so only an explicit literal-string
+    check (not anything relative) can catch it."""
+    var_order, minterms, layout = _built_layout()
+
+    def rn(net_id: str) -> str:
+        return "SUPPLY" if net_id == "VDD" else "RETURN" if net_id == "GND" else net_id
+
+    broken = dataclasses.replace(
+        layout,
+        vdd_net_id="SUPPLY",
+        gnd_net_id="RETURN",
+        nets=tuple(dataclasses.replace(n, id=rn(n.id), label=rn(n.label)) for n in layout.nets),
+        devices=tuple(
+            dataclasses.replace(d, source_net=rn(d.source_net), drain_net=rn(d.drain_net), gate_net=rn(d.gate_net))
+            for d in layout.devices
+        ),
+        wires=tuple(dataclasses.replace(w, net_id=rn(w.net_id)) for w in layout.wires),
+        junctions=tuple(dataclasses.replace(j, net_id=rn(j.net_id)) for j in layout.junctions),
+    )
+    with pytest.raises(RuntimeError, match="layout.vdd_net_id must be exactly 'VDD'"):
+        validate_layout_geometry(broken)
+
+
+def test_regression_output_label_mismatch(monkeypatch):
+    """validate_layout_geometry alone can't check this (no output_name to
+    compare against) -- build_schematic must, so this monkeypatches the
+    unchecked builder the same way the topology-fidelity full-pipeline test
+    does, to exercise build_schematic's own gating, not just a helper."""
+    var_order = ["a", "b", "c"]
+    minterms = minterms_from_expr(var_order, "(abc)'")
+    result = synthesize(var_order, minterms)
+
+    import ohmwork.schematic as schematic_module
+
+    real_unchecked = schematic_module._build_layout_unchecked
+
+    def fake_build(result, output_name):
+        layout = real_unchecked(result, output_name)
+        bogus_out = dataclasses.replace(next(n for n in layout.nets if n.id == "OUT"), label="WRONG")
+        return dataclasses.replace(layout, nets=tuple(bogus_out if n.id == "OUT" else n for n in layout.nets))
+
+    monkeypatch.setattr(schematic_module, "_build_layout_unchecked", fake_build)
+    with pytest.raises(RuntimeError, match="does not match the requested output_name"):
+        schematic_module.build_schematic(result, "F")

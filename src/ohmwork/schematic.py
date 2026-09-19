@@ -759,7 +759,20 @@ def validate_layout_geometry(layout: Layout) -> None:
         if j.net_id not in net_by_id:
             raise RuntimeError(f"junction {j.id!r} references nonexistent net {j.net_id!r}")
 
-    # 5. required global nets
+    # 5. required global nets -- id, kind, AND (for VDD/GND) label are all pinned to the
+    # literal, stable strings D17's fixed schematic semantics require. Without this, a
+    # globally-consistent relabeling (VDD/GND ids renamed everywhere, or just their Net.label
+    # values swapped) is invisible to every other check here, to simulate_layout (which is
+    # purely relative to whatever id is plugged into vdd_net_id/gnd_net_id), and to topology
+    # fidelity (which never inspects net identity at all) -- Phase B's model-to-SVG bridge
+    # would then faithfully render an already-mislabeled model.
+    if layout.vdd_net_id != "VDD":
+        raise RuntimeError(f"layout.vdd_net_id must be exactly 'VDD', got {layout.vdd_net_id!r}")
+    if layout.gnd_net_id != "GND":
+        raise RuntimeError(f"layout.gnd_net_id must be exactly 'GND', got {layout.gnd_net_id!r}")
+    if layout.output_net_id != "OUT":
+        raise RuntimeError(f"layout.output_net_id must be exactly 'OUT', got {layout.output_net_id!r}")
+
     for net_id, expected_kind, label in (
         (layout.vdd_net_id, "rail_vdd", "VDD"),
         (layout.gnd_net_id, "rail_gnd", "GND"),
@@ -768,6 +781,13 @@ def validate_layout_geometry(layout: Layout) -> None:
         net = net_by_id.get(net_id)
         if net is None or net.kind != expected_kind:
             raise RuntimeError(f"{label} net {net_id!r} missing or has wrong kind")
+
+    vdd_net = net_by_id["VDD"]
+    if vdd_net.label != "VDD":
+        raise RuntimeError(f"VDD net's label must be exactly 'VDD', got {vdd_net.label!r}")
+    gnd_net = net_by_id["GND"]
+    if gnd_net.label != "GND":
+        raise RuntimeError(f"GND net's label must be exactly 'GND', got {gnd_net.label!r}")
 
     # 6. device geometry consistency -- origin/gate/source/drain points must match the
     # documented coordinate formulas for (x, y, kind) (the same _expected_device_points
@@ -1294,6 +1314,14 @@ def build_schematic(result: SynthesisResult, output_name: str) -> Layout:
     layout = _build_layout_unchecked(result, output_name)
 
     validate_layout_geometry(layout)  # gate 2: wire/geometry integrity
+
+    out_net = next(n for n in layout.nets if n.id == layout.output_net_id)
+    if out_net.label != output_name:
+        raise RuntimeError(
+            f"internal error: OUT net's label {out_net.label!r} does not match the requested "
+            f"output_name {output_name!r} -- validate_layout_geometry alone can't check this, "
+            "since it has no output_name to compare against"
+        )
 
     for row in all_assignments(result.var_order):  # gate 1: electrical behavior
         state = simulate_layout(layout, row)[layout.output_net_id]
