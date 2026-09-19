@@ -283,30 +283,34 @@ general algebraic factoring (kernel/co-kernel extraction, à la Espresso/SIS). C
    labeled "not proven minimal" unless the narrow certificate in point 4 applies.
 4. **Minimality certificate.** If the chosen PDN uses exactly one literal per declared
    variable (every declared variable appears, and the literal count equals the variable
-   count), the result is provably minimal in *any* search space — a function depending on n
-   variables needs at least n literals, full stop. This is the only minimality claim v1
-   makes; it happens to cover single-stage NAND/NOR/AOI/OAI gates with no repeated or
-   redundant variables (including all three of M1b's acceptance-test gates), but nothing
-   more.
+   count), Ohmwork proves a lower bound of exactly `2n` **PDN+PUN (core) transistors** — a
+   function depending on n variables needs at least n literals in each of the dual
+   networks, full stop. **This certificate is specific to complementary static CMOS; it
+   makes no claim about pass-transistor logic, ratioed logic, dynamic logic, or any other
+   circuit family.** Whether it also certifies the realization's *complete* transistor
+   count (core + shared inverters, point 5) depends on whether the chosen design needs any
+   inverters at all:
+   - **Inverter cost is zero:** core cost equals complete cost, so the complete design is
+     proven minimal within complementary static CMOS. This is the case for all three of
+     M1b's acceptance-test gates (single-stage NAND/NOR/AOI/OAI, no complemented inputs).
+   - **Inverter cost is nonzero:** only the core is proven minimal; complete
+     transistor-count minimality remains unproven — Ohmwork has no certificate covering
+     inverter cost, and says so rather than implying one.
+   This is the only minimality claim v1 makes.
 
-   **Update (2026-09-18):** Two wording problems in the paragraph above, both caught by
-   ChatGPT reviews of the same dogfooding round (CPE 635 Exam #1, then the AOI21 inverter
-   case): first, "minimal in *any* search space" overclaims — the argument (n variables need
-   at least n literals) only bounds **complementary static CMOS** specifically; it says
-   nothing about pass-transistor logic, ratioed logic, dynamic logic, or any other circuit
-   family, and the tool now says so. Second, and more substantive: the certificate bounds
-   **PDN+PUN (core) transistors only** — it was never a bound on *complete* cost (core +
-   shared inverters, point 5). The one-literal-per-variable condition can hold on a chosen
-   `F'` that still needs a shared inverter for a complemented literal (D12), and the code
-   was presenting that case as flatly "proven minimal" anyway, implying the *complete*
-   design (core + inverters) was certified when only the core was. `synth.py`'s
-   `_prove_minimal_or_none` and `presenter.py`'s `_minimality_summary` now distinguish the
-   two cases explicitly: when the chosen design needs no inverters, core cost *is* complete
-   cost and "proven minimal" applies to the whole design; when it needs inverters, the text
-   says the core is proven minimal but the complete (total) cost is not — Ohmwork has no
-   certificate covering inverter cost, so it says so rather than implying one. No candidate
-   generation, selection, transistor counting, or verification changed — wording and
-   presentation only.
+   **Historical note (superseded 2026-09-18):** point 4 originally read "...the result is
+   provably minimal in *any* search space — a function depending on n variables needs at
+   least n literals, full stop," with no complementary-static-CMOS scoping and no
+   core/complete-cost distinction — that phrasing is **not current policy**; the paragraph
+   above is. Two ChatGPT reviews of the same dogfooding round (CPE 635 Exam #1, then the
+   AOI21 inverter case, `(a'b+c)'`: 6 core + 2 inverter = 8 total) caught both problems:
+   "any search space" overclaimed across circuit families, and — more substantively — the
+   certificate was being presented as covering a design's *complete* cost even when it
+   needed inverter transistors the argument never bounded. `synth.py`'s
+   `_prove_minimal_or_none` and `presenter.py`'s `_minimality_summary` implement the
+   corrected rule above, in the Advanced Report, the student-facing summary, Copy Solution,
+   and the JSON `reasoning` fields alike. No candidate generation, selection, transistor
+   counting, or verification changed across either round — wording and presentation only.
 5. **Inverters (D2/D12).** Costed at 2 transistors each, once per distinct complemented
    literal appearing in the *chosen* candidate's `F'` (shared across every product term that
    uses it, never per use site), unless `--dual-rail` is given.
