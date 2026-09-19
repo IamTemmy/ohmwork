@@ -835,6 +835,8 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const SCHEMATIC_SVG_STYLE_CSS = `
   .ow-wire { stroke: currentColor; stroke-width: 2.5; fill: none; }
   .ow-wire.ow-rail { stroke-width: 4; }
+  .ow-wire.ow-output-wire { stroke-width: 4; }
+  .ow-wire.ow-signal { stroke-width: 1.6; stroke-opacity: .55; }
   .ow-channel { stroke: currentColor; stroke-width: 4; fill: none; stroke-linecap: round; }
   .ow-gate-electrode { stroke: currentColor; stroke-width: 3; fill: none; }
   .ow-gate-connector { stroke: currentColor; stroke-width: 2.5; fill: none; }
@@ -842,8 +844,16 @@ const SCHEMATIC_SVG_STYLE_CSS = `
   .ow-junction-dot { fill: currentColor; stroke: none; }
   .ow-terminal-anchor { fill: transparent; stroke: none; }
   text { fill: currentColor; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  .ow-section-label { opacity: .6; }
+  .ow-section-label { opacity: .75; font-weight: 600; }
   .ow-net-label { font-weight: 700; }
+  .ow-region-pun { fill: currentColor; fill-opacity: .07; stroke: none; }
+  .ow-region-pdn { fill: currentColor; fill-opacity: .13; stroke: none; }
+  .ow-region-divider { stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 5 5; stroke-opacity: .45; }
+  .ow-region-inverter { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 6 5; stroke-opacity: .6; }
+  .ow-inverter-caption { font-size: 16px; opacity: .8; }
+  .ow-output-leader { stroke: currentColor; stroke-width: 2; stroke-dasharray: 3 4; fill: none; }
+  .ow-output-node-marker { fill: currentColor; stroke: Canvas; stroke-width: 1.5; }
+  .ow-label-bg { fill: Canvas; fill-opacity: .88; stroke: none; }
 `;
 
 function svgEl(tag, attrs) {
@@ -857,8 +867,12 @@ function svgEl(tag, attrs) {
 // place that net's label text near. `pick` only chooses which extremal
 // among those real points to use ("min-y" for a rail drawn at the top,
 // "max-y" for one drawn at the bottom); it never changes what the label
-// says (always `net.label`, straight off the model).
-function schematicNetAnchor(view, netId, pick) {
+// says (always `net.label`, straight off the model). `belowX`, if given,
+// excludes touches at or past that x -- used to keep VDD/GND's own label
+// out of the inverter column's own x-range, so it doesn't compete with
+// that column's caption for the same space (still just picking among real
+// modeled points, never inventing one).
+function schematicNetAnchor(view, netId, pick, belowX = Infinity) {
   const points = [];
   view.wires.forEach(w => { if (w.net_id === netId) { points.push(w.p1); points.push(w.p2); } });
   view.devices.forEach(d => {
@@ -866,13 +880,15 @@ function schematicNetAnchor(view, netId, pick) {
     if (d.source_net === netId) points.push(d.source_point);
     if (d.drain_net === netId) points.push(d.drain_point);
   });
-  if (points.length === 0) return null;
+  const pool = points.filter(p => p.x < belowX);
+  const candidates = pool.length > 0 ? pool : points;
+  if (candidates.length === 0) return null;
   // Extremal y (top for a top rail, bottom for a bottom rail); ties broken
   // toward the rightmost point, which keeps the label clear of the
   // PUN/PDN section labels and gate-rail labels living in the left margin
   // and core columns -- still just picking among real modeled points.
   const sign = pick === "max-y" ? -1 : 1;
-  return points.reduce((best, p) => (sign * (best.y - p.y) > 0 || (best.y === p.y && best.x < p.x)) ? p : best);
+  return candidates.reduce((best, p) => (sign * (best.y - p.y) > 0 || (best.y === p.y && best.x < p.x)) ? p : best);
 }
 
 // Fixed MOSFET-symbol template constants (display geometry, not model
@@ -936,12 +952,8 @@ function schematicDeviceSymbol(d) {
     }));
   });
 
-  const label = svgEl("text", {
-    class: "ow-device-label", "data-role": "device-label",
-    x: d.gate_point.x + 6, y: d.gate_point.y - 6, "font-size": 26,
-  });
-  label.textContent = d.literal;
-  g.appendChild(label);
+  // The device's own literal is labeled separately, in a final top layer
+  // (schematicLabelsLayer) rather than here -- see that function for why.
 
   return g;
 }
@@ -961,6 +973,81 @@ function schematicNetInventory(view) {
     }));
   });
   return inventory;
+}
+
+// The core's own bounding box in x, from the PUN/PDN devices' own
+// already-present `origin` points -- purely a derived *display* region for
+// the PUN/PDN background bands and the divider between them, not a new
+// model fact (the model has no notion of "core bounding box" of its own).
+function schematicCoreBounds(view) {
+  let maxX = 0;
+  view.devices.forEach(d => {
+    if (d.role === "pun" || d.role === "pdn") maxX = Math.max(maxX, d.origin.x + view.cell);
+  });
+  return { minX: 0, maxX };
+}
+
+// Groups an inverter's own P+N device pair by gate_var, straight off
+// `view.devices` -- a display grouping of already-present devices, not a
+// new electrical fact (both devices' own `role`/`gate_var` are already on
+// the model).
+function schematicInverterGroups(view) {
+  const byVar = {};
+  view.devices.forEach(d => {
+    if (d.role !== "inverter") return;
+    (byVar[d.gate_var] = byVar[d.gate_var] || []).push(d);
+  });
+  return Object.values(byVar);
+}
+
+// A text label with an opaque background "chip" sized to its own measured
+// bounding box, appended last (on top of every structural element already
+// in the tree) so it stays legible over anything that happens to run
+// underneath it, regardless of drawing order (D17 polish point 5).
+// getBBox() needs the element already attached and visible, so this
+// appends the text first, measures it, then inserts the chip behind it.
+function schematicLabelWithChip(svg, attrs, text) {
+  const t = svgEl("text", attrs);
+  t.textContent = text;
+  svg.appendChild(t);
+  const b = t.getBBox();
+  const pad = 3;
+  const chip = svgEl("rect", {
+    class: "ow-label-bg", "data-role": "label-background",
+    x: b.x - pad, y: b.y - pad, width: b.width + pad * 2, height: b.height + pad * 2,
+  });
+  svg.insertBefore(chip, t);
+  return t;
+}
+
+// Picks where the output leader/label should end, from a handful of
+// candidate directions (all genuinely diagonal -- see the leader's own
+// comment below for why that matters) around the real OUT anchor point,
+// in preference order -- the first candidate whose approximate label
+// footprint doesn't overlap any device's own gate-literal label wins.
+// This is the one place the renderer does real collision avoidance rather
+// than a fixed offset, because the output annotation is the one label
+// competing for space with the core's own already-dense device labels
+// (D17 polish point 5, applied specifically to this new element).
+function schematicOutputLeaderTarget(view, anchor) {
+  const dist = view.cell * 0.62;
+  const candidates = [
+    { dx: -0.75, dy: -0.65 }, { dx: -0.75, dy: 0.65 },
+    { dx: 0.75, dy: -0.65 }, { dx: 0.75, dy: 0.65 },
+    { dx: -1, dy: -0.2 }, { dx: -1, dy: 0.2 },
+    { dx: 1, dy: -0.2 }, { dx: 1, dy: 0.2 },
+  ];
+  const deviceBoxes = view.devices.map(d => ({
+    x0: d.gate_point.x - 4, x1: d.gate_point.x + 46,
+    y0: d.gate_point.y - 34, y1: d.gate_point.y + 10,
+  }));
+  function overlapsAnyDeviceLabel(x, y) {
+    const bx0 = x - 45, bx1 = x + 5, by0 = y - 34, by1 = y + 10;
+    return deviceBoxes.some(b => bx0 < b.x1 && b.x0 < bx1 && by0 < b.y1 && b.y0 < by1);
+  }
+  const best = candidates.find(c => !overlapsAnyDeviceLabel(anchor.x + c.dx * dist, anchor.y + c.dy * dist));
+  const c = best || candidates[0];
+  return { x: anchor.x + c.dx * dist, y: anchor.y + c.dy * dist, goesLeft: c.dx < 0, goesUp: c.dy < 0 };
 }
 
 // Below this width (model content + margins, in model/viewBox units), a
@@ -986,30 +1073,54 @@ function renderSchematic(view) {
   svg.appendChild(styleEl);
   svg.appendChild(schematicNetInventory(view));
 
-  // Top/bottom margins are taller than left/right -- purely to give the
-  // PUN/PDN section title and the VDD/GND rail label two clearly separate
-  // vertical bands (title further out, rail label hugging the rail),
-  // rather than relying on horizontal spacing that a narrow circuit's own
-  // geometry can't guarantee. This is display padding only -- it doesn't
-  // touch any drawn coordinate, which all still come straight from `view`.
-  const sideMargin = view.cell / 2;
-  const vMargin = view.cell * 1.3;
-  const contentW = view.width * view.cell;
+  const core = schematicCoreBounds(view);
+  const regionPad = view.cell * 0.18;
   const contentH = view.height * view.cell;
-  const w = contentW + sideMargin * 2;
-  const h = contentH + vMargin * 2;
-  svg.setAttribute("viewBox", `${-sideMargin} ${-vMargin} ${w} ${h}`);
   svg.setAttribute("aria-label", `Transistor-level schematic: ${view.total_transistors} transistors`);
-  svg.style.width = `${Math.max(MIN_DISPLAY_WIDTH, Math.round(w * PIXELS_PER_UNIT))}px`;
 
   const netById = {};
   view.nets.forEach(n => { netById[n.id] = n; });
 
+  // Computed up front (not just where its own box is drawn below) because
+  // the VDD/GND label anchor-picking needs to know where the inverter
+  // column starts, so those labels don't compete with the inverter's own
+  // caption for the same patch of space (D17 polish point 5, point 4).
+  const inverterGroups = schematicInverterGroups(view);
+  const inverterMinX = inverterGroups.length
+    ? Math.min(...inverterGroups.flatMap(devs => devs.map(d => d.origin.x)))
+    : Infinity;
+
+  // --- Background layer: PUN/PDN region bands + a divider between them,
+  // drawn first so every wire/device/label paints on top. ---
+  svg.appendChild(svgEl("rect", {
+    class: "ow-region-pun", "data-role": "region", "data-region": "pun",
+    x: core.minX - regionPad, y: -regionPad,
+    width: (core.maxX - core.minX) + regionPad * 2, height: view.pun_height * view.cell + regionPad,
+  }));
+  svg.appendChild(svgEl("rect", {
+    class: "ow-region-pdn", "data-role": "region", "data-region": "pdn",
+    x: core.minX - regionPad, y: view.pun_height * view.cell,
+    width: (core.maxX - core.minX) + regionPad * 2, height: view.pdn_height * view.cell + regionPad,
+  }));
+  svg.appendChild(svgEl("line", {
+    class: "ow-region-divider", "data-role": "region-divider",
+    x1: core.minX - regionPad, y1: view.pun_height * view.cell,
+    x2: core.maxX + regionPad, y2: view.pun_height * view.cell,
+  }));
+
+  // --- Wires: VDD/GND bold, OUT bold and distinct, internal series
+  // junctions at normal weight (still part of the core transistor
+  // structure), gate-signal-distribution wires visually muted -- so the
+  // transistor structure reads first and the routing layer recedes
+  // behind it (D17 polish point 2, presentation-only half of it).
   view.wires.forEach(wire => {
     const net = netById[wire.net_id];
-    const isRail = net && (net.kind === "rail_vdd" || net.kind === "rail_gnd");
+    let extra = "";
+    if (net && (net.kind === "rail_vdd" || net.kind === "rail_gnd")) extra = " ow-rail";
+    else if (net && net.kind === "output") extra = " ow-output-wire";
+    else if (net && net.kind !== "junction") extra = " ow-signal";
     svg.appendChild(svgEl("line", {
-      class: "ow-wire" + (isRail ? " ow-rail" : ""),
+      class: "ow-wire" + extra,
       "data-role": "wire", "data-wire-id": wire.id, "data-net-id": wire.net_id,
       x1: wire.p1.x, y1: wire.p1.y, x2: wire.p2.x, y2: wire.p2.y,
     }));
@@ -1024,39 +1135,138 @@ function renderSchematic(view) {
     }));
   });
 
-  // VDD/GND labels sit close to their own rail (a narrow band right above/
-  // below it), ending at the rail's own rightmost touch point (text-anchor
-  // "end") so they never run past the right edge of the viewBox. OUT sits
-  // right at the PUN/PDN seam, so its label is offset sideways from that
-  // point instead of vertically, to stay clear of the device row right
-  // above/below it.
+  // --- Shared-inverter subcircuit: a dashed frame around each inverter's
+  // own P+N pair, from their own already-present device points -- purely
+  // a display grouping, never a new electrical fact (D17 polish point 4).
+  inverterGroups.forEach(devs => {
+    const minX = Math.min(...devs.map(d => d.origin.x));
+    const maxX = Math.max(...devs.map(d => d.gate_point.x));
+    const minY = Math.min(...devs.map(d => d.origin.y));
+    const maxY = Math.max(...devs.map(d => d.origin.y + view.cell));
+    const pad = view.cell * 0.12;
+    svg.appendChild(svgEl("rect", {
+      class: "ow-region-inverter", "data-role": "region", "data-region": "inverter",
+      "data-gate-var": devs[0].gate_var,
+      x: minX - pad, y: minY - pad, width: (maxX - minX) + pad * 2, height: (maxY - minY) + pad * 2,
+      rx: 8,
+    }));
+  });
+
+  // --- Output: a short dashed leader from the real OUT seam point (an
+  // already-modeled point, never an invented connection) out to clear
+  // space, ending in a distinct node marker (D17 polish point 7). The
+  // leader is deliberately DIAGONAL, not axis-aligned -- every real wire
+  // this renderer draws is strictly horizontal or vertical (Phase A's own
+  // routing), so a diagonal line can never be collinear with, or read as a
+  // continuation of, a real conductive segment. Combined with the dashed
+  // stroke and its own data-role (D17 point 10), that makes it
+  // unambiguously non-conductive -- and avoids the leader tracing directly
+  // on top of the real (horizontal) OUT bus wire, which a same-row leader
+  // would.
+  const outAnchor = schematicNetAnchor(view, view.output_net_id, "min-y");
+  let outLeaderEnd = null;
+  if (outAnchor) {
+    outLeaderEnd = schematicOutputLeaderTarget(view, outAnchor);
+    svg.appendChild(svgEl("line", {
+      class: "ow-output-leader", "data-role": "output-leader",
+      x1: outAnchor.x, y1: outAnchor.y, x2: outLeaderEnd.x, y2: outLeaderEnd.y,
+    }));
+    svg.appendChild(svgEl("circle", {
+      class: "ow-output-node-marker", "data-role": "output-node-marker",
+      cx: outLeaderEnd.x, cy: outLeaderEnd.y, r: 5,
+    }));
+  }
+
+  // --- Top layer: every label, each with its own background chip, drawn
+  // last so it stays legible over anything already placed underneath it.
+  view.devices.forEach(d => {
+    schematicLabelWithChip(svg, {
+      class: "ow-device-label", "data-role": "device-label",
+      x: d.gate_point.x + 6, y: d.gate_point.y - 6, "font-size": 26,
+    }, d.literal);
+  });
+
+  // VDD/GND labels sit close to their own rail (a narrow band right
+  // above/below it), ending at the rail's own rightmost touch point short
+  // of the inverter column (via `inverterMinX`, so they don't compete
+  // with that column's own caption for the same space).
   [
     [view.vdd_net_id, "min-y", 0, -14, "end"],
     [view.gnd_net_id, "max-y", 0, 26, "end"],
-    [view.output_net_id, "min-y", 12, 8, "start"],
   ].forEach(([netId, pick, dx, dy, anchorMode]) => {
     const net = netById[netId];
-    const anchor = net && schematicNetAnchor(view, netId, pick);
+    const anchor = net && schematicNetAnchor(view, netId, pick, inverterMinX);
     if (!net || !anchor) return;
-    const t = svgEl("text", {
+    schematicLabelWithChip(svg, {
       class: "ow-net-label", "data-role": "net-label", "data-net-id": netId,
       x: anchor.x + dx, y: anchor.y + dy, "font-size": 28, "text-anchor": anchorMode,
-    });
-    t.textContent = net.label;
-    svg.appendChild(t);
+    }, net.label);
   });
 
-  // PUN/PDN section titles sit further out, near the outer edge of the
-  // top/bottom margin band -- clearly separated vertically from the
-  // VDD/GND rail labels above regardless of how narrow the circuit is.
-  const punLabel = svgEl("text", { class: "ow-section-label", x: 0, y: -vMargin + 22, "font-size": 20 });
-  punLabel.textContent = "PUN (PMOS pull-up)";
-  svg.appendChild(punLabel);
-  const pdnLabel = svgEl("text", {
-    class: "ow-section-label", x: 0, y: contentH + vMargin - 8, "font-size": 20,
-  });
-  pdnLabel.textContent = "PDN (NMOS pull-down)";
-  svg.appendChild(pdnLabel);
+  if (outLeaderEnd) {
+    const outNet = netById[view.output_net_id];
+    const dx = outLeaderEnd.goesLeft ? -8 : 8;
+    const dy = outLeaderEnd.goesUp ? -8 : 20;
+    schematicLabelWithChip(svg, {
+      class: "ow-net-label", "data-role": "net-label", "data-net-id": view.output_net_id,
+      x: outLeaderEnd.x + dx, y: outLeaderEnd.y + dy, "font-size": 28,
+      "text-anchor": outLeaderEnd.goesLeft ? "end" : "start",
+    }, outNet.label);
+  }
+
+  // PUN/PDN section titles sit inside their own background band, top-left.
+  schematicLabelWithChip(svg, {
+    class: "ow-section-label", x: core.minX + 6, y: 20, "font-size": 20,
+  }, "PUN (PMOS pull-up)");
+  schematicLabelWithChip(svg, {
+    class: "ow-section-label", x: core.minX + 6, y: contentH - 12, "font-size": 20,
+  }, "PDN (NMOS pull-down)");
+
+  // Shared-inverter captions, naming each's primary input and the
+  // complement it drives (D17 polish point 4) -- stacked into
+  // non-overlapping vertical "lanes" above their own box via a simple
+  // left-to-right interval-scheduling greedy, since adjacent shared
+  // inverters (their own already-present device columns can sit right
+  // next to each other, as a circuit needing several does) would
+  // otherwise produce overlapping captions. Width is only *estimated*
+  // here (monospace font, so char count times a fixed per-character
+  // factor) purely to choose a non-overlapping lane; the caption's own
+  // chip, drawn by schematicLabelWithChip below, is still sized from its
+  // own exact measured bounding box.
+  const CAPTION_CHAR_W = 16 * 0.62;
+  const captionLaneEndX = [];
+  inverterGroups
+    .map(devs => {
+      const minX = Math.min(...devs.map(d => d.origin.x));
+      const minY = Math.min(...devs.map(d => d.origin.y));
+      const complementNet = netById[devs[0].drain_net];
+      const complementLabel = complementNet ? complementNet.label : (devs[0].gate_var + "'");
+      const text = `Shared inverter (${devs[0].gate_var}→${complementLabel})`;
+      return { minX, minY, text, estWidth: text.length * CAPTION_CHAR_W };
+    })
+    .sort((a, b) => a.minX - b.minX)
+    .forEach(c => {
+      let lane = 0;
+      while (lane < captionLaneEndX.length && captionLaneEndX[lane] > c.minX) lane++;
+      captionLaneEndX[lane] = c.minX + c.estWidth + 10;
+      schematicLabelWithChip(svg, {
+        class: "ow-inverter-caption", "data-role": "inverter-caption",
+        x: c.minX, y: c.minY - view.cell * 0.12 - 6 - lane * 30,
+      }, c.text);
+    });
+
+  // The viewBox is fit to the true rendered extent of everything just
+  // drawn -- wires, devices, regions, and every label's own measured
+  // background chip -- rather than a fixed guessed margin. getBBox() on
+  // the whole <svg> is the union of every visible child's own bounding
+  // box (the hidden net-inventory group is excluded automatically, since
+  // display:none content has no box); a small uniform pad is the only
+  // number added on top of that measured extent.
+  const bbox = svg.getBBox();
+  const pad = view.cell * 0.15;
+  const vbX = bbox.x - pad, vbY = bbox.y - pad, vbW = bbox.width + pad * 2, vbH = bbox.height + pad * 2;
+  svg.setAttribute("viewBox", `${vbX} ${vbY} ${vbW} ${vbH}`);
+  svg.style.width = `${Math.max(MIN_DISPLAY_WIDTH, Math.round(vbW * PIXELS_PER_UNIT))}px`;
 }
 
 // The clone carries its own embedded <style> (appended in renderSchematic
