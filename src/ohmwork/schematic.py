@@ -37,6 +37,22 @@ from ohmwork.verify import VerificationResult
 
 CELL = 100  # integer grid cell scale; every coordinate below is an exact integer
 
+# Gate-signal routing (D17 Phase B polish round 2): every gate net's wire
+# to its dedicated rail column travels through a one-row "lane" strictly
+# above row 0 (for PMOS taps) or strictly below the last row (for NMOS
+# taps) -- never through the row-height space the core's own devices
+# occupy -- instead of the original same-row micro-offset scheme, which
+# read as wires crossing the transistor network because it cruised at
+# (almost) the same height as the row it left. GATE_LANE_CELLS is the
+# number of extra grid rows reserved for this at the top and bottom of
+# the diagram. GATE_LANE_SUB_STEP spaces different nets' cruise lines
+# apart within a lane row; GATE_HOP_STEP spaces different nets' vertical
+# hop-out tracks apart within a single column, both so distinct nets
+# never run collinear with each other.
+GATE_LANE_CELLS = 1
+GATE_LANE_SUB_STEP = 6
+GATE_HOP_STEP = 3
+
 _NET_KINDS = frozenset(
     {
         "rail_vdd",
@@ -253,7 +269,7 @@ class _Ctx:
         self.devices: list[Device] = []
         self.wires: list[WireSegment] = []
         self.nets: dict[str, Net] = {}
-        self.gate_taps: dict[str, list[Point]] = {}
+        self.gate_taps: dict[str, list[tuple[Point, str]]] = {}
         self.device_counter = 0
         self.wire_counter = 0
         self.pun_junction_counter = 0
@@ -295,8 +311,8 @@ class _Ctx:
         self.wire_counter += 1
         self.wires.append(WireSegment(id=wid, net_id=net_id, p1=p1, p2=p2))
 
-    def record_gate_tap(self, net_id: str, point: Point) -> None:
-        self.gate_taps.setdefault(net_id, []).append(point)
+    def record_gate_tap(self, net_id: str, point: Point, kind: str) -> None:
+        self.gate_taps.setdefault(net_id, []).append((point, kind))
 
 
 def _generate_bus(ctx: _Ctx, net_id: str, points: list[Point]) -> None:
@@ -373,7 +389,7 @@ def _place_transistor(
         drain_point=drain_point,
     )
     ctx.devices.append(device)
-    ctx.record_gate_tap(gate_net_id, gate_point)
+    ctx.record_gate_tap(gate_net_id, gate_point, transistor.kind)
     return [top_point], [bottom_point]
 
 
@@ -430,11 +446,17 @@ def _place(
     raise TypeError(f"unknown network node: {network!r}")  # pragma: no cover
 
 
-def _place_inverter_pair(ctx: _Ctx, var: str, x: int, core_height: int) -> tuple[Point, Point]:
+def _place_inverter_pair(ctx: _Ctx, var: str, x: int, gnd_row_y: int) -> tuple[Point, Point]:
+    """Placed at rows 1-2 (row 0 is the top gate-signal lane, matching the
+    core's own +1 row shift -- see the module docstring's routing section).
+    ``gnd_row_y`` is the real GND rail's own y coordinate (the row right
+    after the core, *not* the bottom of the whole diagram -- the bottom
+    gate-signal lane lives below that row), needed to know how far the
+    inverter's own fixed 2-row block is from it."""
     primary_net = ctx.ensure_gate_net(var, False)
     complement_net = ctx.ensure_gate_net(var, True)
 
-    p_origin, p_gate, p_source, p_drain = _expected_device_points(x, 0, "p")
+    p_origin, p_gate, p_source, p_drain = _expected_device_points(x, 1, "p")
     ctx.devices.append(
         Device(
             id=f"INV_{var}_P",
@@ -447,16 +469,16 @@ def _place_inverter_pair(ctx: _Ctx, var: str, x: int, core_height: int) -> tuple
             drain_net=complement_net,
             role="inverter",
             x=x,
-            y=0,
+            y=1,
             origin=p_origin,
             gate_point=p_gate,
             source_point=p_source,
             drain_point=p_drain,
         )
     )
-    ctx.record_gate_tap(primary_net, p_gate)
+    ctx.record_gate_tap(primary_net, p_gate, "p")
 
-    n_origin, n_gate, n_source, n_drain = _expected_device_points(x, 1, "n")
+    n_origin, n_gate, n_source, n_drain = _expected_device_points(x, 2, "n")
     ctx.devices.append(
         Device(
             id=f"INV_{var}_N",
@@ -469,19 +491,19 @@ def _place_inverter_pair(ctx: _Ctx, var: str, x: int, core_height: int) -> tuple
             drain_net=complement_net,
             role="inverter",
             x=x,
-            y=1,
+            y=2,
             origin=n_origin,
             gate_point=n_gate,
             source_point=n_source,
             drain_point=n_drain,
         )
     )
-    ctx.record_gate_tap(primary_net, n_gate)
+    ctx.record_gate_tap(primary_net, n_gate, "n")
 
-    ctx.record_gate_tap(complement_net, p_drain)  # p_drain == n_drain; record once
+    ctx.record_gate_tap(complement_net, p_drain, "p")  # p_drain == n_drain; record once
 
-    if core_height > 2:
-        gnd_far = Point(x * CELL + CELL // 2, core_height * CELL)
+    if n_source.y != gnd_row_y:
+        gnd_far = Point(x * CELL + CELL // 2, gnd_row_y)
         ctx.add_wire("GND", n_source, gnd_far)
     else:
         gnd_far = n_source
@@ -500,9 +522,16 @@ def _build_layout_unchecked(result: SynthesisResult, output_name: str) -> Layout
     pdn_width, pdn_height = _size(result.pdn)
     core_width = max(pun_width, pdn_width)
     core_height = pun_height + pdn_height
+    total_height_cells = GATE_LANE_CELLS + core_height + GATE_LANE_CELLS
 
-    vdd_touches, out_touches_pun = _place(ctx, result.pun, "pun", 0, 0, pun_height, "VDD", "OUT")
-    out_touches_pdn, gnd_touches = _place(ctx, result.pdn, "pdn", 0, pun_height, pdn_height, "OUT", "GND")
+    # The core is placed starting at row GATE_LANE_CELLS (not row 0), to
+    # leave the top gate-signal lane free above it; everything below (VDD,
+    # OUT, GND bus generation) flows from these already-shifted points.
+    core_y0 = GATE_LANE_CELLS
+    vdd_touches, out_touches_pun = _place(ctx, result.pun, "pun", 0, core_y0, pun_height, "VDD", "OUT")
+    out_touches_pdn, gnd_touches = _place(
+        ctx, result.pdn, "pdn", 0, core_y0 + pun_height, pdn_height, "OUT", "GND"
+    )
 
     inverter_vars = tuple(sorted(result.inverter_literals)) if not dual_rail_mode else ()
 
@@ -519,9 +548,10 @@ def _build_layout_unchecked(result: SynthesisResult, output_name: str) -> Layout
     rail_col_index = {net_id: j for j, net_id in enumerate(rail_net_ids)}
 
     inverter_col_base = core_width + num_gate_rail_cols
+    gnd_row_y = (core_y0 + core_height) * CELL
     for i, var in enumerate(inverter_vars):
         x = inverter_col_base + i
-        p_touch, gnd_far = _place_inverter_pair(ctx, var, x, core_height)
+        p_touch, gnd_far = _place_inverter_pair(ctx, var, x, gnd_row_y)
         vdd_touches.append(p_touch)
         gnd_touches.append(gnd_far)
 
@@ -529,21 +559,62 @@ def _build_layout_unchecked(result: SynthesisResult, output_name: str) -> Layout
     _generate_bus(ctx, "OUT", out_touches_pun + out_touches_pdn)
     _generate_bus(ctx, "GND", gnd_touches)
 
+    total_width = core_width + num_gate_rail_cols + len(inverter_vars)
+
+    # Each net's gate taps route: (1) a short sideways hop, at a track
+    # offset unique to (column, net) so distinct nets sharing a column
+    # never run collinear; (2) a full vertical run at that offset, straight
+    # up (PMOS taps) or down (NMOS taps) to the lane; (3) a horizontal
+    # cruise, at a lane sub-row unique to this net, over to the net's own
+    # dedicated column -- entirely within the lane, never at core-row
+    # height, so it never reads as crossing the transistor network. A tap
+    # that plainly crosses another net's wire along the way (e.g. a rail
+    # bus) shares no declared point with it there, which is the existing,
+    # already-validated "clean crossing = not connected" convention.
+    #
+    # The hop normally goes right (+offset); a device whose gate_point
+    # already sits at the layout's own right edge (only ever an inverter
+    # device, the last column with any devices in it) would push the hop
+    # past that edge, so it goes left (-offset) instead -- still a short,
+    # local, column-scale move, never anywhere near the device's own
+    # channel (GATE_GAP away from it, same as the symbol template itself).
+    col_net_hop_offset: dict[tuple[int, str], int] = {}
+    col_hop_count: dict[int, int] = {}
+
+    def hop_offset(col_x: int, net_id: str) -> int:
+        key = (col_x, net_id)
+        if key not in col_net_hop_offset:
+            col_hop_count[col_x] = col_hop_count.get(col_x, 0) + 1
+            magnitude = col_hop_count[col_x] * GATE_HOP_STEP
+            direction = -1 if col_x + magnitude > total_width * CELL else 1
+            col_net_hop_offset[key] = direction * magnitude
+        return col_net_hop_offset[key]
+
     for net_id in rail_net_ids:
         j = rail_col_index[net_id]
         rail_x = (core_width + j) * CELL + CELL // 2
-        offset = j + 1
-        far_points: list[Point] = []
-        for p in ctx.gate_taps.get(net_id, []):
-            hop = Point(p.x, p.y + offset)
-            cruise_far = Point(rail_x, hop.y)
+        top_lane_y = GATE_LANE_SUB_STEP * (j + 1)
+        bottom_lane_y = total_height_cells * CELL - GATE_LANE_SUB_STEP * (j + 1)
+        used_top = used_bottom = False
+        cruised_lane_points: set[Point] = set()  # two taps sharing a (column, net, kind) share this final leg
+        for p, kind in ctx.gate_taps.get(net_id, []):
+            hop_x = p.x + hop_offset(p.x, net_id)
+            lane_y = top_lane_y if kind == "p" else bottom_lane_y
+            hop = Point(hop_x, p.y)
+            vert_end = Point(hop_x, lane_y)
+            cruise_far = Point(rail_x, lane_y)
             ctx.add_wire(net_id, p, hop)
-            ctx.add_wire(net_id, hop, cruise_far)
-            far_points.append(cruise_far)
-        _generate_bus(ctx, net_id, far_points)
-
-    total_width = core_width + num_gate_rail_cols + len(inverter_vars)
-    total_height = core_height
+            ctx.add_wire(net_id, hop, vert_end)
+            if vert_end not in cruised_lane_points:
+                ctx.add_wire(net_id, vert_end, cruise_far)
+                cruised_lane_points.add(vert_end)
+            if kind == "p":
+                used_top = True
+            else:
+                used_bottom = True
+        if used_top and used_bottom:
+            ctx.add_wire(net_id, Point(rail_x, top_lane_y), Point(rail_x, bottom_lane_y))
+    total_height = total_height_cells
 
     junctions = _compute_junctions(ctx.devices, ctx.wires)
 
@@ -1377,10 +1448,11 @@ def _validate_source_fidelity(layout: Layout, result: SynthesisResult, output_na
             f"layout.pdn_height {layout.pdn_height} != result.pdn_stack_height "
             f"{result.pdn_stack_height}"
         )
-    if layout.height != layout.pun_height + layout.pdn_height:
+    expected_height = layout.pun_height + layout.pdn_height + 2 * GATE_LANE_CELLS
+    if layout.height != expected_height:
         raise RuntimeError(
-            f"layout.height {layout.height} != layout.pun_height + layout.pdn_height "
-            f"({layout.pun_height + layout.pdn_height})"
+            f"layout.height {layout.height} != layout.pun_height + layout.pdn_height + "
+            f"2*GATE_LANE_CELLS ({expected_height})"
         )
 
     expected_pun_width, _ = _size(result.pun)

@@ -14,6 +14,7 @@ from ohmwork.network import conducts, dual, to_network
 from ohmwork.parser import parse
 from ohmwork.schematic import (
     CELL,
+    GATE_LANE_CELLS,
     Device,
     Junction,
     Point,
@@ -253,7 +254,11 @@ def test_layout_dimensions_match_network_stack_heights():
 
     assert layout.pun_height == result.pun_stack_height
     assert layout.pdn_height == result.pdn_stack_height
-    assert layout.height == layout.pun_height + layout.pdn_height
+    # +2*GATE_LANE_CELLS: a one-row gate-signal lane above the core (for
+    # PMOS gate cruises) and another below it (for NMOS), keeping that
+    # cruise routing off the core's own row-height space -- see
+    # schematic.py's module-level GATE_LANE_CELLS comment.
+    assert layout.height == layout.pun_height + layout.pdn_height + 2 * GATE_LANE_CELLS
 
     for d in layout.devices:
         for p in (d.origin, d.gate_point, d.source_point, d.drain_point):
@@ -291,23 +296,27 @@ def test_device_count_always_matches_total_transistors(var_order, expr_text, opt
 def test_inverter_rail_continuity():
     """A core stack taller than 2 rows, needing a shared inverter: the
     inverter's NMOS supply must be routed all the way down to the real GND
-    rail row, not left stranded at row 2."""
+    rail row (the row right after the core -- not `layout.height`, which
+    also includes the bottom gate-signal lane past GND), not left stranded
+    at the inverter's own fixed 2-row block."""
     var_order = ["a", "b", "c", "d"]
     minterms = minterms_from_expr(var_order, "(a'bc+d)'")
     result = synthesize(var_order, minterms)
     layout = build_schematic(result, "F")
-    assert layout.height > 2
+    gnd_row_y = (GATE_LANE_CELLS + layout.pun_height + layout.pdn_height) * CELL
+    assert layout.height * CELL > gnd_row_y  # sanity: the core really is taller than the inverter's own block
 
     inv = [d for d in layout.devices if d.role == "inverter" and d.kind == "n"]
     assert len(inv) == 1
     n_dev = inv[0]
-    expected_p1 = Point(n_dev.x * CELL + CELL // 2, 2 * CELL)
-    expected_p2 = Point(n_dev.x * CELL + CELL // 2, layout.height * CELL)
+    expected_p1 = Point(n_dev.x * CELL + CELL // 2, (n_dev.y + 1) * CELL)
+    expected_p2 = Point(n_dev.x * CELL + CELL // 2, gnd_row_y)
+    assert expected_p1 != expected_p2  # otherwise this test would vacuously pass
     stub = next(
         (w for w in layout.wires if w.net_id == "GND" and {w.p1, w.p2} == {expected_p1, expected_p2}),
         None,
     )
-    assert stub is not None, "expected an explicit GND stub from row 2 down to the real GND rail row"
+    assert stub is not None, "expected an explicit GND stub from the inverter's own row down to the real GND rail row"
 
 
 # --- Topology fidelity -------------------------------------------------------
@@ -519,10 +528,14 @@ def test_regression_wire_routed_through_other_net_gate_terminals():
     catch it."""
     var_order, minterms, layout = _built_layout()
     others = tuple(w for w in layout.wires if w.net_id != "net_a")
+    # net_a's two real declared points are the PUN "a" device's gate_point
+    # (100, 150) and the PDN "a" device's gate_point (100, 250) -- b/c's own
+    # PUN-row gate_points sit at (200, 150)/(300, 150), directly on the
+    # interior of WA1's path below.
     rerouted = (
-        WireSegment(id="WA1", net_id="net_a", p1=Point(100, 50), p2=Point(350, 50)),
-        WireSegment(id="WA2", net_id="net_a", p1=Point(100, 150), p2=Point(350, 150)),
-        WireSegment(id="WA3", net_id="net_a", p1=Point(350, 50), p2=Point(350, 150)),
+        WireSegment(id="WA1", net_id="net_a", p1=Point(100, 150), p2=Point(350, 150)),
+        WireSegment(id="WA2", net_id="net_a", p1=Point(100, 250), p2=Point(350, 250)),
+        WireSegment(id="WA3", net_id="net_a", p1=Point(350, 150), p2=Point(350, 250)),
     )
     broken = dataclasses.replace(layout, wires=others + rerouted)
     with pytest.raises(RuntimeError, match="lies on the interior of segment"):
@@ -973,3 +986,36 @@ def test_layout_construction_is_deterministic_across_hash_seeds():
 
     assert len(outputs) == 3
     assert len(set(outputs)) == 1, "layout construction is not deterministic across PYTHONHASHSEED values"
+
+
+# --- Routing sweep (D17 Phase B polish round 2: gate-signal lane routing) ---
+
+
+def test_gate_signal_lane_routing_sweep_zero_false_rejections():
+    """The lane-based gate-signal routing (schematic.py's GATE_LANE_CELLS
+    section) replaced the original same-row micro-offset routing entirely --
+    a new routing algorithm needs the same "no false rejections across a
+    real corpus" validation Phase A's own routing got. Exhaustive over every
+    1-3 variable function (every minterm subset, both normal and dual-rail
+    mode) -- 540 real synthesized layouts, each independently gated by
+    build_schematic()'s own four correctness checks. A `ValueError` here
+    (e.g. a constant function `synthesize()` itself refuses) is an expected,
+    upstream rejection, not a schematic bug -- only a schematic-side
+    exception would fail this test."""
+    import itertools
+
+    checked = 0
+    for n in range(1, 4):
+        var_order = [chr(ord("a") + i) for i in range(n)]
+        all_rows = list(range(2**n))
+        for r in range(len(all_rows) + 1):
+            for minterms in itertools.combinations(all_rows, r):
+                for dual_rail in (False, True):
+                    try:
+                        result = synthesize(var_order, set(minterms), dual_rail=dual_rail)
+                    except ValueError:
+                        continue
+                    build_schematic(result, "F")  # raises on any of the four gates failing
+                    checked += 1
+
+    assert checked > 500  # sanity: this really did exercise a large corpus, not a no-op loop
