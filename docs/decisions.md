@@ -387,7 +387,10 @@ since hash randomization is fixed per-process and can't be exercised any other w
 ## D17 — APPROVED. Phase A implemented; Phase B pending. What does a real transistor-level schematic show, and how is it built?
 
 **Status:** approved for implementation (2026-09-18, after two review rounds — see the
-revision history at the end of this entry). **Phase A (the schematic layout model,
+revision history at the end of this entry). **Acceptance test 8's connectivity requirement was
+amended 2026-09-19 to recognize named-net ports as a second valid connectivity convention for
+gate-signal nets only — see the "Connectivity conventions" addition below and the revision
+history's final entry.** **Phase A (the schematic layout model,
 `src/ohmwork/schematic.py`) is implemented** as of commit `0dc480a` (2026-09-19), with four
 corrective follow-up commits after independent review found real adversarial gaps in
 `validate_layout_geometry`/`_canonical_layout_topology`. First round (`8623b13`): a wire routed
@@ -454,9 +457,11 @@ follows), this is that entry.
    `output_name`); NMOS pull-down network (PDN) below it; GND rail at bottom. Standard,
    visually distinguishable PMOS and NMOS transistor symbols (gate, source, drain, with PMOS's
    conventional gate bubble); gate/input labels on every transistor; wires and junction dots
-   at real electrical connections; series and parallel sub-network topology laid out to match
-   the actual `Network` tree (`network.py`'s `Series`/`Parallel`/`Transistor` nodes — already
-   exactly the structure a layout algorithm needs, no new engine data required); PUN and PDN
+   at real electrical connections (or, for gate-signal nets only, named-net ports — see the
+   "Connectivity conventions" amendment below); series and parallel sub-network topology laid
+   out to match the actual `Network` tree (`network.py`'s `Series`/`Parallel`/`Transistor`
+   nodes — already exactly the structure a layout algorithm needs, no new engine data
+   required); PUN and PDN
    labeled as such.
 3. **Complemented inputs (D12) are drawn at transistor level, never as a gate symbol.** In
    normal mode, each distinct complemented literal counted by `inverter_literals` is rendered
@@ -506,6 +511,60 @@ follows), this is that entry.
    - "Download SVG" always; "Copy image" if practical once the renderer exists (not a blocker
      for v1).
 
+**Connectivity conventions (2026-09-19 amendment — see the revision history's final entry).**
+Live Phase B dogfooding of the routing-fixed implementation (commit `5c6863e`) found that
+requiring every connection to be one continuous drawn wire forces a visually inferior
+gate-signal distribution bus — long wires looping around the whole circuit — that reads as an
+auto-routed wiring diagram rather than a textbook schematic, even once the crossings-through-
+the-core problem itself was fixed at the model level. This amendment does not relax D17's
+correctness bar: it replaces "all connectivity must be one continuous drawn wire" with the
+broader, still fully machine-verifiable rule that every connection must be represented by one
+of two recognized, visible, structurally-checkable conventions.
+
+- **Geometric conductor connection** (the original, still-mandatory convention for everything
+  except gate-signal nets): endpoints visibly meet through continuous wire geometry and
+  explicit junction dots where required.
+- **Named-net connection**: electrically identical endpoints terminate in explicit, visible
+  named-net ports carrying the same canonical net identity and displayed label, with no
+  continuous wire drawn between them.
+
+A matching `data-net-id` alone is never sufficient for either convention on its own — a
+non-continuous connection is valid only when the SVG visibly renders the named-net-port
+convention below, and it is checked structurally (acceptance test 8) exactly as rigorously as a
+geometric connection already is.
+
+Named-net ports are permitted **only** for gate-signal nets — `gate_primary`,
+`gate_complement_internal`, `gate_complement_external` — and may never substitute for
+source/drain diffusion wiring, internal series/parallel junctions, the output path, or a
+PUN/PDN-to-VDD/GND connection, all of which must stay continuously, geometrically wired.
+Within that permitted scope:
+
+- Every transistor gate must visibly connect to either a continuous gate wire, or a short gate
+  stub that terminates at a visible named-net port. The stub itself is still real, model-backed
+  geometry — only the *long-distance bus between ports* is replaced by label-matching, never
+  the local connection from a transistor to its own port.
+- Every named-net port carries stable semantic attributes: a `data-port-id`, the `data-net-id`
+  it belongs to, the canonical displayed net label, and its exact terminal/anchor point.
+- The visible port label must match the model net's own label exactly; every port sharing a
+  `data-net-id` displays that same label; no two distinct net IDs ever display the same label.
+- Each visible gate stub must geometrically meet both its own transistor's modeled gate
+  terminal and its named port's anchor point.
+- A shared inverter's complemented output net must visibly originate at that inverter's own
+  output and terminate at a named port (e.g. `a′`); every occurrence of that port must
+  reference the same model net — a label that merely *looks* like the right complement,
+  without tracing back to the inverter's own net, does not satisfy this.
+- Under `--dual-rail` (D2), complemented inputs must be visibly identified as externally
+  supplied, never shown as inverter-generated — matching this entry's existing dual-rail rule
+  (point 3) for the transistor-level drawing itself.
+- Unlabeled, disconnected stubs are forbidden; an invisible element, or `data-net-id` agreement
+  without a visible, matching port label, never establishes drawn connectivity.
+
+**Renderer policy:** prefer whichever representation reads most clearly as a textbook
+schematic — short labeled gate stubs by default for gate-signal nets; a continuous gate wire
+only where that is locally simpler and clearer; always-continuous wiring for source/drain
+topology, the output path, and supplies; conventional VDD/GND symbols; a shared inverter
+presented as its own distinctly labeled subcircuit (point 3).
+
 **Acceptance tests** (to exist, reviewed, before implementation starts — same role the
 charter's M1a/M1b acceptance tests played for those milestones):
 
@@ -535,23 +594,35 @@ charter's M1a/M1b acceptance tests played for those milestones):
    the model that will actually be drawn.
 8. **A semantic model-to-SVG bridge test**, so a correct layout model rendered incorrectly is
    still caught — and so "trustworthy-looking metadata" isn't mistaken for a rendering that's
-   actually correct. Every device and net in the layout model must appear exactly once in the
-   rendered SVG, located by its stable identifier (point 7 above), with the correct device
-   type (PMOS/NMOS) and gate label — **and** the emitted geometry itself must be checked, not
-   just those labels:
+   actually correct. For every model wire, device, junction, and (per the connectivity
+   conventions above) named-net port: assert exact bidirectional correspondence with the
+   rendered SVG — none missing, none duplicated, none extra — located by stable identifiers,
+   with the correct device type (PMOS/NMOS) and gate label. The emitted geometry itself must be
+   checked, not just those labels:
    - For every model device terminal and wire segment, the SVG element's own coordinates/
      endpoints must match the layout model's corresponding values.
-   - Two endpoints the model considers part of the same net must visibly meet in the SVG (the
-     same point, or an explicit junction-dot element at that point) — a `data-net-id` match
-     alone doesn't prove the drawn wires actually connect there.
-   - No conductive wire exists in the SVG that isn't backed by a wire segment in the model —
-     ruling out an accidental extra connection the model never specified.
+   - For a geometrically-wired connection: two endpoints the model considers part of the same
+     net must visibly meet in the SVG (the same point, or an explicit junction-dot element at
+     that point) — a `data-net-id` match alone doesn't prove the drawn wires actually connect
+     there.
+   - For a named-net-port connection (gate-signal nets only, per the connectivity conventions
+     above): every gate terminal reaches a visible, labeled port through a model-backed local
+     stub; the port's `data-net-id` and displayed label match the model's; every port sharing a
+     `data-net-id` displays the same canonical label, and no two distinct net IDs display the
+     same label; a shared inverter's complement port is driven by that inverter's own output
+     net, not merely labeled to look like it is; label-only connectivity is never accepted in
+     place of continuous wiring for source/drain paths, internal series/parallel junctions, the
+     output path, or VDD/GND.
+   - No conductive wire exists in the SVG that isn't backed by a wire segment in the model, and
+     no named-net port exists that isn't backed by a real device gate terminal — ruling out
+     both an accidental extra connection the model never specified and a decorative port with
+     nothing real behind it.
    - A PMOS device's SVG markup includes its gate-bubble element; an NMOS device's does not —
      checked structurally (the element's presence/absence and type), not by how it looks
      rendered.
    - "Download SVG" (point 7) must produce its file from this same checked representation —
      not a separately-serialized copy that could drift — and that downloaded SVG must pass
-     these same semantic device/net/geometry assertions, not just the inline one.
+     these same semantic device/net/port/geometry assertions, not just the inline one.
 
    All of the above are structural DOM/attribute/coordinate assertions against the rendered
    SVG's own markup — this is **not** a pixel comparison and **not** an exact-SVG-string
@@ -599,3 +670,16 @@ bubble present/NMOS absent) — not only `data-*` identifiers, which could sit o
 connected or incorrectly-shaped geometry and still look "trustworthy." Also clarified that
 "Download SVG" must be produced from, and pass, the same checked representation and semantic
 assertions as the inline SVG. **Approved for implementation** as of this revision.
+
+**Amended 2026-09-19** (after Phase A was signed off and Phase B had already been through two
+implementation/review rounds — commits `3b97e18`, `1f09ad5`, `5c6863e`): live dogfooding of the
+routing-fixed Phase B implementation found that acceptance test 8's original "every connection
+must be one continuous drawn wire" requirement, applied literally, forces a visually inferior
+gate-signal distribution bus for repeated inputs — long wires looping around the whole circuit —
+even once `5c6863e` had already fixed the separate problem of those wires crossing *through* the
+transistor core. Added a second recognized connectivity convention, **named-net ports**, for
+gate-signal nets only (never for source/drain, internal junctions, the output path, or
+PUN/PDN-to-VDD/GND connections, which stay continuously wired as before) — see the "Connectivity
+conventions" addition above and acceptance test 8's revised wording. This is a documentation-only
+amendment: no renderer, model, or test code was written or changed as part of it; implementation
+against the new convention is a separate, subsequent round, to be reviewed on its own.
