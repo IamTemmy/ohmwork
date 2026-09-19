@@ -20,6 +20,7 @@ ever returns a :class:`Layout`, each blind to what the other two check:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from ohmwork.derivation import all_assignments
@@ -898,14 +899,98 @@ def validate_layout_geometry(layout: Layout) -> None:
         if n_dev.source_net != layout.gnd_net_id:
             raise RuntimeError(f"inverter NMOS {n_dev.id!r} source_net is not GND ({layout.gnd_net_id!r})")
 
-    # 9. device count -- the one place this is checked
+    # 9. junction net ownership: every junction-kind net must be touched (via source_net/
+    # drain_net) exclusively by devices of one role (pun or pdn, never both, never an
+    # inverter), follow the {role}_jN id convention for that role, and have label == id
+    junction_owner_role: dict[str, str] = {}
+    for n in layout.nets:
+        if n.kind != "junction":
+            continue
+        touching_roles = {d.role for d in layout.devices if n.id in (d.source_net, d.drain_net)}
+        if touching_roles != {"pun"} and touching_roles != {"pdn"}:
+            raise RuntimeError(
+                f"junction net {n.id!r} is not owned exclusively by one of pun/pdn (touched by "
+                f"device roles {sorted(touching_roles)!r})"
+            )
+        owner_role = next(iter(touching_roles))
+        junction_owner_role[n.id] = owner_role
+        if not re.fullmatch(rf"{owner_role}_j\d+", n.id):
+            raise RuntimeError(
+                f"junction net {n.id!r} owned by {owner_role!r} does not follow the "
+                f"{owner_role}_jN id convention"
+            )
+        if n.label != n.id:
+            raise RuntimeError(f"junction net {n.id!r} has label {n.label!r}, expected {n.id!r}")
+
+    # 10. core source/drain terminal-domain restriction: a PUN device's source_net/drain_net
+    # may only be VDD, OUT, or a PUN-owned junction net; a PDN device's may only be OUT, GND,
+    # or a PDN-owned junction net. In particular this means a core source/drain terminal can
+    # never reference a primary/complement gate net (a "gate-to-diffusion" short that would
+    # otherwise be invisible to simulate_layout, which only reads gate_net for conduction, and
+    # to topology fidelity, which never looks at source_net/drain_net identity beyond
+    # connectivity) nor the opposite network's rail or junction net.
+    for d in core_devices:
+        allowed = (
+            {layout.vdd_net_id, layout.output_net_id}
+            if d.role == "pun"
+            else {layout.output_net_id, layout.gnd_net_id}
+        )
+        for terminal_name, net_id in (("source_net", d.source_net), ("drain_net", d.drain_net)):
+            if net_id in allowed or junction_owner_role.get(net_id) == d.role:
+                continue
+            raise RuntimeError(
+                f"{d.role.upper()} device {d.id!r} has {terminal_name}={net_id!r}, which is not "
+                f"{'VDD/OUT' if d.role == 'pun' else 'OUT/GND'} or a {d.role}-owned junction net -- "
+                "a core source/drain terminal must never reference a gate net or the opposite "
+                "network's rail/junction"
+            )
+
+    # 11. net inventory closure: every declared net must be accounted for exactly once -- one
+    # of the three special rails (exactly one net per special kind, matching the declared id),
+    # a primary/complement net that actually appears in its mapping, or a junction net whose
+    # ownership was validated above. Nothing else is permitted (no orphaned/unexpected nets).
+    special_ids: dict[str, list[str]] = {}
+    for n in layout.nets:
+        if n.kind in ("rail_vdd", "rail_gnd", "output"):
+            special_ids.setdefault(n.kind, []).append(n.id)
+    for kind, expected_id, label in (
+        ("rail_vdd", layout.vdd_net_id, "VDD"),
+        ("rail_gnd", layout.gnd_net_id, "GND"),
+        ("output", layout.output_net_id, "output"),
+    ):
+        ids = special_ids.get(kind, [])
+        if ids != [expected_id]:
+            raise RuntimeError(f"expected exactly one {label} net ({expected_id!r}), found {ids!r}")
+
+    primary_net_id_set = {nid for _, nid in layout.primary_nets}
+    complement_net_id_set = {nid for _, nid in layout.complement_nets}
+    for n in layout.nets:
+        if n.kind == "gate_primary" and n.id not in primary_net_id_set:
+            raise RuntimeError(f"net {n.id!r} (kind gate_primary) does not appear in primary_nets")
+        if n.kind in ("gate_complement_internal", "gate_complement_external") and n.id not in complement_net_id_set:
+            raise RuntimeError(f"net {n.id!r} (kind {n.kind!r}) does not appear in complement_nets")
+
+    accounted_for = (
+        {layout.vdd_net_id, layout.gnd_net_id, layout.output_net_id}
+        | primary_net_id_set
+        | complement_net_id_set
+        | set(junction_owner_role)
+    )
+    for n in layout.nets:
+        if n.id not in accounted_for:
+            raise RuntimeError(
+                f"net {n.id!r} (kind {n.kind!r}) is not a declared special net, a mapped primary/"
+                "complement net, or an owned junction net -- unused or unexpected"
+            )
+
+    # 12. device count -- the one place this is checked
     if len(layout.devices) != layout.total_transistors:
         raise RuntimeError(
             f"device count {len(layout.devices)} does not match total_transistors "
             f"{layout.total_transistors}"
         )
 
-    # 10. segment shape sanity + point sanity
+    # 13. segment shape sanity + point sanity
     seen_segments: set[tuple[str, frozenset]] = set()
     for w in layout.wires:
         if not (w.p1.x == w.p2.x or w.p1.y == w.p2.y):
@@ -927,7 +1012,7 @@ def validate_layout_geometry(layout: Layout) -> None:
             if not (0 <= p.x <= layout.width * CELL and 0 <= p.y <= layout.height * CELL):
                 raise RuntimeError(f"device {d.id!r} point {p!r} is out of bounds")
 
-    # 11. shared touch index, reused by checks 12-16
+    # 14. shared touch index, reused by checks 15-19
     touches: dict[Point, list[tuple[str, str, str]]] = {}
 
     def _add_touch(net_id: str, point: Point, source_kind: str, source_id: str) -> None:
@@ -941,7 +1026,7 @@ def validate_layout_geometry(layout: Layout) -> None:
         _add_touch(w.net_id, w.p1, "segment_endpoint", w.id)
         _add_touch(w.net_id, w.p2, "segment_endpoint", w.id)
 
-    # 12. wire-endpoint anchoring
+    # 15. wire-endpoint anchoring
     junction_points = {(j.net_id, j.point) for j in layout.junctions}
     for w in layout.wires:
         for p in (w.p1, w.p2):
@@ -955,14 +1040,14 @@ def validate_layout_geometry(layout: Layout) -> None:
                     "terminal, junction, or other wire -- a dangling stub"
                 )
 
-    # 13. accidental-short / cross-net check -- exact point coincidence between different nets
+    # 16. accidental-short / cross-net check -- exact point coincidence between different nets
     for point, entries in touches.items():
         nets_here = {e[0] for e in entries}
         if len(nets_here) > 1:
             a, b = sorted(nets_here)
             raise RuntimeError(f"net {a!r} and net {b!r} both touch point {point!r} -- accidental short or wrong net_id")
 
-    # 14. cross-net interior-touch check: a declared point of one net (a device terminal or
+    # 17. cross-net interior-touch check: a declared point of one net (a device terminal or
     # a wire endpoint -- everything in `touches`) must never lie on the strict interior of a
     # DIFFERENT net's wire segment. This also subsumes a same-line ("collinear") overlap
     # between two different-net segments, since two non-identical overlapping collinear
@@ -987,7 +1072,7 @@ def validate_layout_geometry(layout: Layout) -> None:
                     f"{w.id!r} (net {w.net_id!r}) with no declared connection"
                 )
 
-    # 15. per-net connected-component check
+    # 18. per-net connected-component check
     net_ids_touched = {e[0] for entries in touches.values() for e in entries}
     for net_id in sorted(net_ids_touched):
         points_for_net = [p for p, entries in touches.items() if any(e[0] == net_id for e in entries)]
@@ -1021,7 +1106,7 @@ def validate_layout_geometry(layout: Layout) -> None:
                 "components found)"
             )
 
-    # 16. junction completeness, both directions
+    # 19. junction completeness, both directions
     required = _required_junction_points(layout.devices, layout.wires)
     declared = {(j.net_id, j.point) for j in layout.junctions}
     missing = required - declared
@@ -1035,7 +1120,7 @@ def validate_layout_geometry(layout: Layout) -> None:
             f"Junction at {point!r} on net {net_id!r} does not correspond to a real 3-way (or more) connection"
         )
 
-    # 17. domain minimums
+    # 20. domain minimums
     if not any(d.source_net == layout.vdd_net_id for d in layout.devices):
         raise RuntimeError("VDD net is not touched by any device")
     if not any(d.source_net == layout.gnd_net_id for d in layout.devices):

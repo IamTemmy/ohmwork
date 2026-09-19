@@ -388,15 +388,20 @@ since hash randomization is fixed per-process and can't be exercised any other w
 
 **Status:** approved for implementation (2026-09-18, after two review rounds — see the
 revision history at the end of this entry). **Phase A (the schematic layout model,
-`src/ohmwork/schematic.py`) is implemented** as of commit `0dc480a` (2026-09-19), with a
-corrective follow-up commit after an independent review found four adversarial gaps (a wire
-routed through another net's declared point without being caught, a self-loop device hanging
-the topology-fidelity graph reduction, nothing cross-checking a device's `gate_net` against
-its own structured gate identity or the primary/complement mapping table, and device geometry/
-`literal` fields never being checked against the documented coordinate formulas) — all four
-fixed, with regression tests, before Phase B began. **Phase B (SVG rendering,
-`presenter.py`/`webui.py` wiring, "Download SVG", acceptance tests 8 and 10) is not yet
-started.** This entry exists specifically so the schematic
+`src/ohmwork/schematic.py`) is implemented** as of commit `0dc480a` (2026-09-19), with two
+corrective follow-up commits after independent review found real adversarial gaps in
+`validate_layout_geometry`/`_canonical_layout_topology`. First round (`8623b13`): a wire routed
+through another net's declared point without being caught, a self-loop device hanging the
+topology-fidelity graph reduction, nothing cross-checking a device's `gate_net` against its own
+structured gate identity or the primary/complement mapping table, and device geometry/`literal`
+fields never being checked against the documented coordinate formulas. Second round: nothing
+restricted which *kind* of net a core device's source/drain terminal could reference, so a
+PDN/PUN diffusion terminal could reuse a primary gate net in place of its own internal junction
+net — fully self-consistent wire geometry, invisible to electrical simulation and topology
+fidelity alike; closed with an explicit PUN/PDN terminal-domain allowlist, junction-ownership
+validation, and a full net-inventory closure check. All fixed, with regression tests, before
+Phase B began. **Phase B (SVG rendering, `presenter.py`/`webui.py` wiring, "Download SVG",
+acceptance tests 8 and 10) is not yet started.** This entry exists specifically so the schematic
 renderer described below was *not* built until this decision (and its acceptance tests) was
 reviewed and approved — a diagram encodes electrical connectivity and can be technically wrong
 even while looking attractive, which is a materially different risk than the wording-only

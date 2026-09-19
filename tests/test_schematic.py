@@ -15,6 +15,7 @@ from ohmwork.parser import parse
 from ohmwork.schematic import (
     CELL,
     Device,
+    Junction,
     Point,
     WireSegment,
     _validate_topology_fidelity,
@@ -610,4 +611,106 @@ def test_regression_device_literal_mismatched():
     broken_dev = dataclasses.replace(dev, literal="zzz")
     broken = dataclasses.replace(layout, devices=tuple(broken_dev if d.id == dev.id else d for d in layout.devices))
     with pytest.raises(RuntimeError, match="does not match its structured gate identity"):
+        validate_layout_geometry(broken)
+
+
+# --- Second corrective round: terminal-domain / net-inventory closure ------
+#
+# A fifth gap: nothing restricted which KIND of net a core device's
+# source_net/drain_net could reference. A PDN device's diffusion terminal
+# could be wired to reuse a primary GATE net in place of its own internal
+# junction net -- fully self-consistent geometry (no dangling, no exact-point
+# short, a real Junction where needed), so it slipped past every existing
+# check. simulate_layout only reads gate_net for conduction (never notices a
+# source/drain terminal quietly sharing a gate net's identity), and topology
+# fidelity only cares about graph shape, not which net-kind backs each edge.
+
+
+def test_regression_gate_net_reused_as_pdn_diffusion_junction():
+    """Exact reproduction: NAND3's internal PDN junction pdn_j0 (which joins
+    the 'a' and 'b' PDN transistors) is replaced by the primary gate net
+    net_a, with fully consistent wire geometry (including the two Junctions
+    the new degree-3 points require) connecting the diffusion terminals into
+    net_a's existing gate-rail structure. Electrical simulation and topology
+    fidelity both still pass; only the terminal-domain check catches it."""
+    var_order, minterms, layout = _built_layout()
+    m3 = next(d for d in layout.devices if d.id == "M3")
+    m4 = next(d for d in layout.devices if d.id == "M4")
+    assert m3.source_net == "pdn_j0" and m4.drain_net == "pdn_j0"
+
+    new_devices = tuple(
+        dataclasses.replace(d, source_net="net_a")
+        if d.id == "M3"
+        else dataclasses.replace(d, drain_net="net_a")
+        if d.id == "M4"
+        else d
+        for d in layout.devices
+    )
+    new_wires = tuple(
+        dataclasses.replace(w, net_id="net_a") if w.net_id == "pdn_j0" else w for w in layout.wires
+    ) + (
+        WireSegment(id="WX1", net_id="net_a", p1=m3.source_point, p2=Point(m3.source_point.x, m3.gate_point.y)),
+        WireSegment(
+            id="WX2",
+            net_id="net_a",
+            p1=Point(m3.source_point.x, m3.gate_point.y),
+            p2=m3.gate_point,
+        ),
+    )
+    new_nets = tuple(n for n in layout.nets if n.id != "pdn_j0")
+    new_junctions = layout.junctions + (
+        Junction(id="JX1", net_id="net_a", point=m3.gate_point),
+        Junction(id="JX2", net_id="net_a", point=m3.source_point),
+    )
+    broken = dataclasses.replace(
+        layout, devices=new_devices, wires=new_wires, nets=new_nets, junctions=new_junctions
+    )
+
+    # confirm it's a genuinely clean reproduction: both other gates still pass
+    assert verify_layout(broken, var_order, minterms).passed
+    _validate_topology_fidelity(broken, synthesize(var_order, minterms))
+
+    with pytest.raises(RuntimeError, match="must never reference a gate net"):
+        validate_layout_geometry(broken)
+
+
+def test_regression_pun_device_uses_gnd():
+    var_order, minterms, layout = _built_layout()
+    dev = next(d for d in layout.devices if d.role == "pun" and d.source_net == "VDD")
+    broken_dev = dataclasses.replace(dev, source_net=layout.gnd_net_id)
+    broken = dataclasses.replace(layout, devices=tuple(broken_dev if d.id == dev.id else d for d in layout.devices))
+    with pytest.raises(RuntimeError, match="not VDD/OUT"):
+        validate_layout_geometry(broken)
+
+
+def test_regression_pdn_device_uses_vdd():
+    var_order, minterms, layout = _built_layout()
+    dev = next(d for d in layout.devices if d.role == "pdn" and d.source_net == "GND")
+    broken_dev = dataclasses.replace(dev, source_net=layout.vdd_net_id)
+    broken = dataclasses.replace(layout, devices=tuple(broken_dev if d.id == dev.id else d for d in layout.devices))
+    with pytest.raises(RuntimeError, match="not OUT/GND"):
+        validate_layout_geometry(broken)
+
+
+def test_regression_orphan_unexpected_net():
+    # An orphaned gate_primary net is caught by the more specific reverse-mapping
+    # check (it must appear in primary_nets) before ever reaching the generic
+    # "unused or unexpected" fallback -- both are part of the same net-inventory
+    # closure and either is a correct rejection of an orphaned net.
+    from ohmwork.schematic import Net
+
+    var_order, minterms, layout = _built_layout()
+    orphan = Net(id="net_orphan", label="orphan", kind="gate_primary")
+    broken = dataclasses.replace(layout, nets=layout.nets + (orphan,))
+    with pytest.raises(RuntimeError, match="does not appear in primary_nets"):
+        validate_layout_geometry(broken)
+
+
+def test_regression_duplicate_vdd_net():
+    from ohmwork.schematic import Net
+
+    var_order, minterms, layout = _built_layout()
+    duplicate = Net(id="VDD2", label="VDD", kind="rail_vdd")
+    broken = dataclasses.replace(layout, nets=layout.nets + (duplicate,))
+    with pytest.raises(RuntimeError, match="expected exactly one VDD net"):
         validate_layout_geometry(broken)
