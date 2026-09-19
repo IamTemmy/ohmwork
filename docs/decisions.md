@@ -384,15 +384,17 @@ since hash randomization is fixed per-process and can't be exercised any other w
 
 ---
 
-## D17 — DRAFT, not yet implemented. What does a real transistor-level schematic show, and how is it built?
+## D17 — APPROVED, not yet implemented. What does a real transistor-level schematic show, and how is it built?
 
-**Status:** proposed, under review. This entry exists specifically so the schematic renderer
-described below is *not* built until this decision (and its acceptance tests) is reviewed and
-approved — a diagram encodes electrical connectivity and can be technically wrong even while
-looking attractive, which is a materially different risk than the wording-only presentation
-work in D-adjacent UI commits. The current CLI/Advanced Report ASCII schematic (a
+**Status:** approved for implementation (2026-09-18, after two review rounds — see the
+revision history at the end of this entry). This entry exists specifically so the schematic
+renderer described below was *not* built until this decision (and its acceptance tests) was
+reviewed and approved — a diagram encodes electrical connectivity and can be technically wrong
+even while looking attractive, which is a materially different risk than the wording-only
+presentation work in D-adjacent UI commits. That review is now done; implementation may begin
+against the acceptance tests below. The current CLI/Advanced Report ASCII schematic (a
 VDD/PUN-expression/F/PDN-expression/GND text block) stays exactly as it is regardless of this
-entry's outcome — this is an *additional* presentation, not a replacement.
+entry — this is an *additional* presentation, not a replacement.
 
 **Trigger:** real coursework dogfooding of all three M1b acceptance-test gates through the
 actual web UI (CPE 635 Exam #1, 2026-09-18) surfaced two independent, user-identified gaps in
@@ -500,14 +502,33 @@ charter's M1a/M1b acceptance tests played for those milestones):
    discipline — exhaustive simulation before trusting a network — applied a second time, to
    the model that will actually be drawn.
 8. **A semantic model-to-SVG bridge test**, so a correct layout model rendered incorrectly is
-   still caught. Every device and net in the layout model must appear exactly once in the
+   still caught — and so "trustworthy-looking metadata" isn't mistaken for a rendering that's
+   actually correct. Every device and net in the layout model must appear exactly once in the
    rendered SVG, located by its stable identifier (point 7 above), with the correct device
-   type (PMOS/NMOS), gate label, and net endpoints. This assertion works against the SVG's
-   semantic structure (element type, attributes, `data-*` identifiers) — it is **not** a pixel
-   comparison and **not** an exact-SVG-string snapshot, both of which would be fragile to
-   unrelated visual changes and wouldn't actually verify electrical correctness; stable
-   semantic DOM assertions are the right tool here precisely because they survive a purely
-   cosmetic layout tweak while still catching a real model-to-SVG bug.
+   type (PMOS/NMOS) and gate label — **and** the emitted geometry itself must be checked, not
+   just those labels:
+   - For every model device terminal and wire segment, the SVG element's own coordinates/
+     endpoints must match the layout model's corresponding values.
+   - Two endpoints the model considers part of the same net must visibly meet in the SVG (the
+     same point, or an explicit junction-dot element at that point) — a `data-net-id` match
+     alone doesn't prove the drawn wires actually connect there.
+   - No conductive wire exists in the SVG that isn't backed by a wire segment in the model —
+     ruling out an accidental extra connection the model never specified.
+   - A PMOS device's SVG markup includes its gate-bubble element; an NMOS device's does not —
+     checked structurally (the element's presence/absence and type), not by how it looks
+     rendered.
+   - "Download SVG" (point 7) must produce its file from this same checked representation —
+     not a separately-serialized copy that could drift — and that downloaded SVG must pass
+     these same semantic device/net/geometry assertions, not just the inline one.
+
+   All of the above are structural DOM/attribute/coordinate assertions against the rendered
+   SVG's own markup — this is **not** a pixel comparison and **not** an exact-SVG-string
+   snapshot, both of which would be fragile to unrelated visual changes and wouldn't actually
+   verify electrical correctness; stable semantic assertions (including comparing the actual
+   coordinate values the model specifies) are the right tool here precisely because they
+   survive a purely cosmetic layout tweak while still catching a real model-to-SVG bug —
+   including the specific failure mode of correct-looking `data-*` labels sitting on
+   incorrectly-connected or incorrectly-shaped geometry.
 9. **Layout-model tests are structural, not pixel-based.** Tests 1-3, 5, and 6 above assert
    against the layout model's own data (transistor positions/types/gate-labels/connectivity,
    symbol counts), the same principle test 8 extends to the rendered SVG itself.
@@ -538,4 +559,11 @@ facts D7 already verified, as opposed to merely producing a plausible-looking pi
 **Date:** 2026-09-18 (proposed). **Revised:** 2026-09-18, incorporating a first review round's
 three amendments (inverter rendered at transistor level, named nets/terminals with per-vector
 connectivity verification, and a semantic — not pixel/snapshot — model-to-SVG bridge test).
-Still not approved or implemented.
+**Revised again:** 2026-09-18, a second review round approved the substance of those three
+amendments and required one further clarification to acceptance test 8: the semantic bridge
+must check the SVG's actual emitted geometry (device-terminal and wire-segment coordinates,
+same-net endpoints visibly meeting or sharing a junction, no unmodeled extra wire, PMOS gate
+bubble present/NMOS absent) — not only `data-*` identifiers, which could sit on incorrectly-
+connected or incorrectly-shaped geometry and still look "trustworthy." Also clarified that
+"Download SVG" must be produced from, and pass, the same checked representation and semantic
+assertions as the inline SVG. **Approved for implementation** as of this revision.
