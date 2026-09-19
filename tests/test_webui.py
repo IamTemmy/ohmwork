@@ -131,6 +131,40 @@ def test_api_tt_custom_cols(server_url):
     assert "x'" in result["output"]
 
 
+def test_api_tt_result_field_matches_structured_view(server_url):
+    # M1.3: the additive `result` field for the HTML table, alongside the
+    # unchanged legacy `output` text field.
+    result = post_json(server_url + "/api/tt", {"expression": "xy + xy'"})
+    assert result["ok"] is True
+    assert "output" in result  # legacy field still present, additive change
+    view = result["result"]
+    assert view["headers"] == ["x", "y", "y'", "xy", "xy'", "F"]
+    assert view["output_column_index"] == 5
+    assert len(view["rows"]) == 4
+    assert view["rows"][0] == [False, False, True, False, False, False]
+    assert view["simplified_function"] == "F = x"
+
+
+def test_api_tt_derives_exactly_once_per_request(server_url, monkeypatch):
+    # M1.3: /api/tt must build the derivation table exactly once per
+    # request -- both `output` and `result` come from that same call, not
+    # two independent derivations (mirrors test_api_synth_exactly_once_
+    # per_request's guarantee for synth below).
+    import ohmwork.api as api_module
+
+    calls = []
+    original = api_module.build_table
+
+    def counting_build_table(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(api_module, "build_table", counting_build_table)
+    result = post_json(server_url + "/api/tt", {"expression": "xy + xy'"})
+    assert result["ok"] is True
+    assert len(calls) == 1
+
+
 # --- /api/synth -------------------------------------------------------------------
 
 

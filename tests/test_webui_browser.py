@@ -72,7 +72,7 @@ def _switch_tab(page, tab: str) -> None:
 def _run_derivation(page, expression: str) -> None:
     page.fill("#tt-expr", expression)
     page.click("#panel-tt button.submit")
-    page.wait_for_selector("#tt-output:not(.empty)")
+    page.wait_for_selector("#tt-result:not(.empty)")
 
 
 def _build_q1_grid(page) -> None:
@@ -152,10 +152,10 @@ def _resolve_fetch(page, index: int, response_body: dict) -> None:
 
 def test_derivation_result_hidden_after_switching_to_synthesis(page):
     _run_derivation(page, "xy + xy'")
-    assert page.is_visible("#tt-output")
+    assert page.is_visible("#tt-result")
 
     _switch_tab(page, "synth")
-    assert not page.is_visible("#tt-output")
+    assert not page.is_visible("#tt-result")
 
 
 def test_synth_result_hidden_after_switching_to_derivation(page):
@@ -172,7 +172,7 @@ def test_each_panel_keeps_its_own_result_across_tab_switches(page):
     _submit_q1(page)
 
     _switch_tab(page, "tt")
-    assert "F = x" in page.text_content("#tt-output")
+    assert page.text_content("#tt-function-line") == "F = x"
 
     _switch_tab(page, "synth")
     assert page.is_visible("#synth-result")
@@ -434,7 +434,7 @@ def test_derivation_new_problem_focuses_its_input_field(page):
     page.click("#tt-new-problem")
     assert page.evaluate("document.activeElement.id") == "tt-expr"
     assert page.input_value("#tt-expr") == ""
-    assert not page.is_visible("#tt-output")
+    assert not page.is_visible("#tt-result")
 
 
 def test_new_problem_in_synthesis_does_not_touch_derivation_tab(page):
@@ -445,7 +445,7 @@ def test_new_problem_in_synthesis_does_not_touch_derivation_tab(page):
 
     _switch_tab(page, "tt")
     assert page.input_value("#tt-expr") == "xy + xy'"
-    assert "F = x" in page.text_content("#tt-output")
+    assert page.text_content("#tt-function-line") == "F = x"
 
 
 def test_new_problem_in_derivation_does_not_touch_synthesis_tab(page):
@@ -558,17 +558,23 @@ def test_new_problem_preserves_manual_entry_open_state_and_table_mode(page):
 
 def test_editing_tt_expression_after_a_result_hides_the_stale_output(page):
     _run_derivation(page, "xy + xy'")
-    assert page.is_visible("#tt-output")
+    assert page.is_visible("#tt-result")
 
     page.fill("#tt-expr", "a+b+c")
 
-    assert not page.is_visible("#tt-output")
+    assert not page.is_visible("#tt-result")
 
 
-def test_changing_tt_format_after_a_result_hides_the_stale_output(page):
+def test_changing_tt_format_does_not_hide_the_table(page):
+    # M1.3: Terminal/Markdown/LaTeX became copy/export-only preferences --
+    # the visible table doesn't depend on them, so changing the radio must
+    # NOT clear the table the way editing the expression or columns does
+    # (that would previously have been correct, back when the format
+    # radios controlled the *visible* output).
     _run_derivation(page, "xy + xy'")
     page.check('input[name="tt-format"][value="md"]')
-    assert not page.is_visible("#tt-output")
+    assert page.is_visible("#tt-result")
+    assert page.text_content("#tt-function-line") == "F = x"
 
 
 # --- In-flight request races -----------------------------------------------------------
@@ -661,7 +667,7 @@ def test_editing_during_inflight_tt_request_prevents_stale_render(page):
     _resolve_fetch(page, 0, real_response)
     page.wait_for_timeout(200)
 
-    assert not page.is_visible("#tt-output")
+    assert not page.is_visible("#tt-result")
     assert page.input_value("#tt-expr") == "a+b"
 
 
@@ -677,5 +683,147 @@ def test_new_problem_during_inflight_tt_request_prevents_stale_render(page):
     _resolve_fetch(page, 0, real_response)
     page.wait_for_timeout(200)
 
-    assert not page.is_visible("#tt-output")
+    assert not page.is_visible("#tt-result")
+    assert page.input_value("#tt-expr") == ""
+
+
+# --- M1.3: structured derivation table -------------------------------------------
+#
+# The Derivation table tab used to render its output as a monospace
+# box-drawing <pre> (like `ohmwork tt` itself), while the Synthesis tab's
+# input grid was already a clean HTML table -- a real inconsistency a user
+# pointed out after dogfooding all three exam questions. Fixed by giving
+# `tt` the same presenter-layer treatment `synth` got in M1.2: the table
+# is now always the visible result; Terminal/Markdown/LaTeX became
+# copy/export-only formats (covered above), fetched fresh on demand.
+
+
+def _tt_table_header_labels(page) -> list[str]:
+    return page.locator("#tt-table-head th").all_text_contents()
+
+
+def _tt_table_row_cells(page, row_index: int) -> list[str]:
+    return page.locator("#tt-table-body tr").nth(row_index).locator("td").all_text_contents()
+
+
+def test_tt_table_shows_the_full_breakout_by_default(page):
+    _run_derivation(page, "xy + xy'")
+    assert _tt_table_header_labels(page) == ["x", "y", "y'", "xy", "xy'", "F"]
+    assert _tt_table_row_cells(page, 0) == ["0", "0", "1", "0", "0", "0"]
+    assert page.text_content("#tt-function-line") == "F = x"
+
+
+def test_tt_table_terse_columns(page):
+    page.check('input[name="tt-cols"][value="terse"]')
+    _run_derivation(page, "ab+c")
+    assert _tt_table_header_labels(page) == ["ab", "c", "F"]
+
+
+def test_tt_table_custom_columns(page):
+    page.check('input[name="tt-cols"][value="custom"]')
+    page.fill("#tt-cols-input", "x, x'")
+    _run_derivation(page, "x'y + xy'")
+    assert _tt_table_header_labels(page) == ["x", "x'", "F"]
+
+
+def test_tt_table_output_column_is_visually_distinguished(page):
+    _run_derivation(page, "xy + xy'")
+    output_th = page.locator("#tt-table-head th").last
+    assert "tt-output-col" in (output_th.get_attribute("class") or "")
+    output_td = page.locator("#tt-table-body tr").first.locator("td").last
+    assert "tt-output-col" in (output_td.get_attribute("class") or "")
+
+
+def test_tt_table_is_accessible(page):
+    _run_derivation(page, "xy + xy'")
+    assert page.get_attribute("#tt-table", "aria-label")
+    header_cells = page.locator("#tt-table-head th")
+    for i in range(header_cells.count()):
+        assert header_cells.nth(i).get_attribute("scope") == "col"
+
+
+def test_tt_table_wrapper_scrolls_horizontally(page):
+    _run_derivation(page, "xy + xy'")
+    overflow_x = page.evaluate(
+        "getComputedStyle(document.querySelector('.tt-table-wrap')).overflowX"
+    )
+    assert overflow_x == "auto"
+
+
+def test_tt_copy_formatted_output_terminal(page):
+    _run_derivation(page, "xy + xy'")
+    _hijack_clipboard(page)
+    copied = _click_and_read_copy(page, "#tt-copy-formatted")
+    assert copied.startswith("+---+")  # ASCII box-drawing
+    assert "F = x" in copied
+
+
+def test_tt_copy_formatted_output_markdown(page):
+    _run_derivation(page, "xy + xy'")
+    page.check('input[name="tt-format"][value="md"]')
+    _hijack_clipboard(page)
+    copied = _click_and_read_copy(page, "#tt-copy-formatted")
+    assert copied.startswith("|")
+    assert "F = x" in copied
+
+
+def test_tt_copy_formatted_output_latex(page):
+    _run_derivation(page, "xy + xy'")
+    page.check('input[name="tt-format"][value="latex"]')
+    _hijack_clipboard(page)
+    copied = _click_and_read_copy(page, "#tt-copy-formatted")
+    assert r"\begin{array}" in copied
+    assert "F = x" in copied
+
+
+def test_tt_copy_formatted_output_updates_the_preview(page):
+    _run_derivation(page, "xy + xy'")
+    page.check('input[name="tt-format"][value="md"]')
+    _hijack_clipboard(page)
+    _click_and_read_copy(page, "#tt-copy-formatted")
+    page.click("#tt-preview-details summary")
+    assert page.text_content("#tt-formatted-preview").startswith("|")
+
+
+def test_tt_copy_formatted_output_shows_copied_feedback(page):
+    _run_derivation(page, "xy + xy'")
+    _hijack_clipboard(page)
+    page.click("#tt-copy-formatted")
+    page.wait_for_selector("#tt-copy-formatted.copied")
+    assert page.text_content("#tt-copy-formatted") == "Copied!"
+
+
+def test_editing_during_inflight_tt_copy_prevents_stale_clipboard_write(page):
+    _run_derivation(page, "xy + xy'")
+    real_response = _real_json(page, "/api/tt", {"expression": "xy + xy'", "md": True})
+
+    page.check('input[name="tt-format"][value="md"]')
+    _hijack_clipboard(page)
+    _install_fetch_mock(page)
+
+    page.click("#tt-copy-formatted")  # copy request queued, stays pending
+    page.fill("#tt-expr", "a+b")  # edits mid-flight -- invalidates the pending copy
+
+    _resolve_fetch(page, 0, real_response)
+    page.wait_for_timeout(200)
+
+    assert page.evaluate("window.__copiedText") is None
+    assert page.text_content("#tt-copy-formatted") == "Copy formatted output"
+
+
+def test_new_problem_during_inflight_tt_copy_resets_the_button(page):
+    _run_derivation(page, "xy + xy'")
+    real_response = _real_json(page, "/api/tt", {"expression": "xy + xy'"})
+
+    _hijack_clipboard(page)
+    _install_fetch_mock(page)
+
+    page.click("#tt-copy-formatted")  # copy request queued, stays pending
+    page.click("#tt-new-problem")
+
+    _resolve_fetch(page, 0, real_response)
+    page.wait_for_timeout(200)
+
+    assert page.evaluate("window.__copiedText") is None
+    assert page.text_content("#tt-copy-formatted") == "Copy formatted output"
     assert page.input_value("#tt-expr") == ""

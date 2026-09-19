@@ -18,14 +18,63 @@ belongs here.
 
 from __future__ import annotations
 
-from ohmwork.derivation import all_assignments, build_table, evaluate, variables_in_order
-from ohmwork.expr import render as render_expr
+from dataclasses import dataclass
+
+from ohmwork.derivation import DerivationTable, all_assignments, build_table, evaluate, variables_in_order
+from ohmwork.expr import Expr, render as render_expr
 from ohmwork.parser import parse
 from ohmwork.render import format_latex, format_markdown, format_terminal
 from ohmwork.report import format_synth_report
 from ohmwork.simplify import simplify
 from ohmwork.synth import SynthesisResult, synthesize
 from ohmwork.truth_table import parse_index_list, parse_table_string, parse_var_list
+
+
+@dataclass(frozen=True)
+class DerivationResult:
+    """The raw, structured result of deriving a table from an expression:
+    the ``DerivationTable`` object graph and the simplified final
+    expression. Both ``render_tt``/``format_tt_report`` (the CLI's text)
+    and M1.3's ``presenter.build_tt_view`` (the web UI's structured table
+    view) build on this single object, so a given request is derived
+    exactly once — mirroring ``SynthesisResult``'s role for ``synth``."""
+
+    table: DerivationTable
+    simplified: Expr
+
+
+def derive_from_input(
+    expression: str,
+    *,
+    terse: bool = False,
+    cols: list[str] | None = None,
+) -> DerivationResult:
+    """Parse the expression, build its derivation table, and simplify the
+    output column — the raw, structured result, not text. Raises
+    ``ParseError`` (bad expression) or ``ValueError`` (bad terse/cols
+    combination, or an unknown column)."""
+    ast = parse(expression)
+    table = build_table(ast, terse=terse, cols=cols)
+    simplified = simplify(table.variables, table.output.values)
+    return DerivationResult(table=table, simplified=simplified)
+
+
+def format_tt_report(result: DerivationResult, *, md: bool = False, latex: bool = False) -> str:
+    """The full text ``ohmwork tt`` prints, given an already-computed
+    ``DerivationResult``: the table (in whichever format) followed by
+    ``F = ...``. Shared by ``render_tt`` (the CLI) and the web UI's
+    ``/api/tt`` handler, so a derivation computed once by
+    ``derive_from_input`` can be rendered as both this text and
+    ``presenter.build_tt_view``'s structured JSON without deriving it
+    twice."""
+    table = result.table
+    if latex:
+        body = format_latex(table)
+    elif md:
+        body = format_markdown(table)
+    else:
+        body = format_terminal(table)
+    return f"{body}\nF = {render_expr(result.simplified)}"
 
 
 def render_tt(
@@ -39,19 +88,8 @@ def render_tt(
     """The full text ``ohmwork tt`` prints: the table (in whichever format)
     followed by ``F = ...``. Raises ``ParseError`` (bad expression) or
     ``ValueError`` (bad terse/cols combination, or an unknown column)."""
-    ast = parse(expression)
-    table = build_table(ast, terse=terse, cols=cols)
-
-    if latex:
-        body = format_latex(table)
-    elif md:
-        body = format_markdown(table)
-    else:
-        body = format_terminal(table)
-
-    var_order = variables_in_order(ast)
-    simplified = simplify(var_order, table.output.values)
-    return f"{body}\nF = {render_expr(simplified)}"
+    result = derive_from_input(expression, terse=terse, cols=cols)
+    return format_tt_report(result, md=md, latex=latex)
 
 
 def resolve_truth_table(

@@ -7,9 +7,11 @@ Chromium smoke test (`tests/test_webui_browser.py`, needs the `browser`
 extra — `pip install -e ".[dev,browser]" && playwright install chromium`)
 covers the highest-value subset of actual clicking/rendering/clipboard
 behavior: tab/result isolation, Q1's single combined AOI/OAI row, grid
-cycling and submission, collapse behavior, error-state cleanup, and full
-Copy Solution/Copy Advanced Report content. Items below marked **(automated)**
-are covered there — re-checking them by hand is optional, not required.
+cycling and submission, collapse behavior, error-state cleanup, full Copy
+Solution/Copy Advanced Report content, the Derivation table's structured
+HTML table (M1.3) across all three column modes, and its Copy formatted
+output. Items below marked **(automated)** are covered there — re-checking
+them by hand is optional, not required.
 
 This checklist covers the rest: what neither structural pytest nor the one
 Chromium smoke test reaches (Q2/Q3-specific cases, light/dark mode,
@@ -26,9 +28,19 @@ Open the printed URL yourself, or drive it with a real browser tool.
 
 ## Derivation table tab
 
-- [ ] `xy + xy'` renders the full breakout table and `F = x`.
-- [ ] Switching format (Terminal/Markdown/LaTeX) changes the output.
+- [ ] `xy + xy'` renders as a clean HTML table (headers x, y, y', xy, xy', F) with the
+      output column (F) visually distinguished, and `F = x` above it. **(automated)**
 - [ ] Switching to "Custom columns" reveals the columns field; switching away hides it.
+- [ ] Full breakout / Terse / Custom columns each produce the expected header set.
+      **(automated)**
+- [ ] A wide derivation (many columns) scrolls horizontally rather than breaking the page
+      layout. **(automated: wrapper CSS, not a visual check of an actual wide table)**
+- [ ] Terminal/Markdown/LaTeX (under "Export", inside the result) are copy-only formats now
+      — switching them does **not** change or clear the visible table. **(automated)**
+- [ ] "Copy formatted output" copies the selected format's text (verify each of the three)
+      and shows "Copied!" feedback; the collapsed "Formatted output preview" reflects the
+      same text after copying. **(automated: content and feedback, not the click-triggered
+      "Copying…" transition itself)**
 
 ## Synthesis tab — grid input
 
@@ -111,16 +123,21 @@ For each of Q1 (`(ABC)'`), Q2 (`A,B,C,D` / `1000000000000000`), Q3 (`(ABC+D)'`):
       the next Synthesize actually reads, so it's a material input-mode
       change like From expression/From truth table. **(automated, both
       directions)**
-- [ ] Editing the Derivation table's expression, or changing its
-      format/columns mode, after a result is showing clears that result
-      too. **(automated: expression edit and format change)**
+- [ ] Editing the Derivation table's expression, or changing its columns
+      mode (Full/Terse/Custom), after a result is showing clears that
+      result too. Changing the Export format (Terminal/Markdown/LaTeX)
+      does **not** — it no longer affects the visible table (M1.3).
+      **(automated)**
 - [ ] If you submit, then edit the form (or click New problem) before the
       response comes back, the eventual response must never repopulate
       the old or a stale answer — the display should reflect only your
       latest edit or the cleared state. Same for submitting twice in a
       row where the responses arrive out of order: the second submission
-      always wins, regardless of network timing. **(automated via a
-      controllable mocked fetch, for both Synthesis and Derivation table)**
+      always wins, regardless of network timing. Same guarantee for
+      "Copy formatted output"'s own fetch — editing the form or clicking
+      New problem while a copy is in flight must not write stale text to
+      the clipboard. **(automated via a controllable mocked fetch, for
+      Synthesis, Derivation table, and Derivation table's copy button)**
 
 ## Cross-cutting
 

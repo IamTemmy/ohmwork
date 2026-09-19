@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from ohmwork.api import DerivationResult
 from ohmwork.expr import Expr, Not, render as render_expr
 from ohmwork.network import Network, Parallel, Series, Transistor, render_network
 from ohmwork.synth import Candidate, SynthesisResult
@@ -271,4 +272,22 @@ def build_synth_view(
             "shorted": list(v.shorted),
             "dont_care_assignments": {str(i): val for i, val in sorted(v.dont_care_assignments.items())},
         },
+    }
+
+
+def build_tt_view(result: DerivationResult) -> dict:
+    """The student-facing structured view of a derivation result (M1.3) —
+    a *second presentation* of the same ``DerivationResult``
+    ``api.format_tt_report`` already renders as text, not a separate
+    computation. Every field here reads a fact directly off the already-
+    computed ``DerivationTable`` object graph (column labels, per-row cell
+    values) or the already-simplified output expression; nothing is
+    inferred or reparsed from rendered text, matching this module's design
+    boundary for the synth view above."""
+    table = result.table
+    return {
+        "headers": [c.label for c in table.columns],
+        "output_column_index": len(table.columns) - 1,
+        "rows": [[bool(col.values[i]) for col in table.columns] for i in range(len(table.rows))],
+        "simplified_function": f"F = {render_expr(result.simplified)}",
     }

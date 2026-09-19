@@ -15,11 +15,11 @@ import sys
 import webbrowser
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
-from ohmwork.api import render_tt, synthesize_from_input
+from ohmwork.api import derive_from_input, format_tt_report, synthesize_from_input
 from ohmwork.derivation import variables_in_order
 from ohmwork.errors import ParseError
 from ohmwork.parser import parse
-from ohmwork.presenter import build_synth_view, validate_output_name
+from ohmwork.presenter import build_synth_view, build_tt_view, validate_output_name
 from ohmwork.report import format_synth_report
 
 # The server binds to loopback only (D-adjacent: see run_server's default
@@ -91,13 +91,32 @@ _PAGE = r"""<!doctype html>
     border-radius: 6px; border: 1px solid #8884; background: transparent; color: inherit; font-family: inherit;
   }
   button.btn-secondary:hover { opacity: 1; background: #8882; }
-  pre#tt-output {
+  /* Derivation result (M1.3) */
+  #tt-error {
+    white-space: pre-wrap; background: #8881; color: #c0392b; padding: 1rem;
+    border-radius: 6px; margin-top: 1.25rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .85rem;
+  }
+  #tt-error.empty { display: none; }
+  #tt-result.empty { display: none; }
+  #tt-result { margin-top: 1.25rem; }
+  .tt-function-line {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 1.05rem; font-weight: 600;
+  }
+  .tt-table-wrap { overflow-x: auto; margin-top: .9rem; }
+  table.tt-grid { border-collapse: collapse; font-size: .88rem; }
+  table.tt-grid th, table.tt-grid td {
+    border: 1px solid #8886; padding: .35rem .7rem; text-align: center; white-space: nowrap;
+  }
+  table.tt-grid th { font-weight: 600; background: #8881; }
+  table.tt-grid th.tt-output-col, table.tt-grid td.tt-output-col {
+    background: #5a82ff14; font-weight: 700;
+  }
+  #tt-formatted-preview {
     white-space: pre-wrap; background: #8881; padding: 1rem; border-radius: 6px;
-    margin-top: 1.25rem; min-height: 1.5rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    margin-top: .75rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: .85rem; overflow-x: auto;
   }
-  pre#tt-output.error { color: #c0392b; }
-  pre#tt-output.empty { display: none; }
   .hint { font-size: .78rem; opacity: .6; margin-top: .2rem; }
 
   /* Truth-table grid */
@@ -187,12 +206,6 @@ _PAGE = r"""<!doctype html>
   </label>
 
   <div class="row">
-    <label><input type="radio" name="tt-format" value="terminal" checked> Terminal</label>
-    <label><input type="radio" name="tt-format" value="md"> Markdown</label>
-    <label><input type="radio" name="tt-format" value="latex"> LaTeX</label>
-  </div>
-
-  <div class="row">
     <label><input type="radio" name="tt-cols" value="full" checked> Full breakout</label>
     <label><input type="radio" name="tt-cols" value="terse"> Terse (product terms only)</label>
     <label><input type="radio" name="tt-cols" value="custom"> Custom columns</label>
@@ -206,7 +219,36 @@ _PAGE = r"""<!doctype html>
     <button type="button" class="btn-secondary" id="tt-new-problem">New problem</button>
   </div>
 
-  <pre id="tt-output" class="empty"></pre>
+  <pre id="tt-error" class="empty"></pre>
+
+  <div id="tt-result" class="empty">
+    <div class="tt-function-line" id="tt-function-line"></div>
+
+    <div class="tt-table-wrap">
+      <table class="tt-grid" id="tt-table" aria-label="Derivation table">
+        <thead><tr id="tt-table-head"></tr></thead>
+        <tbody id="tt-table-body"></tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h3>Export</h3>
+      <p class="hint">Terminal/Markdown/LaTeX are copy formats for the table above — the table
+        itself is always the current result.</p>
+      <div class="row">
+        <label><input type="radio" name="tt-format" value="terminal" checked> Terminal</label>
+        <label><input type="radio" name="tt-format" value="md"> Markdown</label>
+        <label><input type="radio" name="tt-format" value="latex"> LaTeX</label>
+      </div>
+      <div class="row copy-row">
+        <button type="button" class="copy-btn" id="tt-copy-formatted">Copy formatted output</button>
+      </div>
+      <details class="section" id="tt-preview-details">
+        <summary>Formatted output preview</summary>
+        <pre id="tt-formatted-preview"></pre>
+      </details>
+    </div>
+  </div>
 </form>
 
 <form class="panel" id="panel-synth">
@@ -461,37 +503,121 @@ async function postJSON(url, payload) {
 // still equals the live one -- otherwise it's an in-flight request that's
 // been superseded (by an edit, a New Problem, or a newer submission) and
 // must be discarded rather than repopulating stale text into the DOM.
+// ttCopyRequestToken is the same idea, but for "Copy formatted output"'s
+// own fetch specifically -- kept separate from ttRequestToken so a Run
+// and a Copy in flight at the same time don't cancel each other out
+// (they update different things: the table vs. the clipboard/preview).
 let ttRequestToken = 0;
+let ttCopyRequestToken = 0;
+let lastTtFormattedOutput = "";
 
-function clearTtOutputDisplay() {
-  ttRequestToken++;
-  const out = $("tt-output");
-  out.classList.add("empty");
-  out.classList.remove("error");
-  out.textContent = "";
-}
-$("tt-expr").addEventListener("input", clearTtOutputDisplay);
-$("tt-cols-input").addEventListener("input", clearTtOutputDisplay);
-document.querySelectorAll("input[name=tt-format]").forEach(r => r.addEventListener("change", clearTtOutputDisplay));
-document.querySelectorAll("input[name=tt-cols]").forEach(r => r.addEventListener("change", clearTtOutputDisplay));
-
-$("panel-tt").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const myToken = ++ttRequestToken;
+function buildTtPayload() {
   const colsMode = checkedValue("tt-cols");
-  const payload = {
+  return {
     expression: $("tt-expr").value,
     md: checkedValue("tt-format") === "md",
     latex: checkedValue("tt-format") === "latex",
     terse: colsMode === "terse",
     cols: colsMode === "custom" ? $("tt-cols-input").value : null,
   };
-  const result = await postJSON("/api/tt", payload);
+}
+
+function clearTtOutputDisplay() {
+  ttRequestToken++;
+  ttCopyRequestToken++;
+  $("tt-error").classList.add("empty");
+  $("tt-error").textContent = "";
+  $("tt-result").classList.add("empty");
+  $("tt-function-line").textContent = "";
+  clearChildren($("tt-table-head"));
+  clearChildren($("tt-table-body"));
+  $("tt-formatted-preview").textContent = "";
+  const previewDetails = $("tt-preview-details");
+  if (previewDetails) previewDetails.open = false;
+  document.querySelectorAll("#tt-result .copy-fallback").forEach(el => el.remove());
+  const copyBtn = $("tt-copy-formatted");
+  copyBtn.classList.remove("copied");
+  copyBtn.textContent = "Copy formatted output";
+  lastTtFormattedOutput = "";
+}
+$("tt-expr").addEventListener("input", clearTtOutputDisplay);
+$("tt-cols-input").addEventListener("input", clearTtOutputDisplay);
+document.querySelectorAll("input[name=tt-cols]").forEach(r => r.addEventListener("change", clearTtOutputDisplay));
+// tt-format (Terminal/Markdown/LaTeX) is a copy/export preference now, not
+// something the visible table depends on -- see the M1.3 comment on
+// renderTtResult below -- so changing it deliberately does NOT clear the
+// table the way editing the expression or columns does.
+
+function renderTtResult(view, rawOutput) {
+  $("tt-function-line").textContent = view.simplified_function;
+
+  const headRow = $("tt-table-head");
+  clearChildren(headRow);
+  view.headers.forEach((label, i) => {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.textContent = label;
+    if (i === view.output_column_index) th.classList.add("tt-output-col");
+    headRow.appendChild(th);
+  });
+
+  const tbody = $("tt-table-body");
+  clearChildren(tbody);
+  view.rows.forEach(rowValues => {
+    const tr = document.createElement("tr");
+    rowValues.forEach((cellValue, i) => {
+      const td = document.createElement("td");
+      td.textContent = cellValue ? "1" : "0";
+      if (i === view.output_column_index) td.classList.add("tt-output-col");
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+
+  lastTtFormattedOutput = rawOutput;
+  $("tt-formatted-preview").textContent = rawOutput;
+}
+
+$("panel-tt").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const myToken = ++ttRequestToken;
+  const result = await postJSON("/api/tt", buildTtPayload());
   if (myToken !== ttRequestToken) return; // superseded while this request was in flight
-  const out = $("tt-output");
-  out.classList.remove("empty");
-  out.classList.toggle("error", !result.ok);
-  out.textContent = result.ok ? result.output : "error: " + result.error;
+  const errEl = $("tt-error");
+  const resEl = $("tt-result");
+  if (!result.ok) {
+    errEl.classList.remove("empty");
+    errEl.textContent = "error: " + result.error;
+    resEl.classList.add("empty");
+    return;
+  }
+  errEl.classList.add("empty");
+  errEl.textContent = "";
+  resEl.classList.remove("empty");
+  renderTtResult(result.result, result.output);
+});
+
+// --- "Copy formatted output" ------------------------------------------------------
+//
+// The visible table is always the current result (M1.3); Terminal/
+// Markdown/LaTeX only pick what this button fetches and copies. It always
+// asks the server fresh -- the client never reimplements render.py's
+// formatting -- guarded by its own token so an edit, New Problem, or a
+// second click supersedes an in-flight copy rather than letting a stale
+// fetch overwrite the clipboard or the preview after the user's moved on.
+
+$("tt-copy-formatted").addEventListener("click", async () => {
+  const btn = $("tt-copy-formatted");
+  const original = "Copy formatted output";
+  const myToken = ++ttCopyRequestToken;
+  btn.textContent = "Copying…";
+  const result = await postJSON("/api/tt", buildTtPayload());
+  if (myToken !== ttCopyRequestToken) return; // superseded; clearTtOutputDisplay already reset the button
+  btn.textContent = original;
+  if (!result.ok) return; // the visible error state, if any, already reflects why
+  lastTtFormattedOutput = result.output;
+  $("tt-formatted-preview").textContent = result.output;
+  copyText(result.output, btn);
 });
 
 function resetTtForm() {
@@ -842,16 +968,17 @@ def _handle_tt(environ, start_response):
             },
         )
     try:
-        output = render_tt(
-            expression,
-            md=bool(body.get("md")),
-            latex=bool(body.get("latex")),
-            terse=bool(body.get("terse")),
-            cols=cols,
-        )
+        # M1.3: derived exactly once here -- both the legacy text
+        # (`output`, unchanged) and the new structured table view
+        # (`result`) are built from this same DerivationResult, never two
+        # independent derivations that could theoretically disagree (the
+        # same guarantee M1.2 already gives synth -- see _handle_synth).
+        derivation = derive_from_input(expression, terse=bool(body.get("terse")), cols=cols)
     except (ParseError, ValueError) as e:
         return _json_response(start_response, "200 OK", {"ok": False, "error": str(e)})
-    return _json_response(start_response, "200 OK", {"ok": True, "output": output})
+    output = format_tt_report(derivation, md=bool(body.get("md")), latex=bool(body.get("latex")))
+    view = build_tt_view(derivation)
+    return _json_response(start_response, "200 OK", {"ok": True, "output": output, "result": view})
 
 
 def _handle_synth(environ, start_response):

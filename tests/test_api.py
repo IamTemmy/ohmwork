@@ -7,7 +7,7 @@ import io
 
 import pytest
 
-from ohmwork.api import render_synth, render_tt, resolve_truth_table
+from ohmwork.api import derive_from_input, format_tt_report, render_synth, render_tt, resolve_truth_table
 from ohmwork.cli import main
 from ohmwork.errors import ParseError
 
@@ -37,6 +37,67 @@ def test_render_tt_rejects_ambiguous_input():
 def test_render_tt_terse_and_cols_are_mutually_exclusive_via_value_error():
     with pytest.raises(ValueError):
         render_tt("xy", terse=True, cols=["x"])
+
+
+# --- derive_from_input / format_tt_report (M1.3) --------------------------------
+#
+# derive_from_input is the structured counterpart to render_tt, mirroring
+# synthesize_from_input's role for synth: the raw DerivationResult both
+# render_tt (CLI text) and presenter.build_tt_view (the web UI's
+# structured table) build on, computed exactly once.
+
+
+def test_derive_from_input_matches_the_acceptance_test():
+    result = derive_from_input("xy + xy'")
+    assert [c.label for c in result.table.columns] == ["x", "y", "y'", "xy", "xy'", "F"]
+    assert result.table.variables == ["x", "y"]
+    from ohmwork.expr import render as render_expr
+
+    assert render_expr(result.simplified) == "x"
+
+
+def test_derive_from_input_rejects_ambiguous_input():
+    with pytest.raises(ParseError):
+        derive_from_input("A12")
+
+
+def test_derive_from_input_terse_and_cols_are_mutually_exclusive():
+    with pytest.raises(ValueError):
+        derive_from_input("xy", terse=True, cols=["x"])
+
+
+def test_derive_from_input_terse_columns():
+    result = derive_from_input("ab+c", terse=True)
+    assert [c.label for c in result.table.columns] == ["ab", "c", "F"]
+
+
+def test_derive_from_input_custom_columns():
+    result = derive_from_input("x'y + xy'", cols=["x", "x'"])
+    assert [c.label for c in result.table.columns] == ["x", "x'", "F"]
+
+
+def test_derive_from_input_xor_intermediate_column():
+    result = derive_from_input("x^y")
+    assert [c.label for c in result.table.columns] == ["x", "y", "F"]  # x^y IS F, no separate intermediate
+
+
+def test_derive_from_input_xor_as_a_sub_expression_gets_its_own_column():
+    result = derive_from_input("(x^y)z")
+    labels = [c.label for c in result.table.columns]
+    assert "x ^ y" in labels
+    assert labels[-1] == "F"
+
+
+def test_format_tt_report_matches_render_tt():
+    # format_tt_report is render_tt's own formatting logic, extracted so
+    # webui.py can call it on an already-computed DerivationResult without
+    # re-deriving -- must produce byte-identical text to the original
+    # single-call render_tt for the same inputs, in every format.
+    for kwargs in [{}, {"md": True}, {"latex": True}, {"terse": True}]:
+        result = derive_from_input("xy + xy'", terse=kwargs.get("terse", False))
+        assert format_tt_report(result, md=kwargs.get("md", False), latex=kwargs.get("latex", False)) == render_tt(
+            "xy + xy'", **kwargs
+        )
 
 
 def test_render_tt_output_is_byte_identical_to_the_cli(tmp_path):

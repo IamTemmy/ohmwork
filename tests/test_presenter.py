@@ -4,8 +4,8 @@ graph, never text parsed from the CLI report."""
 
 import pytest
 
-from ohmwork.api import synthesize_from_input
-from ohmwork.presenter import build_synth_view, validate_output_name
+from ohmwork.api import derive_from_input, synthesize_from_input
+from ohmwork.presenter import build_synth_view, build_tt_view, validate_output_name
 
 
 # --- validate_output_name ----------------------------------------------------
@@ -267,3 +267,63 @@ def test_minimality_summary_when_not_proven():
     view = build_synth_view(result)
     assert "not proven" in view["reasoning"]["minimality_summary"].lower()
     assert view["reasoning"]["minimality_detail"] is None
+
+
+# --- build_tt_view (M1.3) -----------------------------------------------------
+#
+# The student-facing structured table view of a DerivationResult -- ordered
+# headers, ordered rows, the output column's index, and the simplified
+# function. Every field here reads a fact directly off the already-
+# computed DerivationTable; nothing is inferred or reparsed from rendered
+# text, the same design boundary as build_synth_view above.
+
+
+def test_build_tt_view_matches_the_acceptance_case():
+    result = derive_from_input("xy + xy'")
+    view = build_tt_view(result)
+    assert view["headers"] == ["x", "y", "y'", "xy", "xy'", "F"]
+    assert view["output_column_index"] == 5
+    assert view["simplified_function"] == "F = x"
+    assert len(view["rows"]) == 4
+    # D9/D10 row order: binary count, first-listed variable = MSB.
+    assert view["rows"] == [
+        [False, False, True, False, False, False],  # x=0,y=0
+        [False, True, False, False, False, False],  # x=0,y=1
+        [True, False, True, False, True, True],  # x=1,y=0
+        [True, True, False, True, False, True],  # x=1,y=1
+    ]
+
+
+def test_build_tt_view_terse_columns():
+    result = derive_from_input("ab+c", terse=True)
+    view = build_tt_view(result)
+    assert view["headers"] == ["ab", "c", "F"]
+    assert view["output_column_index"] == 2
+
+
+def test_build_tt_view_custom_columns():
+    result = derive_from_input("x'y + xy'", cols=["x", "x'"])
+    view = build_tt_view(result)
+    assert view["headers"] == ["x", "x'", "F"]
+    assert view["output_column_index"] == 2
+
+
+def test_build_tt_view_xor_intermediate_column():
+    result = derive_from_input("(x^y)z")
+    view = build_tt_view(result)
+    assert "x ^ y" in view["headers"]
+    assert view["headers"][-1] == "F"
+    assert view["output_column_index"] == len(view["headers"]) - 1
+
+
+def test_build_tt_view_row_count_matches_variable_count():
+    result = derive_from_input("a'bc + d")
+    view = build_tt_view(result)
+    assert len(view["rows"]) == 16  # 4 variables -> 2^4 rows
+    assert all(len(row) == len(view["headers"]) for row in view["rows"])
+
+
+def test_build_tt_view_simplified_function_for_a_non_trivial_expression():
+    result = derive_from_input("a'bc + ab'c + abc' + abc")  # simplifies to a majority-ish function
+    view = build_tt_view(result)
+    assert view["simplified_function"].startswith("F = ")
