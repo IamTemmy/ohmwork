@@ -522,31 +522,49 @@ function buildTtPayload() {
   };
 }
 
+function resetTtExportState() {
+  // The export/copy side only: the cached preview text, the copy button's
+  // state, any in-flight "Copy formatted output" fetch, and any copy
+  // fallback box. Kept separate from the table-clearing below so a
+  // tt-format change can invalidate a pending or already-shown copy
+  // *without* touching #tt-result, which is still a perfectly valid,
+  // unrelated table -- a ChatGPT review caught that changing the format
+  // radio didn't bump ttCopyRequestToken, so a Terminal copy fetch still
+  // in flight could land after switching to Markdown and silently
+  // overwrite the clipboard/preview with the wrong format's text; and
+  // even with no fetch in flight, the preview kept showing the
+  // previously-copied format after switching, which is just as
+  // misleading.
+  ttCopyRequestToken++;
+  document.querySelectorAll("#tt-result .copy-fallback").forEach(el => el.remove());
+  const copyBtn = $("tt-copy-formatted");
+  copyBtn.classList.remove("copied");
+  copyBtn.textContent = "Copy formatted output";
+  $("tt-formatted-preview").textContent = "";
+  const previewDetails = $("tt-preview-details");
+  if (previewDetails) previewDetails.open = false;
+  lastTtFormattedOutput = "";
+}
+document.querySelectorAll("input[name=tt-format]").forEach(r => r.addEventListener("change", resetTtExportState));
+
 function clearTtOutputDisplay() {
   ttRequestToken++;
-  ttCopyRequestToken++;
+  resetTtExportState();
   $("tt-error").classList.add("empty");
   $("tt-error").textContent = "";
   $("tt-result").classList.add("empty");
   $("tt-function-line").textContent = "";
   clearChildren($("tt-table-head"));
   clearChildren($("tt-table-body"));
-  $("tt-formatted-preview").textContent = "";
-  const previewDetails = $("tt-preview-details");
-  if (previewDetails) previewDetails.open = false;
-  document.querySelectorAll("#tt-result .copy-fallback").forEach(el => el.remove());
-  const copyBtn = $("tt-copy-formatted");
-  copyBtn.classList.remove("copied");
-  copyBtn.textContent = "Copy formatted output";
-  lastTtFormattedOutput = "";
 }
 $("tt-expr").addEventListener("input", clearTtOutputDisplay);
 $("tt-cols-input").addEventListener("input", clearTtOutputDisplay);
 document.querySelectorAll("input[name=tt-cols]").forEach(r => r.addEventListener("change", clearTtOutputDisplay));
 // tt-format (Terminal/Markdown/LaTeX) is a copy/export preference now, not
 // something the visible table depends on -- see the M1.3 comment on
-// renderTtResult below -- so changing it deliberately does NOT clear the
-// table the way editing the expression or columns does.
+// renderTtResult below -- so changing it deliberately does NOT clear or
+// hide the table the way editing the expression or columns does. It only
+// resets the export state above.
 
 function renderTtResult(view, rawOutput) {
   $("tt-function-line").textContent = view.simplified_function;

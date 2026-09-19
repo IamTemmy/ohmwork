@@ -827,3 +827,71 @@ def test_new_problem_during_inflight_tt_copy_resets_the_button(page):
     assert page.evaluate("window.__copiedText") is None
     assert page.text_content("#tt-copy-formatted") == "Copy formatted output"
     assert page.input_value("#tt-expr") == ""
+
+
+# --- Export-state race: changing tt-format mid-copy ------------------------------------
+#
+# The bug (ChatGPT review of d9a1e03): changing tt-format didn't bump
+# ttCopyRequestToken, so a Terminal copy fetch still in flight when the
+# user switched to Markdown could land afterward and silently overwrite
+# the clipboard/preview with the wrong format's text. Separately, even
+# with nothing in flight, switching format left the preview showing
+# whatever was last copied in the *previous* format. Fixed by
+# resetTtExportState(), wired to tt-format's own change event -- it must
+# NOT touch #tt-result, which is an unrelated, still-valid table.
+
+
+def test_changing_format_during_inflight_copy_prevents_stale_clipboard_write(page):
+    _run_derivation(page, "xy + xy'")
+    terminal_response = _real_json(page, "/api/tt", {"expression": "xy + xy'"})
+
+    _hijack_clipboard(page)
+    _install_fetch_mock(page)
+
+    page.click("#tt-copy-formatted")  # Terminal copy queued, stays pending
+    page.check('input[name="tt-format"][value="md"]')  # switched before it resolves
+
+    _resolve_fetch(page, 0, terminal_response)
+    page.wait_for_timeout(200)
+
+    assert page.evaluate("window.__copiedText") is None
+    assert page.text_content("#tt-formatted-preview") == ""
+    assert page.text_content("#tt-copy-formatted") == "Copy formatted output"
+    # the table itself -- unrelated to the export/copy race -- must stay untouched
+    assert page.is_visible("#tt-result")
+    assert page.text_content("#tt-function-line") == "F = x"
+
+
+def test_changing_format_after_a_completed_copy_clears_the_stale_preview(page):
+    _run_derivation(page, "xy + xy'")
+    _hijack_clipboard(page)
+    _click_and_read_copy(page, "#tt-copy-formatted")  # Terminal, completes fully
+    assert page.text_content("#tt-formatted-preview") != ""
+
+    page.check('input[name="tt-format"][value="md"]')
+
+    assert page.text_content("#tt-formatted-preview") == ""
+    assert page.is_visible("#tt-result")  # the table itself is untouched
+
+
+def test_two_copy_requests_resolved_out_of_order_leave_only_the_newest_format(page):
+    _run_derivation(page, "xy + xy'")
+    terminal_response = _real_json(page, "/api/tt", {"expression": "xy + xy'"})
+    markdown_response = _real_json(page, "/api/tt", {"expression": "xy + xy'", "md": True})
+    assert terminal_response["output"] != markdown_response["output"]
+
+    _hijack_clipboard(page)
+    _install_fetch_mock(page)
+
+    page.click("#tt-copy-formatted")  # Terminal copy, index 0, stays pending
+    page.check('input[name="tt-format"][value="md"]')  # invalidates it
+    page.click("#tt-copy-formatted")  # Markdown copy, index 1, stays pending
+
+    _resolve_fetch(page, 0, terminal_response)  # stale Terminal resolves first
+    page.wait_for_timeout(200)
+    assert page.evaluate("window.__copiedText") is None  # still nothing -- it was stale
+
+    _resolve_fetch(page, 1, markdown_response)  # Markdown resolves second
+    page.wait_for_timeout(200)
+    assert page.evaluate("window.__copiedText") == markdown_response["output"]
+    assert page.text_content("#tt-formatted-preview") == markdown_response["output"]
