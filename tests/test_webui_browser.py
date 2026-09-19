@@ -1214,3 +1214,215 @@ def test_copy_buttons_have_independent_feedback(page):
     page.click("#tt-copy-formatted")
     page.wait_for_selector("#tt-copy-formatted.copied")
     assert page.text_content("#tt-copy-formatted") == "Copied!"
+
+
+# --- Schematic (D17 Phase B, acceptance tests 8 and 10) -----------------------------
+#
+# Test 8, the semantic model-to-SVG bridge: every device/net/wire/junction
+# the layout model declares must appear exactly once in the rendered SVG,
+# at its own stable identifier, with the model's own coordinates -- not a
+# pixel/snapshot comparison, and not just trusting `data-*` labels without
+# checking the geometry they sit on. Ground truth is the real server's own
+# `/api/synth` response (`_real_json`, already used elsewhere in this file
+# for the same reason: it reflects the actual presenter/schematic code
+# path, never a hand-maintained fake of its JSON shape).
+
+_AOI21_EXPR = "(a'b+c)'"  # D17 acceptance test 4's case: one shared inverter (a')
+
+
+_SCHEMATIC_SNAPSHOT_JS = """(rootSelector) => {
+  const root = document.querySelector(rootSelector);
+  const wires = Array.from(root.querySelectorAll('[data-role="wire"]')).map(el => ({
+    id: el.getAttribute('data-wire-id'),
+    net_id: el.getAttribute('data-net-id'),
+    x1: Number(el.getAttribute('x1')), y1: Number(el.getAttribute('y1')),
+    x2: Number(el.getAttribute('x2')), y2: Number(el.getAttribute('y2')),
+  }));
+  const junctions = Array.from(root.querySelectorAll('[data-role="junction"]')).map(el => ({
+    id: el.getAttribute('data-junction-id'),
+    net_id: el.getAttribute('data-net-id'),
+    x: Number(el.getAttribute('cx')), y: Number(el.getAttribute('cy')),
+  }));
+  const devices = Array.from(root.querySelectorAll('.ow-device')).map(g => {
+    const terminals = {};
+    g.querySelectorAll('[data-role="terminal"]').forEach(t => {
+      terminals[t.getAttribute('data-terminal')] = {
+        net_id: t.getAttribute('data-net-id'),
+        x: Number(t.getAttribute('cx')), y: Number(t.getAttribute('cy')),
+      };
+    });
+    return {
+      id: g.getAttribute('data-device-id'),
+      kind: g.getAttribute('data-kind'),
+      role: g.getAttribute('data-device-role'),
+      gate_var: g.getAttribute('data-gate-var'),
+      gate_complemented: g.getAttribute('data-gate-complemented') === 'true',
+      has_gate_bubble: !!g.querySelector('[data-role="gate-bubble"]'),
+      terminals,
+    };
+  });
+  return { wires, junctions, devices };
+}"""
+
+
+def _schematic_dom_snapshot(page, root_selector: str = "#schematic-svg") -> dict:
+    return page.evaluate(_SCHEMATIC_SNAPSHOT_JS, root_selector)
+
+
+def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
+    """The full test-8 bridge check: every wire/device/junction the model
+    declares appears exactly once in `snapshot` (a DOM read of either the
+    live #schematic-svg or a parsed Download-SVG file), at the model's own
+    id, with the model's own coordinates -- and nothing extra."""
+    model_wires = {w["id"]: w for w in schematic["wires"]}
+    assert {w["id"] for w in snapshot["wires"]} == set(model_wires)  # no unmodeled wire, none missing
+    for w in snapshot["wires"]:
+        mw = model_wires[w["id"]]
+        assert w["net_id"] == mw["net_id"]
+        assert (w["x1"], w["y1"]) == (mw["p1"]["x"], mw["p1"]["y"])
+        assert (w["x2"], w["y2"]) == (mw["p2"]["x"], mw["p2"]["y"])
+
+    model_junctions = {j["id"]: j for j in schematic["junctions"]}
+    assert {j["id"] for j in snapshot["junctions"]} == set(model_junctions)
+    for j in snapshot["junctions"]:
+        mj = model_junctions[j["id"]]
+        assert j["net_id"] == mj["net_id"]
+        assert (j["x"], j["y"]) == (mj["point"]["x"], mj["point"]["y"])
+
+    model_devices = {d["id"]: d for d in schematic["devices"]}
+    assert {d["id"] for d in snapshot["devices"]} == set(model_devices)
+    assert len(snapshot["devices"]) == schematic["total_transistors"]
+    for d in snapshot["devices"]:
+        md = model_devices[d["id"]]
+        assert d["kind"] == md["kind"]
+        assert d["role"] == md["role"]
+        assert d["gate_var"] == md["gate_var"]
+        assert d["gate_complemented"] == md["gate_complemented"]
+        # PMOS gate-bubble present, NMOS absent -- structurally, not visually.
+        assert d["has_gate_bubble"] == (md["kind"] == "p")
+        for term in ("gate", "source", "drain"):
+            snap_term = d["terminals"][term]
+            model_point = md[f"{term}_point"]
+            model_net = md[f"{term}_net"]
+            assert snap_term["net_id"] == model_net
+            assert (snap_term["x"], snap_term["y"]) == (model_point["x"], model_point["y"])
+
+
+def test_schematic_svg_matches_the_layout_model_exactly(page):
+    _submit_via_expression(page, _AOI21_EXPR)
+    schematic = _real_json(page, "/api/synth", {"expr": _AOI21_EXPR})["schematic"]
+    assert schematic["total_transistors"] == 8  # sanity: this is really the shared-inverter case
+
+    snapshot = _schematic_dom_snapshot(page)
+    _assert_snapshot_matches_model(snapshot, schematic)
+
+
+def test_schematic_svg_matches_the_layout_model_for_a_flat_nand(page):
+    # A second, structurally different shape (flat parallel/series, no
+    # inverter) -- guards against the bridge only happening to work for the
+    # nested AOI case above.
+    _submit_via_expression(page, "(abc)'")
+    schematic = _real_json(page, "/api/synth", {"expr": "(abc)'"})["schematic"]
+    assert schematic["total_transistors"] == 6
+
+    snapshot = _schematic_dom_snapshot(page)
+    _assert_snapshot_matches_model(snapshot, schematic)
+
+
+def test_download_svg_passes_the_same_semantic_assertions(page, tmp_path):
+    _submit_via_expression(page, _AOI21_EXPR)
+    schematic = _real_json(page, "/api/synth", {"expr": _AOI21_EXPR})["schematic"]
+
+    with page.expect_download() as download_info:
+        page.click("#download-svg-btn")
+    download = download_info.value
+    saved_path = tmp_path / "schematic.svg"
+    download.save_as(str(saved_path))
+    svg_text = saved_path.read_text(encoding="utf-8")
+
+    assert svg_text.strip().startswith("<svg")
+    assert 'xmlns="http://www.w3.org/2000/svg"' in svg_text
+
+    # Parse the downloaded file itself (not the live page) via the same
+    # DOM-shaped extraction, by navigating straight to it -- this is what
+    # proves "Download SVG" produced the SAME checked representation, not a
+    # separately-serialized copy that could have drifted. This test's own
+    # page is done with the live app at this point, so reusing it is fine.
+    page.goto(saved_path.as_uri())
+    snapshot = page.evaluate(_SCHEMATIC_SNAPSHOT_JS, "svg")
+    _assert_snapshot_matches_model(snapshot, schematic)
+
+
+def test_schematic_output_label_follows_a_custom_output_name(page):
+    _switch_tab(page, "synth")
+    page.check('input[name="synth-mode"][value="expr"]')
+    page.fill("#synth-expr", "(abc)'")
+    page.fill("#synth-output-name", "Y")
+    page.click("#panel-synth button.submit")
+    page.wait_for_selector("#synth-result:not(.empty)")
+
+    label = page.locator('#schematic-svg [data-role="net-label"][data-net-id="OUT"]')
+    assert label.text_content() == "Y"
+
+
+# --- Test 10: browser-level coverage -------------------------------------------------
+
+
+def test_schematic_appears_for_a_result(page):
+    _submit_via_expression(page, "(abc)'")
+    assert page.locator("#schematic-svg .ow-device").count() == 6
+
+
+def test_schematic_disappears_on_new_problem(page):
+    _submit_via_expression(page, "(abc)'")
+    assert page.locator("#schematic-svg .ow-device").count() == 6
+
+    page.click("#synth-new-problem")
+    assert page.locator("#schematic-svg .ow-device").count() == 0
+    assert page.locator("#schematic-svg *").count() == 0  # actually cleared, not just hidden
+
+
+def test_schematic_disappears_when_the_result_goes_stale(page):
+    _submit_via_expression(page, "(abc)'")
+    assert page.locator("#schematic-svg .ow-device").count() == 6
+
+    page.fill("#synth-expr", "a+b")  # edited, unsubmitted -- the shown result is now stale
+    assert page.locator("#schematic-svg .ow-device").count() == 0
+
+
+def test_schematic_symbol_count_matches_the_reported_transistor_count(page):
+    _submit_via_expression(page, _AOI21_EXPR)
+    gate_line = page.text_content("#res-gate-line")
+    assert "8 transistors" in gate_line
+    assert page.locator("#schematic-svg .ow-device").count() == 8
+
+
+def test_schematic_is_responsive_at_mobile_width(page):
+    _submit_via_expression(page, _AOI21_EXPR)
+    page.set_viewport_size({"width": 360, "height": 800})
+    overflow = page.evaluate(
+        "document.documentElement.scrollWidth > document.documentElement.clientWidth + 1"
+    )
+    assert not overflow
+    svg_box = page.locator("#schematic-svg").bounding_box()
+    assert svg_box["width"] <= 360
+
+
+def test_schematic_has_an_accessible_name(page):
+    _submit_via_expression(page, _AOI21_EXPR)
+    svg = page.locator("#schematic-svg")
+    assert svg.get_attribute("role") == "img"
+    label = svg.get_attribute("aria-label")
+    assert label and "8 transistors" in label
+
+
+def test_schematic_adapts_to_dark_mode(page):
+    _submit_via_expression(page, "(abc)'")
+    light_color = page.evaluate("getComputedStyle(document.querySelector('#schematic-svg .ow-wire')).stroke")
+
+    page.emulate_media(color_scheme="dark")
+    dark_color = page.evaluate("getComputedStyle(document.querySelector('#schematic-svg .ow-wire')).stroke")
+
+    assert light_color != dark_color  # currentColor actually follows the color-scheme flip
+    # still structurally intact in dark mode, not just recolored
+    assert page.locator("#schematic-svg .ow-device").count() == 6

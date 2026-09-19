@@ -19,8 +19,9 @@ from ohmwork.api import derive_from_input, format_tt_report, synthesize_from_inp
 from ohmwork.derivation import variables_in_order
 from ohmwork.errors import ParseError
 from ohmwork.parser import parse
-from ohmwork.presenter import build_synth_view, build_tt_view, validate_output_name
+from ohmwork.presenter import build_schematic_view, build_synth_view, build_tt_view, validate_output_name
 from ohmwork.report import format_synth_report
+from ohmwork.schematic import build_schematic
 
 # The server binds to loopback only (D-adjacent: see run_server's default
 # host), but loopback binding alone doesn't stop a hostile page the user
@@ -164,6 +165,23 @@ _PAGE = r"""<!doctype html>
   table.kv td { padding: .3rem .8rem .3rem 0; vertical-align: top; }
   table.kv td:first-child { opacity: .65; white-space: nowrap; }
   table.kv td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .schematic-wrap {
+    overflow-x: auto; border: 1px solid #8886; border-radius: 8px; padding: .75rem; background: #8880;
+  }
+  #schematic-svg { display: block; width: 100%; height: auto; min-width: 260px; color: inherit; }
+  #schematic-svg .ow-wire { stroke: currentColor; stroke-width: 2.5; fill: none; }
+  #schematic-svg .ow-wire.ow-rail { stroke-width: 4; }
+  #schematic-svg .ow-channel { stroke: currentColor; stroke-width: 4; fill: none; stroke-linecap: round; }
+  #schematic-svg .ow-gate-connector { stroke: currentColor; stroke-width: 2.5; fill: none; }
+  #schematic-svg .ow-gate-bubble { fill: Canvas; stroke: currentColor; stroke-width: 2; }
+  #schematic-svg .ow-junction-dot { fill: currentColor; stroke: none; }
+  #schematic-svg .ow-terminal-anchor { fill: transparent; stroke: none; }
+  #schematic-svg text {
+    fill: currentColor; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  #schematic-svg .ow-section-label { opacity: .6; }
+  #schematic-svg .ow-net-label { font-weight: 700; }
 
   .reasoning p { font-size: .9rem; margin: .3rem 0; }
   ul.alt-list { font-size: .85rem; padding-left: 1.2rem; margin: .5rem 0 0; }
@@ -338,6 +356,16 @@ _PAGE = r"""<!doctype html>
         <tr><td>Inverters</td><td id="res-inverters"></td></tr>
         <tr><td>Stack heights</td><td id="res-stacks"></td></tr>
       </table>
+    </div>
+
+    <div class="section schematic-section">
+      <h3>Schematic</h3>
+      <div class="schematic-wrap">
+        <svg id="schematic-svg" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+      </div>
+      <div class="row">
+        <button type="button" class="btn-secondary" id="download-svg-btn">Download SVG</button>
+      </div>
     </div>
 
     <div class="section reasoning">
@@ -784,12 +812,209 @@ function resetTtForm() {
 }
 $("tt-new-problem").addEventListener("click", resetTtForm);
 
+// --- Schematic rendering (D17 Phase B) ---------------------------------------------
+//
+// A mechanical, 1:1 rendering of the already-four-gates-validated layout
+// model the server sends as `schematic` (presenter.build_schematic_view) --
+// every coordinate drawn below is copied verbatim from the model (same
+// integer grid units as `schematic.CELL`, no transform, no re-derivation).
+// Built entirely via createElementNS/textContent/setAttribute, never
+// innerHTML (D17 point 7) -- the same rule M1.3's HTML table follows.
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgEl(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+
+// Picks a deterministic anchor point (from the net's own already-modeled
+// wire endpoints and device terminals -- never an invented coordinate) to
+// place that net's label text near. `pick` only chooses which extremal
+// among those real points to use ("min-y" for a rail drawn at the top,
+// "max-y" for one drawn at the bottom); it never changes what the label
+// says (always `net.label`, straight off the model).
+function schematicNetAnchor(view, netId, pick) {
+  const points = [];
+  view.wires.forEach(w => { if (w.net_id === netId) { points.push(w.p1); points.push(w.p2); } });
+  view.devices.forEach(d => {
+    if (d.gate_net === netId) points.push(d.gate_point);
+    if (d.source_net === netId) points.push(d.source_point);
+    if (d.drain_net === netId) points.push(d.drain_point);
+  });
+  if (points.length === 0) return null;
+  // Extremal y (top for a top rail, bottom for a bottom rail); ties broken
+  // toward the rightmost point, which keeps the label clear of the
+  // PUN/PDN section labels and gate-rail labels living in the left margin
+  // and core columns -- still just picking among real modeled points.
+  const sign = pick === "max-y" ? -1 : 1;
+  return points.reduce((best, p) => (sign * (best.y - p.y) > 0 || (best.y === p.y && best.x < p.x)) ? p : best);
+}
+
+// One device's fixed-template transistor symbol, anchored purely by that
+// device's own already-validated gate/source/drain points -- a standard
+// MOSFET glyph (channel + gate plate, PMOS gate bubble per D17 point 3),
+// never a logic-gate shape.
+function schematicDeviceSymbol(d) {
+  const g = svgEl("g", {
+    class: "ow-device", "data-role": "device",
+    "data-device-id": d.id,
+    "data-kind": d.kind,
+    "data-device-role": d.role,
+    "data-gate-var": d.gate_var,
+    "data-gate-complemented": String(d.gate_complemented),
+  });
+
+  const midX = d.source_point.x;
+  const midY = (d.source_point.y + d.drain_point.y) / 2;
+
+  g.appendChild(svgEl("line", {
+    class: "ow-channel", "data-role": "channel",
+    x1: d.source_point.x, y1: d.source_point.y, x2: d.drain_point.x, y2: d.drain_point.y,
+  }));
+  g.appendChild(svgEl("line", {
+    class: "ow-gate-connector", "data-role": "gate-connector",
+    x1: midX, y1: midY, x2: d.gate_point.x, y2: d.gate_point.y,
+  }));
+
+  if (d.kind === "p") {
+    const dx = d.gate_point.x - midX, dy = d.gate_point.y - midY;
+    const len = Math.hypot(dx, dy) || 1;
+    const r = 6;
+    g.appendChild(svgEl("circle", {
+      class: "ow-gate-bubble", "data-role": "gate-bubble",
+      cx: midX + (dx / len) * (len - r - 2), cy: midY + (dy / len) * (len - r - 2), r,
+    }));
+  }
+
+  ["gate", "source", "drain"].forEach(term => {
+    const p = d[term + "_point"];
+    g.appendChild(svgEl("circle", {
+      class: "ow-terminal-anchor", "data-role": "terminal", "data-terminal": term,
+      "data-device-id": d.id, "data-net-id": d[term + "_net"],
+      cx: p.x, cy: p.y, r: 3,
+    }));
+  });
+
+  const label = svgEl("text", {
+    class: "ow-device-label", "data-role": "device-label",
+    x: d.gate_point.x + 6, y: d.gate_point.y - 6, "font-size": 26,
+  });
+  label.textContent = d.literal;
+  g.appendChild(label);
+
+  return g;
+}
+
+let lastSchematicView = null;
+
+function renderSchematic(view) {
+  const svg = $("schematic-svg");
+  clearChildren(svg);
+  lastSchematicView = view;
+  if (!view) return;
+
+  // Top/bottom margins are taller than left/right -- purely to give the
+  // PUN/PDN section title and the VDD/GND rail label two clearly separate
+  // vertical bands (title further out, rail label hugging the rail),
+  // rather than relying on horizontal spacing that a narrow circuit's own
+  // geometry can't guarantee. This is display padding only -- it doesn't
+  // touch any drawn coordinate, which all still come straight from `view`.
+  const sideMargin = view.cell / 2;
+  const vMargin = view.cell * 1.3;
+  const contentW = view.width * view.cell;
+  const contentH = view.height * view.cell;
+  const w = contentW + sideMargin * 2;
+  const h = contentH + vMargin * 2;
+  svg.setAttribute("viewBox", `${-sideMargin} ${-vMargin} ${w} ${h}`);
+  svg.setAttribute("aria-label", `Transistor-level schematic: ${view.total_transistors} transistors`);
+
+  const netById = {};
+  view.nets.forEach(n => { netById[n.id] = n; });
+
+  view.wires.forEach(wire => {
+    const net = netById[wire.net_id];
+    const isRail = net && (net.kind === "rail_vdd" || net.kind === "rail_gnd");
+    svg.appendChild(svgEl("line", {
+      class: "ow-wire" + (isRail ? " ow-rail" : ""),
+      "data-role": "wire", "data-wire-id": wire.id, "data-net-id": wire.net_id,
+      x1: wire.p1.x, y1: wire.p1.y, x2: wire.p2.x, y2: wire.p2.y,
+    }));
+  });
+
+  view.devices.forEach(d => svg.appendChild(schematicDeviceSymbol(d)));
+
+  view.junctions.forEach(j => {
+    svg.appendChild(svgEl("circle", {
+      class: "ow-junction-dot", "data-role": "junction", "data-junction-id": j.id, "data-net-id": j.net_id,
+      cx: j.point.x, cy: j.point.y, r: 5,
+    }));
+  });
+
+  // VDD/GND labels sit close to their own rail (a narrow band right above/
+  // below it), ending at the rail's own rightmost touch point (text-anchor
+  // "end") so they never run past the right edge of the viewBox. OUT sits
+  // right at the PUN/PDN seam, so its label is offset sideways from that
+  // point instead of vertically, to stay clear of the device row right
+  // above/below it.
+  [
+    [view.vdd_net_id, "min-y", 0, -14, "end"],
+    [view.gnd_net_id, "max-y", 0, 26, "end"],
+    [view.output_net_id, "min-y", 12, 8, "start"],
+  ].forEach(([netId, pick, dx, dy, anchorMode]) => {
+    const net = netById[netId];
+    const anchor = net && schematicNetAnchor(view, netId, pick);
+    if (!net || !anchor) return;
+    const t = svgEl("text", {
+      class: "ow-net-label", "data-role": "net-label", "data-net-id": netId,
+      x: anchor.x + dx, y: anchor.y + dy, "font-size": 28, "text-anchor": anchorMode,
+    });
+    t.textContent = net.label;
+    svg.appendChild(t);
+  });
+
+  // PUN/PDN section titles sit further out, near the outer edge of the
+  // top/bottom margin band -- clearly separated vertically from the
+  // VDD/GND rail labels above regardless of how narrow the circuit is.
+  const punLabel = svgEl("text", { class: "ow-section-label", x: 0, y: -vMargin + 22, "font-size": 20 });
+  punLabel.textContent = "PUN (PMOS pull-up)";
+  svg.appendChild(punLabel);
+  const pdnLabel = svgEl("text", {
+    class: "ow-section-label", x: 0, y: contentH + vMargin - 8, "font-size": 20,
+  });
+  pdnLabel.textContent = "PDN (NMOS pull-down)";
+  svg.appendChild(pdnLabel);
+}
+
+function serializeSchematicSvg() {
+  const svg = $("schematic-svg");
+  const clone = svg.cloneNode(true);
+  clone.setAttribute("xmlns", SVG_NS);
+  return new XMLSerializer().serializeToString(clone);
+}
+
+$("download-svg-btn").addEventListener("click", () => {
+  if (!lastSchematicView) return;
+  const outputName = (lastSchematicView.nets.find(n => n.id === lastSchematicView.output_net_id) || {}).label || "F";
+  const blob = new Blob([serializeSchematicSvg()], { type: "image/svg+xml" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ohmwork-schematic-${outputName}.svg`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
 // --- Synth result rendering ------------------------------------------------------
 
 let lastSolutionText = "";
 let lastAdvancedText = "";
 
-function renderSynthResult(view, rawOutput) {
+function renderSynthResult(view, rawOutput, schematic) {
+  renderSchematic(schematic);
   $("res-gate-line").textContent = `${view.gate_name} — ${view.total_transistors} transistors`;
   $("res-function-line").textContent = view.function;
   $("res-topology-line").textContent = view.topology_note || "";
@@ -910,7 +1135,7 @@ $("panel-synth").addEventListener("submit", async (e) => {
   errEl.classList.add("empty");
   errEl.textContent = "";
   resEl.classList.remove("empty");
-  renderSynthResult(result.result, result.output);
+  renderSynthResult(result.result, result.output, result.schematic);
 });
 
 // --- Stale-result prevention / New problem ----------------------------------------
@@ -950,6 +1175,9 @@ function clearSynthResultDisplay() {
   $("copy-solution").textContent = "Copy solution";
   $("copy-advanced").classList.remove("copied");
   $("copy-advanced").textContent = "Copy advanced report";
+
+  clearChildren($("schematic-svg")); // same discipline -- clear, don't just hide, the stale SVG
+  lastSchematicView = null;
 
   lastSolutionText = "";
   lastAdvancedText = "";
@@ -1166,7 +1394,15 @@ def _handle_synth(environ, start_response):
 
     output = format_synth_report(result, result.verification)
     view = build_synth_view(result, output_name=output_name, max_stack_applied=max_stack is not None)
-    return _json_response(start_response, "200 OK", {"ok": True, "output": output, "result": view})
+    # Same already-verified `result` feeds the schematic layout model too
+    # (D17 Phase B) -- build_schematic() itself runs all four correctness
+    # gates before returning, so `layout` here is exactly the model the
+    # frontend must render faithfully, never re-derived from `view`.
+    layout = build_schematic(result, output_name)
+    schematic = build_schematic_view(layout)
+    return _json_response(
+        start_response, "200 OK", {"ok": True, "output": output, "result": view, "schematic": schematic}
+    )
 
 
 def _not_found(environ, start_response):

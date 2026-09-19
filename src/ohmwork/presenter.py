@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from ohmwork.api import DerivationResult
 from ohmwork.expr import Expr, Not, render as render_expr
 from ohmwork.network import Network, Parallel, Series, Transistor, render_network
+from ohmwork.schematic import CELL, Layout, Point
 from ohmwork.synth import Candidate, SynthesisResult
 
 # Same shape as D8's variable grammar (single letter, optional trailing
@@ -290,4 +291,59 @@ def build_tt_view(result: DerivationResult) -> dict:
         "output_column_index": len(table.columns) - 1,
         "rows": [[bool(col.values[i]) for col in table.columns] for i in range(len(table.rows))],
         "simplified_function": f"F = {render_expr(result.simplified)}",
+    }
+
+
+def _point_dict(p: Point) -> dict:
+    return {"x": p.x, "y": p.y}
+
+
+def build_schematic_view(layout: Layout) -> dict:
+    """D17 Phase B: the JSON-serializable bridge between the already-
+    four-gates-validated :class:`~ohmwork.schematic.Layout` and the SVG the
+    web UI draws. Every field here is a direct, unmodified read of a
+    `Layout` field (or one of its dataclasses) -- no geometry is computed,
+    no coordinate is transformed, and no electrical fact is re-derived.
+    The renderer (webui.py's `renderSchematic`) must draw every wire/
+    terminal/junction coordinate exactly as given here, in the same integer
+    grid units `schematic.CELL` already uses, so the SVG is a faithful,
+    mechanical rendering of this model -- never an independent
+    interpretation of the circuit."""
+    return {
+        "cell": CELL,
+        "width": layout.width,
+        "height": layout.height,
+        "pun_height": layout.pun_height,
+        "pdn_height": layout.pdn_height,
+        "var_order": list(layout.var_order),
+        "output_net_id": layout.output_net_id,
+        "vdd_net_id": layout.vdd_net_id,
+        "gnd_net_id": layout.gnd_net_id,
+        "total_transistors": layout.total_transistors,
+        "nets": [{"id": n.id, "label": n.label, "kind": n.kind} for n in layout.nets],
+        "devices": [
+            {
+                "id": d.id,
+                "kind": d.kind,
+                "role": d.role,
+                "gate_var": d.gate_var,
+                "gate_complemented": d.gate_complemented,
+                "literal": d.literal,
+                "gate_net": d.gate_net,
+                "source_net": d.source_net,
+                "drain_net": d.drain_net,
+                "origin": _point_dict(d.origin),
+                "gate_point": _point_dict(d.gate_point),
+                "source_point": _point_dict(d.source_point),
+                "drain_point": _point_dict(d.drain_point),
+            }
+            for d in layout.devices
+        ],
+        "wires": [
+            {"id": w.id, "net_id": w.net_id, "p1": _point_dict(w.p1), "p2": _point_dict(w.p2)}
+            for w in layout.wires
+        ],
+        "junctions": [
+            {"id": j.id, "net_id": j.net_id, "point": _point_dict(j.point)} for j in layout.junctions
+        ],
     }

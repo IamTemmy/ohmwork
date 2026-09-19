@@ -5,7 +5,8 @@ graph, never text parsed from the CLI report."""
 import pytest
 
 from ohmwork.api import derive_from_input, synthesize_from_input
-from ohmwork.presenter import build_synth_view, build_tt_view, validate_output_name
+from ohmwork.presenter import build_schematic_view, build_synth_view, build_tt_view, validate_output_name
+from ohmwork.schematic import CELL, build_schematic
 
 
 # --- validate_output_name ----------------------------------------------------
@@ -327,3 +328,92 @@ def test_build_tt_view_simplified_function_for_a_non_trivial_expression():
     result = derive_from_input("a'bc + ab'c + abc' + abc")  # simplifies to a majority-ish function
     view = build_tt_view(result)
     assert view["simplified_function"].startswith("F = ")
+
+
+# --- build_schematic_view (D17 Phase B) --------------------------------------
+#
+# This is the JSON bridge between the already-four-gates-validated Layout
+# model and the frontend's SVG renderer -- these tests check it's a lossless,
+# unmodified read of `layout`'s own dataclasses (the field-by-field bijection
+# the semantic model-to-SVG bridge, acceptance test 8, ultimately depends on),
+# never a re-derivation.
+
+
+def _q1_layout():
+    result = synthesize_from_input(expr="(abc)'")
+    return build_schematic(result, "F")
+
+
+def test_build_schematic_view_top_level_fields_match_the_layout():
+    layout = _q1_layout()
+    view = build_schematic_view(layout)
+    assert view["cell"] == CELL
+    assert view["width"] == layout.width
+    assert view["height"] == layout.height
+    assert view["pun_height"] == layout.pun_height
+    assert view["pdn_height"] == layout.pdn_height
+    assert view["var_order"] == list(layout.var_order)
+    assert view["output_net_id"] == layout.output_net_id
+    assert view["vdd_net_id"] == layout.vdd_net_id
+    assert view["gnd_net_id"] == layout.gnd_net_id
+    assert view["total_transistors"] == layout.total_transistors == 6
+
+
+def test_build_schematic_view_nets_are_a_lossless_copy():
+    layout = _q1_layout()
+    view = build_schematic_view(layout)
+    assert len(view["nets"]) == len(layout.nets)
+    by_id = {n.id: n for n in layout.nets}
+    for n in view["nets"]:
+        model_net = by_id[n["id"]]
+        assert n["label"] == model_net.label
+        assert n["kind"] == model_net.kind
+
+
+def test_build_schematic_view_devices_carry_exact_model_coordinates():
+    layout = _q1_layout()
+    view = build_schematic_view(layout)
+    assert len(view["devices"]) == len(layout.devices) == layout.total_transistors
+    by_id = {d.id: d for d in layout.devices}
+    for d in view["devices"]:
+        model_dev = by_id[d["id"]]
+        assert d["kind"] == model_dev.kind
+        assert d["role"] == model_dev.role
+        assert d["gate_var"] == model_dev.gate_var
+        assert d["gate_complemented"] == model_dev.gate_complemented
+        assert d["literal"] == model_dev.literal
+        assert d["gate_net"] == model_dev.gate_net
+        assert d["source_net"] == model_dev.source_net
+        assert d["drain_net"] == model_dev.drain_net
+        assert (d["origin"]["x"], d["origin"]["y"]) == (model_dev.origin.x, model_dev.origin.y)
+        assert (d["gate_point"]["x"], d["gate_point"]["y"]) == (model_dev.gate_point.x, model_dev.gate_point.y)
+        assert (d["source_point"]["x"], d["source_point"]["y"]) == (
+            model_dev.source_point.x,
+            model_dev.source_point.y,
+        )
+        assert (d["drain_point"]["x"], d["drain_point"]["y"]) == (model_dev.drain_point.x, model_dev.drain_point.y)
+
+
+def test_build_schematic_view_wires_carry_exact_model_endpoints():
+    layout = _q1_layout()
+    view = build_schematic_view(layout)
+    assert len(view["wires"]) == len(layout.wires)
+    by_id = {w.id: w for w in layout.wires}
+    for w in view["wires"]:
+        model_wire = by_id[w["id"]]
+        assert w["net_id"] == model_wire.net_id
+        assert (w["p1"]["x"], w["p1"]["y"]) == (model_wire.p1.x, model_wire.p1.y)
+        assert (w["p2"]["x"], w["p2"]["y"]) == (model_wire.p2.x, model_wire.p2.y)
+
+
+def test_build_schematic_view_junctions_carry_exact_model_points():
+    result = synthesize_from_input(expr="(a'b+c)'")  # AOI21 -- has internal series junctions
+    layout = build_schematic(result, "F")
+    view = build_schematic_view(layout)
+    assert len(layout.junctions) > 0  # otherwise this test would vacuously pass
+    assert len(view["junctions"]) == len(layout.junctions)
+    by_id = {j.id: j for j in layout.junctions}
+    for j in view["junctions"]:
+        model_junction = by_id[j["id"]]
+        assert j["net_id"] == model_junction.net_id
+        assert (j["point"]["x"], j["point"]["y"]) == (model_junction.point.x, model_junction.point.y)
