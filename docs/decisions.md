@@ -381,3 +381,116 @@ reaches `SynthesisResult` — so no caller, not just the report, can observe has
 order. Verified against the reported reproducer across 10 different `PYTHONHASHSEED` values
 (previously 2 distinct outputs, now 1) and added as a genuine cross-process regression test,
 since hash randomization is fixed per-process and can't be exercised any other way.
+
+---
+
+## D17 — DRAFT, not yet implemented. What does a real transistor-level schematic show, and how is it built?
+
+**Status:** proposed, under review. This entry exists specifically so the schematic renderer
+described below is *not* built until this decision (and its acceptance tests) is reviewed and
+approved — a diagram encodes electrical connectivity and can be technically wrong even while
+looking attractive, which is a materially different risk than the wording-only presentation
+work in D-adjacent UI commits. The current CLI/Advanced Report ASCII schematic (a
+VDD/PUN-expression/F/PDN-expression/GND text block) stays exactly as it is regardless of this
+entry's outcome — this is an *additional* presentation, not a replacement.
+
+**Trigger:** real coursework dogfooding of all three M1b acceptance-test gates through the
+actual web UI (CPE 635 Exam #1, 2026-09-18) surfaced two independent, user-identified gaps in
+the same session: the Derivation table's output not matching the Synthesis tab's table
+polish (addressed separately, M1.3), and this one — the synthesis result's "schematic" being
+a topology *summary*, not something a student could read against or reproduce on paper
+(compare a hand-drawn 4-input NOR with individually labeled PMOS/NMOS transistors, gate
+inputs, VDD/GND rails, and wires). Per the charter's explicit deferral of "SVG/graphical
+transistor schematics" and this project's standing instruction that K-map/schematic work
+gets a decision entry + acceptance tests before code (the same pattern this entry itself
+follows), this is that entry.
+
+**Proposed choice:**
+
+1. **Source of truth.** The SVG is built deterministically and directly from
+   `SynthesisResult.pdn`, `.pun`, and its shared-inverter data (`inverter_literals`/
+   `inverter_transistors`, D12) — the same already-verified object graph `report.py` and
+   `presenter.py` already read. It never parses the ASCII report text or a rendered Boolean-
+   expression string; doing so would mean the diagram could silently drift from what was
+   actually verified (D7), exactly the class of bug this project's presenter-layer design
+   principle (facts read off the object graph, never reparsed) exists to prevent.
+2. **What it shows.** A recognizable transistor-level complementary static CMOS schematic:
+   VDD rail at top; PMOS pull-up network (PUN) above the output node; the output node in the
+   middle, labeled with the chosen output name (not always literal "F" — M1.2's
+   `output_name`); NMOS pull-down network (PDN) below it; GND rail at bottom. Standard,
+   visually distinguishable PMOS and NMOS transistor symbols (gate, source, drain, with PMOS's
+   conventional gate bubble); gate/input labels on every transistor; wires and junction dots
+   at real electrical connections; series and parallel sub-network topology laid out to match
+   the actual `Network` tree (`network.py`'s `Series`/`Parallel`/`Transistor` nodes — already
+   exactly the structure a layout algorithm needs, no new engine data required); PUN and PDN
+   labeled as such.
+3. **Complemented inputs (D12).** In normal mode: exactly one shared inverter symbol per
+   distinct complemented literal counted by `inverter_literals`, its complemented output rail
+   wired to every transistor gate that uses that literal (never one inverter per use site —
+   same sharing rule D12 already establishes for the transistor *count*, now also true of the
+   *drawing*). Under `--dual-rail`: the complemented rail is still shown/labeled at each gate
+   that needs it, but no inverter symbol is drawn and none is counted — matching D2's existing
+   rule that dual-rail complements are free.
+4. **Symbol count must agree with the report.** The number of transistor symbols in the
+   complete diagram (PDN + PUN + inverters) must equal `SynthesisResult.total_transistors` —
+   checked structurally by the acceptance tests below, not eyeballed.
+5. **Initial exclusions** (v1 scope, not permanent): transistor sizing (W/L ratios); body
+   terminals and body effect; analog device parameters; physical layout or parasitics; SPICE
+   simulation or netlist export; arbitrary non-series-parallel circuits (D16 point 3 already
+   excludes these from what `synth` even finds, so the renderer only ever needs to lay out
+   series/parallel trees); K-map rendering (a separate, also-deferred charter item, not part
+   of this decision).
+6. **Implementation direction** (for after this entry is approved, not before):
+   - A testable schematic *layout model* — plain data (transistor positions, wire segments,
+     labels) computed from the `Network` tree — kept separate from the SVG string it produces,
+     so the model's correctness (acceptance tests 1-6 below) can be checked structurally
+     without parsing rendered markup or comparing screenshots.
+   - That model rendered as responsive inline SVG with a stable `viewBox`, built via
+     `document.createElementNS`/`textContent` (or an equivalently safe internal renderer) —
+     never string-concatenated `innerHTML`, the same rule M1.3's HTML table follows.
+   - No AI-generated or bitmap circuit images at any point — the whole reason for this
+     decision is that the output must be deterministic and provably tied to the verified
+     network, which a generated image cannot guarantee.
+   - "Download SVG" always; "Copy image" if practical once the renderer exists (not a blocker
+     for v1).
+
+**Acceptance tests** (to exist, reviewed, before implementation starts — same role the
+charter's M1a/M1b acceptance tests played for those milestones):
+
+1. **Q1 (3-input NAND):** 3 parallel PMOS from VDD to the output node; 3 series NMOS from the
+   output to GND; exactly 6 transistor symbols total.
+2. **Q2 (4-input NOR):** 4 series PMOS from VDD to the output; 4 parallel NMOS from the output
+   to GND; exactly 8 transistor symbols total.
+3. **Q3 (AOI31):** PDN has the `abc` series branch in parallel with `d`; PUN is its correct
+   dual ((a+b+c) in series with d); exactly 8 transistor symbols total.
+4. **Complemented-input case** (e.g. the AOI21 `(a'b+c)'` example from the minimality-wording
+   review round): exactly one shared inverter symbol is drawn for the complemented literal;
+   every transistor gate using that literal connects to the *same* inverter's output rail, not
+   separate ones; total symbol count equals core + inverter cost (8, for that example).
+5. **Dual-rail version of the same case:** the complemented rail is shown at the transistors
+   that need it; zero inverter symbols are drawn; total symbol count equals core cost only (6).
+6. **Output name:** setting a custom output name (M1.2) changes the schematic's output-node
+   label to match, without changing the circuit itself.
+7. **Layout-model tests are structural, not pixel-based.** The acceptance tests above assert
+   against the layout model's own data (transistor positions/types/gate-labels/connectivity,
+   symbol counts) — never by parsing the rendered SVG's markup and never by comparing
+   screenshots, which are fragile to unrelated visual changes and don't actually verify
+   electrical correctness.
+8. **Browser-level coverage** (Playwright, alongside the structural tests above): the SVG
+   appears for a synthesis result and disappears when the result becomes stale or New Problem
+   is pressed (same stale-result discipline M1.2/M1.3 already established); it's responsive
+   (scales with viewport, doesn't overflow); it has an accessible name/description; it renders
+   legibly in both light and dark mode (`prefers-color-scheme`).
+
+**Reasoning:** The charter already defers "SVG/graphical transistor schematics" explicitly —
+this entry doesn't reopen that scope decision, it fulfills the condition the charter itself
+sets for revisiting deferred polish ("until real coursework use shows what's actually worth
+polishing," §10), which three real exam questions run through the actual UI now satisfies.
+The decision-entry-first requirement is not bureaucratic overhead for its own sake: a wrong
+transistor count, a mis-shared inverter, or PDN/PUN topology that doesn't match the verified
+`Network` tree would be a *correctness* bug wearing a nicer coat of paint, and the acceptance
+tests above are what makes "the diagram matches what D7 already verified" a checkable claim
+rather than an eyeballed one — the same reason D16 wrote down the search space before D16's
+own implementation, and D1 before the engine that had to honor it.
+
+**Date:** 2026-09-18 (proposed; not yet approved or implemented).
