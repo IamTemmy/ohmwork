@@ -1,0 +1,1145 @@
+"""D17 Phase A: a testable transistor-level schematic layout model built
+directly from a verified :class:`~ohmwork.synth.SynthesisResult` — explicit
+named nets and typed device terminals with integer coordinates, not just a
+picture, so the ``Network`` tree -> layout conversion is independently
+checkable before any SVG exists (Phase B, not part of this module).
+
+Three genuinely independent correctness gates run before :func:`build_schematic`
+ever returns a :class:`Layout`, each blind to what the other two check:
+
+1. **Electrical behavior** (:func:`simulate_layout`, exhaustive over every
+   input vector) -- net-ID reachability only, never touching wire geometry.
+2. **Wire/geometry integrity** (:func:`validate_layout_geometry`) -- wire and
+   junction structure, never touching what the electricity computes.
+3. **Topology fidelity** (:func:`_validate_topology_fidelity`) -- proves the
+   layout's own PDN/PUN device graph has the same series/parallel shape as
+   ``result.pdn``/``result.pun``, independent of the exhaustive electrical
+   check (a different, equal-cost, tied-minimal network can compute the same
+   function without being the same *shape*).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from ohmwork.derivation import all_assignments
+from ohmwork.expr import Expr, Not, Var, render as render_expr
+from ohmwork.network import Network, Parallel, Series, Transistor, conducts
+from ohmwork.synth import SynthesisResult
+from ohmwork.verify import VerificationResult
+
+CELL = 100  # integer grid cell scale; every coordinate below is an exact integer
+
+_NET_KINDS = frozenset(
+    {
+        "rail_vdd",
+        "rail_gnd",
+        "output",
+        "gate_primary",
+        "gate_complement_internal",
+        "gate_complement_external",
+        "junction",
+    }
+)
+_DEVICE_KINDS = frozenset({"n", "p"})
+_DEVICE_ROLES = frozenset({"pdn", "pun", "inverter"})
+
+
+# --- Dataclasses -------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Point:
+    x: int
+    y: int
+
+
+@dataclass(frozen=True, slots=True)
+class Net:
+    id: str
+    label: str
+    kind: str  # one of _NET_KINDS
+
+
+@dataclass(frozen=True, slots=True)
+class Device:
+    id: str
+    kind: str  # "n" or "p"
+    gate_var: str  # structured gate identity -- never inferred by parsing `literal`
+    gate_complemented: bool
+    literal: str  # display-only rendering (e.g. "a", "b'") -- never read for correctness
+    gate_net: str
+    source_net: str
+    drain_net: str
+    role: str  # "pdn" | "pun" | "inverter"
+    x: int
+    y: int
+    origin: Point
+    gate_point: Point
+    source_point: Point
+    drain_point: Point
+
+
+@dataclass(frozen=True, slots=True)
+class WireSegment:
+    id: str
+    net_id: str
+    p1: Point
+    p2: Point
+
+
+@dataclass(frozen=True, slots=True)
+class Junction:
+    id: str
+    net_id: str
+    point: Point
+
+
+@dataclass(frozen=True, slots=True)
+class Layout:
+    nets: tuple[Net, ...]
+    devices: tuple[Device, ...]
+    wires: tuple[WireSegment, ...]
+    junctions: tuple[Junction, ...]
+    var_order: tuple[str, ...]
+    output_net_id: str
+    vdd_net_id: str
+    gnd_net_id: str
+    primary_nets: tuple[tuple[str, str], ...]  # (var, net_id), var-sorted
+    complement_nets: tuple[tuple[str, str], ...]  # (var, net_id), var-sorted
+    inverter_driven_vars: frozenset[str]
+    total_transistors: int
+    width: int  # grid bounding box (includes gate-rail/inverter columns)
+    height: int
+    pun_height: int
+    pdn_height: int
+
+
+@dataclass(frozen=True, slots=True)
+class NetState:
+    connects_vdd: bool
+    connects_gnd: bool
+
+    @property
+    def shorted(self) -> bool:
+        return self.connects_vdd and self.connects_gnd
+
+    @property
+    def floating(self) -> bool:
+        return not self.connects_vdd and not self.connects_gnd
+
+    @property
+    def value(self) -> bool | None:
+        return None if (self.shorted or self.floating) else self.connects_vdd
+
+
+def primary_net_id(layout: Layout, var: str) -> str | None:
+    return next((nid for v, nid in layout.primary_nets if v == var), None)
+
+
+def complement_net_id(layout: Layout, var: str) -> str | None:
+    return next((nid for v, nid in layout.complement_nets if v == var), None)
+
+
+# --- Structured literal identity ----------------------------------------
+
+
+def _var_and_complement(literal: Expr) -> tuple[str, bool]:
+    if isinstance(literal, Var):
+        return literal.name, False
+    if isinstance(literal, Not) and isinstance(literal.operand, Var):
+        return literal.operand.name, True
+    raise TypeError(f"not a literal: {literal!r}")  # pragma: no cover
+
+
+def _gate_net_id(var: str, complemented: bool) -> str:
+    return f"net_{var}_n" if complemented else f"net_{var}"
+
+
+def _complemented_var_names(network: Network) -> set[str]:
+    """Every variable used as a complemented literal (v') anywhere in
+    ``network`` -- a direct tree walk, independent of any bookkeeping field
+    on SynthesisResult, used to cross-check that bookkeeping (amendment 5)."""
+    names: set[str] = set()
+
+    def walk(n: Network) -> None:
+        if isinstance(n, Transistor):
+            if isinstance(n.literal, Not) and isinstance(n.literal.operand, Var):
+                names.add(n.literal.operand.name)
+        elif isinstance(n, (Series, Parallel)):
+            for b in n.branches:
+                walk(b)
+        else:  # pragma: no cover
+            raise TypeError(f"unknown network node: {n!r}")
+
+    walk(network)
+    return names
+
+
+def _validate_result_inverter_bookkeeping(result: SynthesisResult) -> None:
+    found = _complemented_var_names(result.pdn) | _complemented_var_names(result.pun)
+    declared = set(result.inverter_literals)
+
+    if not found:
+        if result.inverter_literals != () or result.inverter_transistors != 0:
+            raise RuntimeError(
+                "internal error: pdn/pun use no complemented literals but "
+                f"inverter_literals={result.inverter_literals!r}, "
+                f"inverter_transistors={result.inverter_transistors}"
+            )
+        return
+
+    if result.inverter_transistors == 0:
+        if not result.inverter_literals or declared != found:
+            raise RuntimeError(
+                "internal error: dual-rail bookkeeping mismatch -- pdn/pun's own "
+                f"complemented literals are {sorted(found)!r} but "
+                f"result.inverter_literals={result.inverter_literals!r}"
+            )
+        return
+
+    if declared != found or result.inverter_transistors != 2 * len(result.inverter_literals):
+        raise RuntimeError(
+            "internal error: inverter bookkeeping mismatch -- pdn/pun's own "
+            f"complemented literals are {sorted(found)!r}, "
+            f"result.inverter_literals={result.inverter_literals!r}, "
+            f"result.inverter_transistors={result.inverter_transistors} "
+            f"(expected {2 * len(declared)})"
+        )
+
+
+# --- Sizing pass ---------------------------------------------------------
+
+
+def _size(network: Network) -> tuple[int, int]:
+    """(width, height) in grid cells -- mirrors network.stack_height's own
+    sum-for-series/max-for-parallel recursion for height; width is the
+    transpose (max-for-series/sum-for-parallel)."""
+    if isinstance(network, Transistor):
+        return 1, 1
+    if isinstance(network, Series):
+        sizes = [_size(b) for b in network.branches]
+        return max(w for w, _ in sizes), sum(h for _, h in sizes)
+    if isinstance(network, Parallel):
+        sizes = [_size(b) for b in network.branches]
+        return sum(w for w, _ in sizes), max(h for _, h in sizes)
+    raise TypeError(f"unknown network node: {network!r}")  # pragma: no cover
+
+
+# --- Mutable build context ------------------------------------------------
+
+
+class _Ctx:
+    __slots__ = (
+        "devices",
+        "wires",
+        "nets",
+        "gate_taps",
+        "device_counter",
+        "wire_counter",
+        "pun_junction_counter",
+        "pdn_junction_counter",
+        "dual_rail_mode",
+    )
+
+    def __init__(self, dual_rail_mode: bool):
+        self.devices: list[Device] = []
+        self.wires: list[WireSegment] = []
+        self.nets: dict[str, Net] = {}
+        self.gate_taps: dict[str, list[Point]] = {}
+        self.device_counter = 0
+        self.wire_counter = 0
+        self.pun_junction_counter = 0
+        self.pdn_junction_counter = 0
+        self.dual_rail_mode = dual_rail_mode
+
+    def ensure_gate_net(self, var: str, complemented: bool) -> str:
+        net_id = _gate_net_id(var, complemented)
+        if net_id not in self.nets:
+            if complemented:
+                kind = "gate_complement_external" if self.dual_rail_mode else "gate_complement_internal"
+                label = f"{var}'"
+            else:
+                kind = "gate_primary"
+                label = var
+            self.nets[net_id] = Net(id=net_id, label=label, kind=kind)
+        return net_id
+
+    def new_junction_net(self, role: str) -> str:
+        if role == "pun":
+            n = self.pun_junction_counter
+            self.pun_junction_counter += 1
+        else:
+            n = self.pdn_junction_counter
+            self.pdn_junction_counter += 1
+        net_id = f"{role}_j{n}"
+        self.nets[net_id] = Net(id=net_id, label=net_id, kind="junction")
+        return net_id
+
+    def new_device_id(self) -> str:
+        did = f"M{self.device_counter}"
+        self.device_counter += 1
+        return did
+
+    def add_wire(self, net_id: str, p1: Point, p2: Point) -> None:
+        if p1 == p2:
+            return
+        wid = f"W{self.wire_counter}"
+        self.wire_counter += 1
+        self.wires.append(WireSegment(id=wid, net_id=net_id, p1=p1, p2=p2))
+
+    def record_gate_tap(self, net_id: str, point: Point) -> None:
+        self.gate_taps.setdefault(net_id, []).append(point)
+
+
+def _generate_bus(ctx: _Ctx, net_id: str, points: list[Point]) -> None:
+    """Points that are all touches of ``net_id`` at the same boundary --
+    emits one straight WireSegment spanning them if they aren't already
+    coincident. Handles both horizontal (same y) and vertical (same x)
+    buses uniformly."""
+    if len(points) <= 1:
+        return
+    xs = {p.x for p in points}
+    ys = {p.y for p in points}
+    if len(xs) <= 1 and len(ys) <= 1:
+        return
+    if len(ys) == 1:
+        y = next(iter(ys))
+        ctx.add_wire(net_id, Point(min(p.x for p in points), y), Point(max(p.x for p in points), y))
+    elif len(xs) == 1:
+        x = next(iter(xs))
+        ctx.add_wire(net_id, Point(x, min(p.y for p in points)), Point(x, max(p.y for p in points)))
+    else:
+        raise RuntimeError(
+            f"internal error: bus points for net {net_id!r} are neither horizontally nor "
+            f"vertically collinear: {points!r}"
+        )
+
+
+# --- Placement pass --------------------------------------------------------
+
+
+def _place_transistor(
+    ctx: _Ctx, transistor: Transistor, role: str, x0: int, y0: int, top_net: str, bottom_net: str
+) -> tuple[list[Point], list[Point]]:
+    var, complemented = _var_and_complement(transistor.literal)
+    gate_net_id = ctx.ensure_gate_net(var, complemented)
+    device_id = ctx.new_device_id()
+    origin = Point(x0 * CELL, y0 * CELL)
+    top_point = Point(x0 * CELL + CELL // 2, y0 * CELL)
+    bottom_point = Point(x0 * CELL + CELL // 2, (y0 + 1) * CELL)
+    gate_point = Point((x0 + 1) * CELL, y0 * CELL + CELL // 2)
+    if transistor.kind == "p":
+        source_point, drain_point = top_point, bottom_point
+        source_net, drain_net = top_net, bottom_net
+    else:
+        drain_point, source_point = top_point, bottom_point
+        drain_net, source_net = top_net, bottom_net
+    device = Device(
+        id=device_id,
+        kind=transistor.kind,
+        gate_var=var,
+        gate_complemented=complemented,
+        literal=render_expr(transistor.literal),
+        gate_net=gate_net_id,
+        source_net=source_net,
+        drain_net=drain_net,
+        role=role,
+        x=x0,
+        y=y0,
+        origin=origin,
+        gate_point=gate_point,
+        source_point=source_point,
+        drain_point=drain_point,
+    )
+    ctx.devices.append(device)
+    ctx.record_gate_tap(gate_net_id, gate_point)
+    return [top_point], [bottom_point]
+
+
+def _place(
+    ctx: _Ctx, network: Network, role: str, x0: int, y0: int, h: int, top_net: str, bottom_net: str
+) -> tuple[list[Point], list[Point]]:
+    """Recursively place ``network`` in the box starting at (x0, y0) with
+    height ``h`` (width is derived per-node from `_size`, never needed by
+    the caller). Returns (top_points, bottom_points): the exact points
+    where top_net/bottom_net are physically realized by this subtree, used
+    by the caller to bus them together."""
+    if isinstance(network, Transistor):
+        return _place_transistor(ctx, network, role, x0, y0, top_net, bottom_net)
+
+    if isinstance(network, Series):
+        branches = network.branches
+        sizes = [_size(b) for b in branches]
+        boundary_nets = [top_net] + [ctx.new_junction_net(role) for _ in range(len(branches) - 1)] + [bottom_net]
+        y = y0
+        top_points: list[Point] | None = None
+        prev_bottom: list[Point] | None = None
+        for i, b in enumerate(branches):
+            bw, bh = sizes[i]
+            tp, bp = _place(ctx, b, role, x0, y, bh, boundary_nets[i], boundary_nets[i + 1])
+            if i == 0:
+                top_points = tp
+            if prev_bottom is not None:
+                _generate_bus(ctx, boundary_nets[i], prev_bottom + tp)
+            prev_bottom = bp
+            y += bh
+        assert top_points is not None and prev_bottom is not None
+        return top_points, prev_bottom
+
+    if isinstance(network, Parallel):
+        branches = network.branches
+        sizes = [_size(b) for b in branches]
+        x = x0
+        all_top: list[Point] = []
+        all_bottom: list[Point] = []
+        for i, b in enumerate(branches):
+            bw, bh = sizes[i]
+            tp, bp = _place(ctx, b, role, x, y0, bh, top_net, bottom_net)
+            all_top.extend(tp)
+            if bh < h:
+                for pt in bp:
+                    far = Point(pt.x, (y0 + h) * CELL)
+                    ctx.add_wire(bottom_net, pt, far)
+                    all_bottom.append(far)
+            else:
+                all_bottom.extend(bp)
+            x += bw
+        return all_top, all_bottom
+
+    raise TypeError(f"unknown network node: {network!r}")  # pragma: no cover
+
+
+def _place_inverter_pair(ctx: _Ctx, var: str, x: int, core_height: int) -> tuple[Point, Point]:
+    primary_net = ctx.ensure_gate_net(var, False)
+    complement_net = ctx.ensure_gate_net(var, True)
+
+    p_source = Point(x * CELL + CELL // 2, 0)
+    p_drain = Point(x * CELL + CELL // 2, CELL)
+    p_gate = Point((x + 1) * CELL, CELL // 2)
+    ctx.devices.append(
+        Device(
+            id=f"INV_{var}_P",
+            kind="p",
+            gate_var=var,
+            gate_complemented=False,
+            literal=var,
+            gate_net=primary_net,
+            source_net="VDD",
+            drain_net=complement_net,
+            role="inverter",
+            x=x,
+            y=0,
+            origin=Point(x * CELL, 0),
+            gate_point=p_gate,
+            source_point=p_source,
+            drain_point=p_drain,
+        )
+    )
+    ctx.record_gate_tap(primary_net, p_gate)
+
+    n_drain = Point(x * CELL + CELL // 2, CELL)
+    n_source = Point(x * CELL + CELL // 2, 2 * CELL)
+    n_gate = Point((x + 1) * CELL, CELL + CELL // 2)
+    ctx.devices.append(
+        Device(
+            id=f"INV_{var}_N",
+            kind="n",
+            gate_var=var,
+            gate_complemented=False,
+            literal=var,
+            gate_net=primary_net,
+            source_net="GND",
+            drain_net=complement_net,
+            role="inverter",
+            x=x,
+            y=1,
+            origin=Point(x * CELL, CELL),
+            gate_point=n_gate,
+            source_point=n_source,
+            drain_point=n_drain,
+        )
+    )
+    ctx.record_gate_tap(primary_net, n_gate)
+
+    ctx.record_gate_tap(complement_net, p_drain)  # p_drain == n_drain; record once
+
+    if core_height > 2:
+        gnd_far = Point(x * CELL + CELL // 2, core_height * CELL)
+        ctx.add_wire("GND", n_source, gnd_far)
+    else:
+        gnd_far = n_source
+
+    return p_source, gnd_far
+
+
+def _build_layout_unchecked(result: SynthesisResult, output_name: str) -> Layout:
+    dual_rail_mode = result.inverter_transistors == 0 and bool(result.inverter_literals)
+    ctx = _Ctx(dual_rail_mode)
+    ctx.nets["VDD"] = Net(id="VDD", label="VDD", kind="rail_vdd")
+    ctx.nets["GND"] = Net(id="GND", label="GND", kind="rail_gnd")
+    ctx.nets["OUT"] = Net(id="OUT", label=output_name, kind="output")
+
+    pun_width, pun_height = _size(result.pun)
+    pdn_width, pdn_height = _size(result.pdn)
+    core_width = max(pun_width, pdn_width)
+    core_height = pun_height + pdn_height
+
+    vdd_touches, out_touches_pun = _place(ctx, result.pun, "pun", 0, 0, pun_height, "VDD", "OUT")
+    out_touches_pdn, gnd_touches = _place(ctx, result.pdn, "pdn", 0, pun_height, pdn_height, "OUT", "GND")
+
+    inverter_vars = tuple(sorted(result.inverter_literals)) if not dual_rail_mode else ()
+
+    primary_used = {v for v in result.var_order if _gate_net_id(v, False) in ctx.gate_taps} | set(inverter_vars)
+    complement_used = {v for v in result.var_order if _gate_net_id(v, True) in ctx.gate_taps}
+
+    rail_net_ids: list[str] = []
+    for v in result.var_order:
+        if v in primary_used:
+            rail_net_ids.append(_gate_net_id(v, False))
+        if v in complement_used:
+            rail_net_ids.append(_gate_net_id(v, True))
+    num_gate_rail_cols = len(rail_net_ids)
+    rail_col_index = {net_id: j for j, net_id in enumerate(rail_net_ids)}
+
+    inverter_col_base = core_width + num_gate_rail_cols
+    for i, var in enumerate(inverter_vars):
+        x = inverter_col_base + i
+        p_touch, gnd_far = _place_inverter_pair(ctx, var, x, core_height)
+        vdd_touches.append(p_touch)
+        gnd_touches.append(gnd_far)
+
+    _generate_bus(ctx, "VDD", vdd_touches)
+    _generate_bus(ctx, "OUT", out_touches_pun + out_touches_pdn)
+    _generate_bus(ctx, "GND", gnd_touches)
+
+    for net_id in rail_net_ids:
+        j = rail_col_index[net_id]
+        rail_x = (core_width + j) * CELL + CELL // 2
+        offset = j + 1
+        far_points: list[Point] = []
+        for p in ctx.gate_taps.get(net_id, []):
+            hop = Point(p.x, p.y + offset)
+            cruise_far = Point(rail_x, hop.y)
+            ctx.add_wire(net_id, p, hop)
+            ctx.add_wire(net_id, hop, cruise_far)
+            far_points.append(cruise_far)
+        _generate_bus(ctx, net_id, far_points)
+
+    total_width = core_width + num_gate_rail_cols + len(inverter_vars)
+    total_height = core_height
+
+    junctions = _compute_junctions(ctx.devices, ctx.wires)
+
+    primary_nets = tuple(sorted((v, _gate_net_id(v, False)) for v in primary_used))
+    complement_nets = tuple(sorted((v, _gate_net_id(v, True)) for v in complement_used))
+    inverter_driven_vars = frozenset(inverter_vars)
+
+    return Layout(
+        nets=tuple(ctx.nets.values()),
+        devices=tuple(ctx.devices),
+        wires=tuple(ctx.wires),
+        junctions=junctions,
+        var_order=tuple(result.var_order),
+        output_net_id="OUT",
+        vdd_net_id="VDD",
+        gnd_net_id="GND",
+        primary_nets=primary_nets,
+        complement_nets=complement_nets,
+        inverter_driven_vars=inverter_driven_vars,
+        total_transistors=result.total_transistors,
+        width=total_width,
+        height=total_height,
+        pun_height=pun_height,
+        pdn_height=pdn_height,
+    )
+
+
+# --- Junction (degree>=3) computation, shared by builder and validator ----
+
+
+def _terminal_touches(devices: tuple[Device, ...]) -> list[tuple[str, Point]]:
+    touches = []
+    for d in devices:
+        touches.append((d.gate_net, d.gate_point))
+        touches.append((d.source_net, d.source_point))
+        touches.append((d.drain_net, d.drain_point))
+    return touches
+
+
+def _is_interior(point: Point, wire: WireSegment) -> bool:
+    if wire.p1.x == wire.p2.x == point.x:
+        lo, hi = sorted((wire.p1.y, wire.p2.y))
+        return lo < point.y < hi
+    if wire.p1.y == wire.p2.y == point.y:
+        lo, hi = sorted((wire.p1.x, wire.p2.x))
+        return lo < point.x < hi
+    return False
+
+
+def _degree_at(point: Point, net_id: str, devices: tuple[Device, ...], wires: tuple[WireSegment, ...]) -> int:
+    count = 0
+    for term_net, term_point in _terminal_touches(devices):
+        if term_net == net_id and term_point == point:
+            count += 1
+    for w in wires:
+        if w.net_id != net_id:
+            continue
+        if w.p1 == point or w.p2 == point:
+            count += 1
+        elif _is_interior(point, w):
+            count += 2
+    return count
+
+
+def _required_junction_points(
+    devices: tuple[Device, ...], wires: tuple[WireSegment, ...]
+) -> set[tuple[str, Point]]:
+    candidates: set[tuple[str, Point]] = set(_terminal_touches(devices))
+    for w in wires:
+        candidates.add((w.net_id, w.p1))
+        candidates.add((w.net_id, w.p2))
+    return {(net_id, p) for net_id, p in candidates if _degree_at(p, net_id, devices, wires) >= 3}
+
+
+def _compute_junctions(devices: list[Device], wires: list[WireSegment]) -> tuple[Junction, ...]:
+    required = sorted(_required_junction_points(tuple(devices), tuple(wires)), key=lambda t: (t[0], t[1].y, t[1].x))
+    return tuple(
+        Junction(id=f"J{i}", net_id=net_id, point=point) for i, (net_id, point) in enumerate(required)
+    )
+
+
+# --- Gate 1: electrical behavior (net-ID reachability, never touches wires) -----
+
+
+def _reachable(devices: tuple[Device, ...], gate_values: dict[str, bool], start: str) -> set[str]:
+    edges: dict[str, list[str]] = {}
+    for d in devices:
+        is_on = gate_values[d.gate_net] if d.kind == "n" else not gate_values[d.gate_net]
+        if is_on:
+            edges.setdefault(d.source_net, []).append(d.drain_net)
+            edges.setdefault(d.drain_net, []).append(d.source_net)
+    seen = {start}
+    stack = [start]
+    while stack:
+        n = stack.pop()
+        for m in edges.get(n, ()):
+            if m not in seen:
+                seen.add(m)
+                stack.append(m)
+    return seen
+
+
+def simulate_layout(layout: Layout, assignment: dict[str, bool]) -> dict[str, NetState]:
+    """Pure net-ID reachability -- deliberately independent of
+    `ohmwork.network.conducts`/the Network tree AND of `layout.wires`, so it
+    catches a tree->model conversion bug without trusting either the source
+    tree or the drawn wire geometry."""
+    gate_values: dict[str, bool] = {}
+    for var, net_id in layout.primary_nets:
+        gate_values[net_id] = assignment[var]
+    for var, net_id in layout.complement_nets:
+        if var not in layout.inverter_driven_vars:
+            gate_values[net_id] = not assignment[var]
+
+    if layout.inverter_driven_vars:
+        inverter_devices = tuple(d for d in layout.devices if d.role == "inverter")
+        reach_vdd = _reachable(inverter_devices, gate_values, layout.vdd_net_id)
+        for var in layout.inverter_driven_vars:
+            net_id = complement_net_id(layout, var)
+            assert net_id is not None
+            gate_values[net_id] = net_id in reach_vdd
+
+    reach_vdd = _reachable(layout.devices, gate_values, layout.vdd_net_id)
+    reach_gnd = _reachable(layout.devices, gate_values, layout.gnd_net_id)
+
+    return {
+        net.id: NetState(connects_vdd=net.id in reach_vdd, connects_gnd=net.id in reach_gnd)
+        for net in layout.nets
+    }
+
+
+def verify_layout(
+    layout: Layout, var_order: list[str], minterms: set[int], dont_cares: set[int] = frozenset()
+) -> VerificationResult:
+    """Mirrors ohmwork.verify.verify()'s classification logic exactly, but
+    against `simulate_layout`'s net-ID reachability instead of
+    `network.conducts` -- and reuses VerificationResult directly, since its
+    fields already say everything this needs to say."""
+    rows = all_assignments(var_order)
+    mismatches: list[int] = []
+    floating: list[int] = []
+    shorted: list[int] = []
+    dont_care_assignments: dict[int, bool] = {}
+    for i, row in enumerate(rows):
+        state = simulate_layout(layout, row)[layout.output_net_id]
+        if state.shorted:
+            shorted.append(i)
+            continue
+        if state.floating:
+            floating.append(i)
+            continue
+        output = state.connects_vdd
+        if i in dont_cares:
+            dont_care_assignments[i] = output
+        elif output != (i in minterms):
+            mismatches.append(i)
+    return VerificationResult(
+        vector_count=len(rows),
+        functional_pass=not mismatches,
+        structural_pass=not floating and not shorted,
+        mismatches=tuple(mismatches),
+        floating=tuple(floating),
+        shorted=tuple(shorted),
+        dont_care_assignments=dont_care_assignments,
+    )
+
+
+# --- Gate 2: wire/geometry integrity ---------------------------------------
+
+
+def _collinear_overlap(a: WireSegment, b: WireSegment) -> bool:
+    """True iff `a` and `b` run along the *same infinite line* and their
+    spans overlap in more than a single shared endpoint -- a genuinely
+    ambiguous case (visually indistinguishable from being one wire).
+
+    A plain perpendicular crossing between two segments that don't share a
+    declared point is deliberately NOT flagged here: in standard schematic
+    convention, two wires crossing without a junction dot are an explicit,
+    unambiguous "not connected" -- that convention is exactly why the dot
+    exists. `_required_junction_points` only ever considers a point a
+    junction candidate when it's a declared device terminal or wire
+    endpoint, so a mid-span crossing point never accidentally acquires one;
+    routing wires past each other without a shared point is ordinary,
+    correct schematic geometry, not a defect."""
+    a_horiz = a.p1.y == a.p2.y
+    b_horiz = b.p1.y == b.p2.y
+    if a_horiz and b_horiz and a.p1.y == b.p1.y:
+        a_lo, a_hi = sorted((a.p1.x, a.p2.x))
+        b_lo, b_hi = sorted((b.p1.x, b.p2.x))
+        return max(a_lo, b_lo) < min(a_hi, b_hi)
+    if not a_horiz and not b_horiz and a.p1.x == b.p1.x:
+        a_lo, a_hi = sorted((a.p1.y, a.p2.y))
+        b_lo, b_hi = sorted((b.p1.y, b.p2.y))
+        return max(a_lo, b_lo) < min(a_hi, b_hi)
+    return False
+
+
+def validate_layout_geometry(layout: Layout) -> None:
+    """Structural-only validator, independent of `simulate_layout` -- raises
+    RuntimeError on the first violation found, in a fixed check order (see
+    the module docstring / docs/decisions.md D17 for the full rationale)."""
+    # 1. global id uniqueness
+    owner: dict[str, str] = {}
+    for kind, items in (
+        ("net", layout.nets),
+        ("device", layout.devices),
+        ("wire", layout.wires),
+        ("junction", layout.junctions),
+    ):
+        for item in items:
+            if item.id in owner:
+                raise RuntimeError(f"duplicate id {item.id!r} used by both a {owner[item.id]} and a {kind}")
+            owner[item.id] = kind
+
+    # 2. vocabulary
+    net_by_id = {n.id: n for n in layout.nets}
+    for n in layout.nets:
+        if n.kind not in _NET_KINDS:
+            raise RuntimeError(f"net {n.id!r} has unknown kind {n.kind!r}")
+    for d in layout.devices:
+        if d.kind not in _DEVICE_KINDS:
+            raise RuntimeError(f"device {d.id!r} has unknown kind {d.kind!r}")
+        if d.role not in _DEVICE_ROLES:
+            raise RuntimeError(f"device {d.id!r} has unknown role {d.role!r}")
+
+    # 3. referential integrity
+    for d in layout.devices:
+        for net_id in (d.gate_net, d.source_net, d.drain_net):
+            if net_id not in net_by_id:
+                raise RuntimeError(f"device {d.id!r} references nonexistent net {net_id!r}")
+    for w in layout.wires:
+        if w.net_id not in net_by_id:
+            raise RuntimeError(f"wire {w.id!r} references nonexistent net {w.net_id!r}")
+    for j in layout.junctions:
+        if j.net_id not in net_by_id:
+            raise RuntimeError(f"junction {j.id!r} references nonexistent net {j.net_id!r}")
+
+    # 4. required global nets
+    for net_id, expected_kind, label in (
+        (layout.vdd_net_id, "rail_vdd", "VDD"),
+        (layout.gnd_net_id, "rail_gnd", "GND"),
+        (layout.output_net_id, "output", "output"),
+    ):
+        net = net_by_id.get(net_id)
+        if net is None or net.kind != expected_kind:
+            raise RuntimeError(f"{label} net {net_id!r} missing or has wrong kind")
+
+    # 5. exact, bidirectional mapping validation -- derived only from layout.devices
+    core_devices = [d for d in layout.devices if d.role in ("pdn", "pun")]
+    inverter_devices = [d for d in layout.devices if d.role == "inverter"]
+    inverter_vars_present = {d.gate_var for d in inverter_devices}
+    complement_required = {d.gate_var for d in core_devices if d.gate_complemented}
+    primary_required = {d.gate_var for d in core_devices if not d.gate_complemented} | inverter_vars_present
+
+    primary_keys = [v for v, _ in layout.primary_nets]
+    if len(primary_keys) != len(set(primary_keys)):
+        raise RuntimeError(f"primary_nets has duplicate variable keys: {primary_keys!r}")
+    if set(primary_keys) != primary_required:
+        raise RuntimeError(
+            f"primary_nets keys {sorted(primary_keys)!r} do not exactly match the required set "
+            f"{sorted(primary_required)!r}"
+        )
+    primary_net_ids = [nid for _, nid in layout.primary_nets]
+    if len(primary_net_ids) != len(set(primary_net_ids)):
+        raise RuntimeError("primary_nets has two variables sharing the same net id")
+    for v, nid in layout.primary_nets:
+        if v not in layout.var_order:
+            raise RuntimeError(f"primary_nets key {v!r} is not a member of var_order")
+        net = net_by_id.get(nid)
+        if net is None or net.kind != "gate_primary":
+            raise RuntimeError(f"primary_nets[{v!r}] -> {nid!r} is missing or not kind 'gate_primary'")
+
+    complement_keys = [v for v, _ in layout.complement_nets]
+    if len(complement_keys) != len(set(complement_keys)):
+        raise RuntimeError(f"complement_nets has duplicate variable keys: {complement_keys!r}")
+    if set(complement_keys) != complement_required:
+        raise RuntimeError(
+            f"complement_nets keys {sorted(complement_keys)!r} do not exactly match the required "
+            f"set {sorted(complement_required)!r}"
+        )
+    complement_net_ids = [nid for _, nid in layout.complement_nets]
+    if len(complement_net_ids) != len(set(complement_net_ids)):
+        raise RuntimeError("complement_nets has two variables sharing the same net id")
+    for v, nid in layout.complement_nets:
+        if v not in layout.var_order:
+            raise RuntimeError(f"complement_nets key {v!r} is not a member of var_order")
+        net = net_by_id.get(nid)
+        expected_kind = "gate_complement_internal" if v in inverter_vars_present else "gate_complement_external"
+        if net is None or net.kind != expected_kind:
+            raise RuntimeError(f"complement_nets[{v!r}] -> {nid!r} is missing or not kind {expected_kind!r}")
+
+    if layout.inverter_driven_vars != inverter_vars_present:
+        raise RuntimeError(
+            f"inverter_driven_vars {sorted(layout.inverter_driven_vars)!r} does not match the actual "
+            f"inverter device pairs found {sorted(inverter_vars_present)!r}"
+        )
+
+    # 6. role/kind/inverter-pair consistency, including supply nets
+    for d in core_devices:
+        if d.role == "pdn" and d.kind != "n":
+            raise RuntimeError(f"PDN device {d.id!r} has kind {d.kind!r}, expected 'n'")
+        if d.role == "pun" and d.kind != "p":
+            raise RuntimeError(f"PUN device {d.id!r} has kind {d.kind!r}, expected 'p'")
+
+    by_var: dict[str, list[Device]] = {}
+    for d in inverter_devices:
+        by_var.setdefault(d.gate_var, []).append(d)
+    for var in inverter_vars_present:
+        pair = by_var.get(var, [])
+        if len(pair) != 2 or sorted(dd.kind for dd in pair) != ["n", "p"]:
+            raise RuntimeError(f"inverter for {var!r} does not consist of exactly one PMOS and one NMOS device")
+        p_dev = next(dd for dd in pair if dd.kind == "p")
+        n_dev = next(dd for dd in pair if dd.kind == "n")
+        primary_id = primary_net_id(layout, var)
+        complement_id = complement_net_id(layout, var)
+        for dd in (p_dev, n_dev):
+            if dd.gate_var != var or dd.gate_complemented:
+                raise RuntimeError(f"inverter device {dd.id!r} has the wrong gate identity")
+            if dd.gate_net != primary_id:
+                raise RuntimeError(f"inverter device {dd.id!r} gate_net does not match the primary net for {var!r}")
+            if dd.drain_net != complement_id:
+                raise RuntimeError(
+                    f"inverter device {dd.id!r} drain_net does not match the shared complement net for {var!r}"
+                )
+        if p_dev.source_net != layout.vdd_net_id:
+            raise RuntimeError(f"inverter PMOS {p_dev.id!r} source_net is not VDD ({layout.vdd_net_id!r})")
+        if n_dev.source_net != layout.gnd_net_id:
+            raise RuntimeError(f"inverter NMOS {n_dev.id!r} source_net is not GND ({layout.gnd_net_id!r})")
+
+    # 7. device count -- the one place this is checked
+    if len(layout.devices) != layout.total_transistors:
+        raise RuntimeError(
+            f"device count {len(layout.devices)} does not match total_transistors "
+            f"{layout.total_transistors}"
+        )
+
+    # 8. segment shape sanity + point sanity
+    seen_segments: set[tuple[str, frozenset]] = set()
+    for w in layout.wires:
+        if not (w.p1.x == w.p2.x or w.p1.y == w.p2.y):
+            raise RuntimeError(f"wire {w.id!r} is not axis-aligned: {w.p1!r} -> {w.p2!r}")
+        if w.p1 == w.p2:
+            raise RuntimeError(f"wire {w.id!r} has zero length")
+        for p in (w.p1, w.p2):
+            if not (0 <= p.x <= layout.width * CELL and 0 <= p.y <= layout.height * CELL):
+                raise RuntimeError(f"wire {w.id!r} endpoint {p!r} is out of bounds")
+        key = (w.net_id, frozenset({(w.p1.x, w.p1.y), (w.p2.x, w.p2.y)}))
+        if key in seen_segments:
+            raise RuntimeError(f"wire {w.id!r} duplicates another segment on net {w.net_id!r}")
+        seen_segments.add(key)
+    for j in layout.junctions:
+        if not (0 <= j.point.x <= layout.width * CELL and 0 <= j.point.y <= layout.height * CELL):
+            raise RuntimeError(f"junction {j.id!r} point {j.point!r} is out of bounds")
+    for d in layout.devices:
+        for p in (d.origin, d.gate_point, d.source_point, d.drain_point):
+            if not (0 <= p.x <= layout.width * CELL and 0 <= p.y <= layout.height * CELL):
+                raise RuntimeError(f"device {d.id!r} point {p!r} is out of bounds")
+
+    # 9. shared touch index, reused by checks 10-14
+    touches: dict[Point, list[tuple[str, str, str]]] = {}
+
+    def _add_touch(net_id: str, point: Point, source_kind: str, source_id: str) -> None:
+        touches.setdefault(point, []).append((net_id, source_kind, source_id))
+
+    for d in layout.devices:
+        _add_touch(d.gate_net, d.gate_point, "device_gate", d.id)
+        _add_touch(d.source_net, d.source_point, "device_source", d.id)
+        _add_touch(d.drain_net, d.drain_point, "device_drain", d.id)
+    for w in layout.wires:
+        _add_touch(w.net_id, w.p1, "segment_endpoint", w.id)
+        _add_touch(w.net_id, w.p2, "segment_endpoint", w.id)
+
+    # 10. wire-endpoint anchoring
+    junction_points = {(j.net_id, j.point) for j in layout.junctions}
+    for w in layout.wires:
+        for p in (w.p1, w.p2):
+            same_net_entries = [e for e in touches.get(p, []) if e[0] == w.net_id]
+            anchored = (w.net_id, p) in junction_points
+            anchored = anchored or any(e[1] in ("device_gate", "device_source", "device_drain") for e in same_net_entries)
+            anchored = anchored or any(e[1] == "segment_endpoint" and e[2] != w.id for e in same_net_entries)
+            if not anchored:
+                raise RuntimeError(
+                    f"wire {w.id!r} endpoint {p!r} on net {w.net_id!r} is not anchored to any device "
+                    "terminal, junction, or other wire -- a dangling stub"
+                )
+
+    # 11. accidental-short / cross-net check
+    for point, entries in touches.items():
+        nets_here = {e[0] for e in entries}
+        if len(nets_here) > 1:
+            a, b = sorted(nets_here)
+            raise RuntimeError(f"net {a!r} and net {b!r} both touch point {point!r} -- accidental short or wrong net_id")
+
+    # 12. collinear-overlap check (see _collinear_overlap's docstring for why a plain
+    # perpendicular crossing is not flagged -- only a same-line overlap is ambiguous)
+    wires = layout.wires
+    for i in range(len(wires)):
+        for k in range(i + 1, len(wires)):
+            a, b = wires[i], wires[k]
+            if a.net_id == b.net_id:
+                continue
+            if _collinear_overlap(a, b):
+                raise RuntimeError(
+                    f"segment {a.id!r} (net {a.net_id!r}) and segment {b.id!r} (net {b.net_id!r}) "
+                    "overlap collinearly -- ambiguous, possibly an accidental connection"
+                )
+
+    # 13. per-net connected-component check
+    net_ids_touched = {e[0] for entries in touches.values() for e in entries}
+    for net_id in sorted(net_ids_touched):
+        points_for_net = [p for p, entries in touches.items() if any(e[0] == net_id for e in entries)]
+        if len(points_for_net) <= 1:
+            continue
+        parent = {p: p for p in points_for_net}
+
+        def find(x: Point) -> Point:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a: Point, b: Point) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        net_wires = [w for w in layout.wires if w.net_id == net_id]
+        for w in net_wires:
+            if w.p1 in parent and w.p2 in parent:
+                union(w.p1, w.p2)
+        for w in net_wires:
+            for p in points_for_net:
+                if p != w.p1 and p != w.p2 and _is_interior(p, w):
+                    union(p, w.p1)
+        roots = {find(p) for p in points_for_net}
+        if len(roots) > 1:
+            raise RuntimeError(
+                f"net {net_id!r} geometry is not a single connected component ({len(roots)} "
+                "components found)"
+            )
+
+    # 14. junction completeness, both directions
+    required = _required_junction_points(layout.devices, layout.wires)
+    declared = {(j.net_id, j.point) for j in layout.junctions}
+    missing = required - declared
+    if missing:
+        net_id, point = next(iter(sorted(missing, key=lambda t: (t[0], t[1].y, t[1].x))))
+        raise RuntimeError(f"point {point!r} on net {net_id!r} has >=3 connections but no Junction is declared there")
+    extra = declared - required
+    if extra:
+        net_id, point = next(iter(sorted(extra, key=lambda t: (t[0], t[1].y, t[1].x))))
+        raise RuntimeError(
+            f"Junction at {point!r} on net {net_id!r} does not correspond to a real 3-way (or more) connection"
+        )
+
+    # 15. domain minimums
+    if not any(d.source_net == layout.vdd_net_id for d in layout.devices):
+        raise RuntimeError("VDD net is not touched by any device")
+    if not any(d.source_net == layout.gnd_net_id for d in layout.devices):
+        raise RuntimeError("GND net is not touched by any device")
+    out_roles = {
+        d.role for d in layout.devices if layout.output_net_id in (d.source_net, d.drain_net)
+    }
+    if not {"pun", "pdn"} <= out_roles:
+        raise RuntimeError(f"OUT net is not touched by both a PUN and a PDN device (touched by roles {sorted(out_roles)!r})")
+    for v, nid in layout.primary_nets + layout.complement_nets:
+        if not any(d.gate_net == nid for d in layout.devices):
+            raise RuntimeError(f"net {nid!r} (for variable {v!r}) is not touched by any gate")
+    for n in layout.nets:
+        if n.kind == "junction":
+            touching = {d.id for d in layout.devices if n.id in (d.gate_net, d.source_net, d.drain_net)}
+            if len(touching) < 2:
+                raise RuntimeError(f"internal junction net {n.id!r} is touched by fewer than 2 distinct devices")
+
+
+# --- Gate 3: topology fidelity ----------------------------------------------
+
+
+def _canon_combine(tag: str, sigs: list[tuple]) -> tuple:
+    flat = []
+    for s in sigs:
+        if s[0] == tag:
+            flat.extend(s[1])
+        else:
+            flat.append(s)
+    return (tag, tuple(sorted(flat)))
+
+
+def _canonical_topology(network: Network) -> tuple:
+    if isinstance(network, Transistor):
+        var, complemented = _var_and_complement(network.literal)
+        return ("T", network.kind, var, complemented)
+    if isinstance(network, Series):
+        return _canon_combine("S", [_canonical_topology(b) for b in network.branches])
+    if isinstance(network, Parallel):
+        return _canon_combine("P", [_canonical_topology(b) for b in network.branches])
+    raise TypeError(f"unknown network node: {network!r}")  # pragma: no cover
+
+
+def _canonical_layout_topology(devices: tuple[Device, ...], top_net: str, bottom_net: str) -> tuple:
+    """Independently reconstructs a canonical series/parallel signature from
+    the layout's own device graph via classic series-parallel graph
+    reduction -- never touches layout.wires or any Network tree."""
+    edges: list[tuple[str, str, tuple]] = [
+        (d.source_net, d.drain_net, ("T", d.kind, d.gate_var, d.gate_complemented)) for d in devices
+    ]
+
+    def reduce_once(edges: list[tuple[str, str, tuple]]) -> tuple[list[tuple[str, str, tuple]], bool]:
+        groups: dict[frozenset, list[int]] = {}
+        for i, (u, v, _sig) in enumerate(edges):
+            groups.setdefault(frozenset((u, v)), []).append(i)
+        for key, idxs in groups.items():
+            if len(idxs) > 1:
+                merged = _canon_combine("P", [edges[i][2] for i in idxs])
+                pts = tuple(key) if len(key) == 2 else (next(iter(key)),) * 2
+                remaining = [e for i, e in enumerate(edges) if i not in idxs]
+                remaining.append((pts[0], pts[1], merged))
+                return remaining, True
+
+        degree: dict[str, int] = {}
+        incident: dict[str, list[int]] = {}
+        for i, (u, v, _sig) in enumerate(edges):
+            degree[u] = degree.get(u, 0) + 1
+            degree[v] = degree.get(v, 0) + 1
+            incident.setdefault(u, []).append(i)
+            incident.setdefault(v, []).append(i)
+        for node, deg in degree.items():
+            if node in (top_net, bottom_net) or deg != 2:
+                continue
+            i1, i2 = incident[node]
+            u1, v1, s1 = edges[i1]
+            u2, v2, s2 = edges[i2]
+            other1 = v1 if u1 == node else u1
+            other2 = v2 if u2 == node else u2
+            merged = _canon_combine("S", [s1, s2])
+            remaining = [e for i, e in enumerate(edges) if i not in (i1, i2)]
+            remaining.append((other1, other2, merged))
+            return remaining, True
+        return edges, False
+
+    changed = True
+    while changed:
+        edges, changed = reduce_once(edges)
+
+    if len(edges) != 1:
+        raise RuntimeError(
+            f"layout device graph between {top_net!r} and {bottom_net!r} did not reduce to a single "
+            f"series-parallel signature ({len(edges)} edges remain) -- not a valid two-terminal "
+            "series-parallel network between the expected boundaries"
+        )
+    u, v, sig = edges[0]
+    if {u, v} != {top_net, bottom_net}:
+        raise RuntimeError(
+            f"layout device graph's final reduced edge endpoints {{{u!r}, {v!r}}} do not match the "
+            f"expected boundaries {{{top_net!r}, {bottom_net!r}}}"
+        )
+    return sig
+
+
+def _validate_topology_fidelity(layout: Layout, result: SynthesisResult) -> None:
+    """Proves the layout's own PDN/PUN device graph, reduced back to a
+    canonical shape, matches result.pdn/result.pun's own canonical shape --
+    independent of the exhaustive electrical check in build_schematic, which
+    only proves *behavior* matches, not that the *shape* is the one
+    synthesize() actually chose (a different, equal-cost, tied-minimal
+    network can compute the identical function). Inverter devices are
+    excluded -- their shape is pinned down by validate_layout_geometry's
+    role/kind-pair check instead."""
+    pun_devices = tuple(d for d in layout.devices if d.role == "pun")
+    pdn_devices = tuple(d for d in layout.devices if d.role == "pdn")
+
+    expected_pun = _canonical_topology(result.pun)
+    expected_pdn = _canonical_topology(result.pdn)
+    actual_pun = _canonical_layout_topology(pun_devices, layout.vdd_net_id, layout.output_net_id)
+    actual_pdn = _canonical_layout_topology(pdn_devices, layout.output_net_id, layout.gnd_net_id)
+
+    if actual_pun != expected_pun:
+        raise RuntimeError(
+            f"PUN layout topology does not match the synthesized network: expected {expected_pun!r}, "
+            f"got {actual_pun!r}"
+        )
+    if actual_pdn != expected_pdn:
+        raise RuntimeError(
+            f"PDN layout topology does not match the synthesized network: expected {expected_pdn!r}, "
+            f"got {actual_pdn!r}"
+        )
+
+
+# --- Public entry point -----------------------------------------------------
+
+
+def build_schematic(result: SynthesisResult, output_name: str) -> Layout:
+    """Builds a schematic Layout for `result`, running all three
+    correctness gates before ever returning -- see the module docstring."""
+    _validate_result_inverter_bookkeeping(result)
+    layout = _build_layout_unchecked(result, output_name)
+
+    validate_layout_geometry(layout)  # gate 2: wire/geometry integrity
+
+    for row in all_assignments(result.var_order):  # gate 1: electrical behavior
+        state = simulate_layout(layout, row)[layout.output_net_id]
+        if state.floating or state.shorted:
+            raise RuntimeError(
+                f"internal error: schematic output net floats/shorts for input {row} "
+                f"(connects_vdd={state.connects_vdd}, connects_gnd={state.connects_gnd})"
+            )
+        if state.value != conducts(result.pun, row):
+            raise RuntimeError(
+                f"internal error: schematic output value for input {row} ({state.value}) disagrees "
+                f"with the verified PUN network ({conducts(result.pun, row)})"
+            )
+
+    _validate_topology_fidelity(layout, result)  # gate 3: topology fidelity
+
+    return layout
