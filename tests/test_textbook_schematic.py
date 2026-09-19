@@ -62,6 +62,12 @@ def test_output_name_changes_only_output_label():
     assert [(n.id,n.label) for n in a.nets if n.id != "OUT"] == [(n.id,n.label) for n in b.nets if n.id != "OUT"]
 
 
+def test_textbook_builder_rejects_a_wired_layout_substitution(monkeypatch):
+    monkeypatch.setattr("ohmwork.schematic._textbook_projection", lambda source: source)
+    with pytest.raises(RuntimeError, match="wrong layout style"):
+        build_textbook_schematic(synthesize_from_input(expr="(abc)'"), "F")
+
+
 def test_exhaustive_small_functions_and_four_variable_dont_cares():
     rng = random.Random(635)
     cases = []

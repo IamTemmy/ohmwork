@@ -1638,6 +1638,8 @@ def build_textbook_schematic(result: SynthesisResult, output_name: str) -> Layou
     """A named-port schematic, independently gated after the geometry transform."""
     source = build_schematic(result, output_name)
     layout = _textbook_projection(source)
+    if layout.style != "textbook":
+        raise RuntimeError("textbook projection returned the wrong layout style")
     validate_layout_geometry(layout)
     _validate_topology_fidelity(layout, result)
     _validate_source_fidelity(layout, result, output_name)

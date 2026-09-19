@@ -1030,7 +1030,7 @@ function renderTextbookSchematic(svg, view) {
       bars.forEach(([a,c,dy]) => g.appendChild(svgEl("line", {class: "ow-supply-symbol",
         "data-role": "supply-symbol", x1:x+a,y1:y+dy,x2:x+c,y2:y+dy})));
     } else {
-      g.appendChild(svgEl("circle", {class:"ow-junction-dot",cx:x,cy:y,r:4}));
+      g.appendChild(svgEl("circle", {class:"ow-junction-dot","data-role":"output-endpoint",cx:x,cy:y,r:4}));
     }
     svg.appendChild(g);
     label(netById[b.net_id].label, x + (b.net_id === "OUT" ? 14 : 0),
@@ -1046,8 +1046,13 @@ function renderTextbookSchematic(svg, view) {
   const inverters = view.devices.filter(d => d.role === "inverter" && d.kind === "p");
   inverters.forEach(d => label(`Shared ${d.gate_var} → ${d.gate_var}'`, d.source_point.x - 95, top - 75, {"font-size":22}));
   const external = view.nets.filter(n => n.kind === "gate_complement_external");
-  label(external.length ? `External complements: ${external.map(n=>n.label).join(", ")}` : "Matching gate labels = same net",
-    35, h - 24, {"font-size":20,"opacity":.7});
+  if (external.length) {
+    label(`External complements: ${external.map(n=>n.label).join(", ")}`,
+      35, h - 24, {"font-size":20,"opacity":.7});
+  } else {
+    label("Matching gate labels", 35, h - 46, {"font-size":20,"opacity":.7});
+    label("denote the same net.", 35, h - 24, {"font-size":20,"opacity":.7});
+  }
 }
 
 function renderSchematic(view) {

@@ -1294,6 +1294,10 @@ _SCHEMATIC_SNAPSHOT_JS = """(rootSelector) => {
       gate_var: g.getAttribute('data-gate-var'),
       gate_complemented: g.getAttribute('data-gate-complemented') === 'true',
       has_gate_bubble: !!g.querySelector('[data-role="gate-bubble"]'),
+      bubbles: Array.from(g.querySelectorAll('[data-role="gate-bubble"]')).map(b => ({
+        x:Number(b.getAttribute('cx')),y:Number(b.getAttribute('cy')),r:Number(b.getAttribute('r')),
+      })),
+      terminal_count:g.querySelectorAll('[data-role="terminal"]').length,
       label: labelEl ? labelEl.textContent : null,
       channel: channelEl ? lineCoords(channelEl) : null,
       gate_electrode: electrodeEl ? lineCoords(electrodeEl) : null,
@@ -1310,7 +1314,7 @@ _SCHEMATIC_SNAPSHOT_JS = """(rootSelector) => {
   // data-role and (for a device-symbol part) the data-device-id of its
   // containing .ow-device group -- lets a test reject anything untagged or
   // unclassified, not just count the ones it already expects to find.
-  const primitives = Array.from(root.querySelectorAll('line, path, polyline')).map(el => {
+  const primitives = Array.from(root.querySelectorAll('line, path, polyline, circle')).map(el => {
     const deviceGroup = el.closest('.ow-device');
     return {
       tag: el.tagName.toLowerCase(),
@@ -1326,6 +1330,12 @@ _SCHEMATIC_SNAPSHOT_JS = """(rootSelector) => {
     device_id:g.getAttribute('data-device-id'), terminal:g.getAttribute('data-terminal'),
     label:g.querySelector('[data-role="port-label"]').textContent,
     point:{x:Number(g.getAttribute('data-x')),y:Number(g.getAttribute('data-y'))},
+    text_x:Number(g.querySelector('text').getAttribute('x')),
+    text_y:Number(g.querySelector('text').getAttribute('y')),
+    text_anchor:g.querySelector('text').getAttribute('text-anchor'),
+    visible: g.querySelector('text').getBoundingClientRect().width > 0 &&
+      getComputedStyle(g.querySelector('text')).visibility === 'visible' &&
+      getComputedStyle(g.querySelector('text')).opacity !== '0',
   }));
   const boundaries = Array.from(root.querySelectorAll('[data-role="boundary"]')).map(g => ({
     id:g.getAttribute('data-boundary-id'),net_id:g.getAttribute('data-net-id'),
@@ -1401,7 +1411,12 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
     assert len(snapshot["ports"]) == len(model_ports)
     assert {p["id"] for p in snapshot["ports"]} == set(model_ports)
     for p in snapshot["ports"]:
-        assert p == model_ports[p["id"]]
+        mp = model_ports[p["id"]]
+        assert {k:p[k] for k in mp} == mp
+        assert p["text_x"] == mp["point"]["x"] + (-9 if mp["terminal"] == "gate" else 9)
+        assert p["text_y"] == mp["point"]["y"] + 8
+        assert p["text_anchor"] == ("end" if mp["terminal"] == "gate" else "start")
+        assert p["visible"]
     model_boundaries = {b["id"]: b for b in schematic["boundaries"]}
     assert len(snapshot["boundaries"]) == len(model_boundaries) == 3
     assert {b["id"] for b in snapshot["boundaries"]} == set(model_boundaries)
@@ -1424,6 +1439,8 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
         assert next(p["label"] for p in snapshot["ports"] if p["device_id"] == d["id"] and p["terminal"] == "gate") == md["literal"]
         # PMOS gate-bubble present, NMOS absent -- structurally, not visually.
         assert d["has_gate_bubble"] == (md["kind"] == "p")
+        assert d["terminal_count"] == 3
+        assert d["bubbles"] == ([{"x":md["source_point"]["x"]-40,"y":md["gate_point"]["y"],"r":6}] if md["kind"] == "p" else [])
 
         for term in ("gate", "source", "drain"):
             snap_term = d["terminals"][term]
@@ -1463,7 +1480,9 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
     recognized_device_roles = {"channel", "gate-electrode", "gate-connector", "source-lead", "drain-lead"}
     for device_id in model_devices:
         roles = [p["role"] for p in snapshot["primitives"] if p["device_id"] == device_id]
-        assert sorted(roles) == sorted(recognized_device_roles)
+        expected = list(recognized_device_roles) + ["terminal"] * 3
+        if model_devices[device_id]["kind"] == "p": expected.append("gate-bubble")
+        assert sorted(roles) == sorted(expected)
     for prim in snapshot["primitives"]:
         if prim["role"] == "wire":
             assert prim["wire_id"] in model_wires
@@ -1471,6 +1490,12 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
             assert prim["device_id"] in model_devices
         elif prim["role"] == "supply-symbol":
             assert prim["boundary_id"] in model_boundaries
+        elif prim["role"] in ("gate-bubble", "terminal"):
+            assert prim["device_id"] in model_devices
+        elif prim["role"] == "junction":
+            pass  # already compared one-for-one above, including coordinates
+        elif prim["role"] == "output-endpoint":
+            assert model_boundaries[prim["boundary_id"]]["net_id"] == "OUT"
         else:
             pytest.fail(f"unclassified conductive primitive in the schematic SVG: {prim!r}")
 
@@ -1515,7 +1540,7 @@ def test_textbook_visual_and_export_acceptance(page, name, expr, dual):
     _assert_snapshot_matches_model(_schematic_dom_snapshot(page), schematic)
     artifact_dir = Path("test-artifacts/schematics")
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    page.locator("#schematic-svg").screenshot(path=str(artifact_dir / (name+".png")))
+    page.locator("#schematic-svg").screenshot(path=str(artifact_dir / (name+"-inline.png")))
     clipped = page.evaluate("""() => {
         const svg = document.querySelector('#schematic-svg'), vb = svg.viewBox.baseVal;
         return Array.from(svg.querySelectorAll('text')).filter(t => {
@@ -1524,12 +1549,17 @@ def test_textbook_visual_and_export_acceptance(page, name, expr, dual):
         }).map(t => t.textContent);
     }""")
     assert not clipped, f"clipped schematic labels: {clipped}"
+    if name == "shared-inverter":
+        page.emulate_media(color_scheme="dark")
+        page.locator("#schematic-svg").screenshot(path=str(artifact_dir / (name+"-dark.png")))
+        page.emulate_media(color_scheme="light")
     with page.expect_download() as info:
         page.click("#download-svg-btn")
     target = (artifact_dir / (name+".svg")).resolve()
     info.value.save_as(str(target))
     page.goto(target.as_uri())
     _assert_snapshot_matches_model(page.evaluate(_SCHEMATIC_SNAPSHOT_JS, "svg"), schematic)
+    page.locator("svg").screenshot(path=str(artifact_dir / (name+".png")))
 
 
 def test_download_svg_passes_the_same_semantic_assertions(page, tmp_path):
