@@ -993,7 +993,13 @@ function renderTextbookSchematic(svg, view) {
   const h = view.height * view.cell;
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
   svg.setAttribute("aria-label", `Transistor-level schematic: ${view.total_transistors} transistors. Matching gate labels denote the same electrical net.`);
-  svg.style.width = `${Math.max(MIN_DISPLAY_WIDTH, Math.round(w * PIXELS_PER_UNIT))}px`;
+  const displayWidth = Math.max(MIN_DISPLAY_WIDTH, Math.round(w * PIXELS_PER_UNIT));
+  svg.style.width = `${displayWidth}px`;
+  // A standalone SVG without an explicit height can inherit the browser
+  // viewport's height and shrink its contents to fit. Carry both dimensions
+  // into Download SVG so device/label scale is identical inside and outside
+  // the app, including diagrams taller than the viewport.
+  svg.style.height = `${displayWidth * h / w}px`;
   const netById = Object.fromEntries(view.nets.map(n => [n.id, n]));
   function label(text, x, y, attrs = {}) {
     const el = svgEl("text", {class: "ow-text", x, y, "font-size": 26, ...attrs});
@@ -1066,6 +1072,7 @@ function renderSchematic(view) {
   svg.appendChild(styleEl);
   svg.appendChild(schematicNetInventory(view));
   if (view.style === "textbook") { renderTextbookSchematic(svg, view); return; }
+  svg.style.height = "auto";
 
   // Top/bottom margins are taller than left/right -- purely to give the
   // PUN/PDN section title and the VDD/GND rail label two clearly separate

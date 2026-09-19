@@ -1538,6 +1538,12 @@ def test_textbook_visual_and_export_acceptance(page, name, expr, dual):
     page.wait_for_selector("#synth-result:not(.empty)")
     schematic = _real_json(page, "/api/synth", {"expr":expr,"dual_rail":dual})["schematic"]
     _assert_snapshot_matches_model(_schematic_dom_snapshot(page), schematic)
+    size_script = """() => {
+        const label = document.querySelector('.ow-port-label').getBoundingClientRect();
+        const channel = document.querySelector('[data-role="channel"]').getBoundingClientRect();
+        return {label:label.height,channel:channel.height};
+    }"""
+    inline_size = page.evaluate(size_script)
     artifact_dir = Path("test-artifacts/schematics")
     artifact_dir.mkdir(parents=True, exist_ok=True)
     page.locator("#schematic-svg").screenshot(path=str(artifact_dir / (name+"-inline.png")))
@@ -1559,6 +1565,7 @@ def test_textbook_visual_and_export_acceptance(page, name, expr, dual):
     info.value.save_as(str(target))
     page.goto(target.as_uri())
     _assert_snapshot_matches_model(page.evaluate(_SCHEMATIC_SNAPSHOT_JS, "svg"), schematic)
+    assert page.evaluate(size_script) == pytest.approx(inline_size, abs=0.1)
     page.locator("svg").screenshot(path=str(artifact_dir / (name+".png")))
 
 
