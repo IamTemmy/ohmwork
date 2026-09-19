@@ -424,30 +424,48 @@ follows), this is that entry.
    the actual `Network` tree (`network.py`'s `Series`/`Parallel`/`Transistor` nodes — already
    exactly the structure a layout algorithm needs, no new engine data required); PUN and PDN
    labeled as such.
-3. **Complemented inputs (D12).** In normal mode: exactly one shared inverter symbol per
-   distinct complemented literal counted by `inverter_literals`, its complemented output rail
-   wired to every transistor gate that uses that literal (never one inverter per use site —
-   same sharing rule D12 already establishes for the transistor *count*, now also true of the
-   *drawing*). Under `--dual-rail`: the complemented rail is still shown/labeled at each gate
-   that needs it, but no inverter symbol is drawn and none is counted — matching D2's existing
-   rule that dual-rail complements are free.
-4. **Symbol count must agree with the report.** The number of transistor symbols in the
-   complete diagram (PDN + PUN + inverters) must equal `SynthesisResult.total_transistors` —
-   checked structurally by the acceptance tests below, not eyeballed.
-5. **Initial exclusions** (v1 scope, not permanent): transistor sizing (W/L ratios); body
+3. **Complemented inputs (D12) are drawn at transistor level, never as a gate symbol.** In
+   normal mode, each distinct complemented literal counted by `inverter_literals` is rendered
+   as **exactly one PMOS device symbol plus one NMOS device symbol** — two transistor symbols,
+   connected between the VDD and GND rails exactly like any other inverter stage, sharing one
+   complemented-output net between them. A logic-gate triangle (or any other non-transistor
+   glyph) is not an acceptable substitute — the whole point of this decision is a
+   transistor-level diagram, and an inverter drawn as a gate would silently misrepresent that.
+   Both of that inverter's two devices count toward the total symbol count (point 5). That
+   shared complemented-output net is wired to every transistor gate that uses the literal
+   (never one inverter per use site — the same sharing rule D12 already establishes for the
+   transistor *count*, now also true of the *drawing*). Under `--dual-rail`: the complemented
+   rail is still shown/labeled at each gate that needs it, but no inverter symbols are drawn
+   and none are counted — matching D2's existing rule that dual-rail complements are free.
+4. **The layout model has explicit, named electrical nets and device terminals — it is not
+   just a picture.** Every device (transistor or inverter-half) has typed terminals (gate,
+   source, drain) and every net (VDD, GND, the output, each internal node) has a stable name,
+   in the model itself, before any SVG is produced. This is what makes the model
+   independently checkable for correctness (point 7 below and the connectivity acceptance
+   test) rather than only "looks right" — converting the already-verified `Network` tree into
+   this model is itself a step that can introduce a bug, and an untyped, unnamed geometry-only
+   model would have no way to catch one.
+5. **Symbol count must agree with the report.** The number of transistor symbols in the
+   complete diagram (PDN + PUN + inverters, each inverter counted as its two devices per point
+   3) must equal `SynthesisResult.total_transistors` — checked structurally by the acceptance
+   tests below, not eyeballed.
+6. **Initial exclusions** (v1 scope, not permanent): transistor sizing (W/L ratios); body
    terminals and body effect; analog device parameters; physical layout or parasitics; SPICE
    simulation or netlist export; arbitrary non-series-parallel circuits (D16 point 3 already
    excludes these from what `synth` even finds, so the renderer only ever needs to lay out
    series/parallel trees); K-map rendering (a separate, also-deferred charter item, not part
    of this decision).
-6. **Implementation direction** (for after this entry is approved, not before):
-   - A testable schematic *layout model* — plain data (transistor positions, wire segments,
-     labels) computed from the `Network` tree — kept separate from the SVG string it produces,
-     so the model's correctness (acceptance tests 1-6 below) can be checked structurally
-     without parsing rendered markup or comparing screenshots.
+7. **Implementation direction** (for after this entry is approved, not before):
+   - A testable schematic *layout model* — the named nets/typed devices of point 4, plus
+     positions and wire segments for layout — computed from the `Network` tree and kept
+     separate from the SVG string it produces, so the model's own correctness (acceptance
+     tests 1-7 below) can be checked structurally without rendering anything.
    - That model rendered as responsive inline SVG with a stable `viewBox`, built via
      `document.createElementNS`/`textContent` (or an equivalently safe internal renderer) —
-     never string-concatenated `innerHTML`, the same rule M1.3's HTML table follows.
+     never string-concatenated `innerHTML`, the same rule M1.3's HTML table follows. Every
+     rendered transistor and net carries a stable identifier (e.g. a `data-device-id`/
+     `data-net-id` attribute) tying it back to the layout model's own IDs — required for
+     acceptance test 8's model-to-SVG bridge check, not optional polish.
    - No AI-generated or bitmap circuit images at any point — the whole reason for this
      decision is that the output must be deterministic and provably tied to the verified
      network, which a generated image cannot guarantee.
@@ -464,23 +482,41 @@ charter's M1a/M1b acceptance tests played for those milestones):
 3. **Q3 (AOI31):** PDN has the `abc` series branch in parallel with `d`; PUN is its correct
    dual ((a+b+c) in series with d); exactly 8 transistor symbols total.
 4. **Complemented-input case** (e.g. the AOI21 `(a'b+c)'` example from the minimality-wording
-   review round): exactly one shared inverter symbol is drawn for the complemented literal;
-   every transistor gate using that literal connects to the *same* inverter's output rail, not
-   separate ones; total symbol count equals core + inverter cost (8, for that example).
+   review round): the complemented literal's inverter is exactly one PMOS symbol and one NMOS
+   symbol (never a gate glyph, per point 3), sharing one complemented-output net; every
+   transistor gate using that literal connects to that *same* net, not separate ones; total
+   symbol count equals core + inverter's two devices (8, for that example).
 5. **Dual-rail version of the same case:** the complemented rail is shown at the transistors
    that need it; zero inverter symbols are drawn; total symbol count equals core cost only (6).
 6. **Output name:** setting a custom output name (M1.2) changes the schematic's output-node
    label to match, without changing the circuit itself.
-7. **Layout-model tests are structural, not pixel-based.** The acceptance tests above assert
+7. **Layout-model connectivity is independently verified for every input vector** — not just
+   asserted to look like the right shape. For each of the function's `2^n` input assignments,
+   evaluating the layout model's own nets/devices (independently of the already-verified
+   `Network` tree, so this specifically catches a bug introduced while *converting* that tree
+   into the layout model) must show: the output net connects to exactly one of VDD or GND;
+   it never floats (connects to neither); it never shorts (connects to both); and its
+   resulting logic value matches the function `synth` actually verified (D7). This is D7's own
+   discipline — exhaustive simulation before trusting a network — applied a second time, to
+   the model that will actually be drawn.
+8. **A semantic model-to-SVG bridge test**, so a correct layout model rendered incorrectly is
+   still caught. Every device and net in the layout model must appear exactly once in the
+   rendered SVG, located by its stable identifier (point 7 above), with the correct device
+   type (PMOS/NMOS), gate label, and net endpoints. This assertion works against the SVG's
+   semantic structure (element type, attributes, `data-*` identifiers) — it is **not** a pixel
+   comparison and **not** an exact-SVG-string snapshot, both of which would be fragile to
+   unrelated visual changes and wouldn't actually verify electrical correctness; stable
+   semantic DOM assertions are the right tool here precisely because they survive a purely
+   cosmetic layout tweak while still catching a real model-to-SVG bug.
+9. **Layout-model tests are structural, not pixel-based.** Tests 1-3, 5, and 6 above assert
    against the layout model's own data (transistor positions/types/gate-labels/connectivity,
-   symbol counts) — never by parsing the rendered SVG's markup and never by comparing
-   screenshots, which are fragile to unrelated visual changes and don't actually verify
-   electrical correctness.
-8. **Browser-level coverage** (Playwright, alongside the structural tests above): the SVG
-   appears for a synthesis result and disappears when the result becomes stale or New Problem
-   is pressed (same stale-result discipline M1.2/M1.3 already established); it's responsive
-   (scales with viewport, doesn't overflow); it has an accessible name/description; it renders
-   legibly in both light and dark mode (`prefers-color-scheme`).
+   symbol counts), the same principle test 8 extends to the rendered SVG itself.
+10. **Browser-level coverage** (Playwright, alongside the structural tests above): the SVG
+    appears for a synthesis result and disappears when the result becomes stale or New Problem
+    is pressed (same stale-result discipline M1.2/M1.3 already established); its displayed
+    transistor-symbol count equals the model's (and thus the report's) count; it's responsive
+    (scales with viewport, doesn't overflow); it has an accessible name/description; it
+    renders legibly in both light and dark mode (`prefers-color-scheme`).
 
 **Reasoning:** The charter already defers "SVG/graphical transistor schematics" explicitly —
 this entry doesn't reopen that scope decision, it fulfills the condition the charter itself
@@ -491,6 +527,15 @@ transistor count, a mis-shared inverter, or PDN/PUN topology that doesn't match 
 `Network` tree would be a *correctness* bug wearing a nicer coat of paint, and the acceptance
 tests above are what makes "the diagram matches what D7 already verified" a checkable claim
 rather than an eyeballed one — the same reason D16 wrote down the search space before D16's
-own implementation, and D1 before the engine that had to honor it.
+own implementation, and D1 before the engine that had to honor it. Points 3-4 and acceptance
+tests 4 and 7-9 exist because a first review round (2026-09-18) found the original draft's
+"never parse rendered text/markup" principle, while correctly aimed at the ASCII report, had
+left two real gaps on the SVG side itself: nothing pinned down *how* an inverter is drawn
+(a gate-symbol substitute would misrepresent "transistor-level"), and nothing checked that the
+model-to-layout conversion or the model-to-SVG rendering step each preserve the electrical
+facts D7 already verified, as opposed to merely producing a plausible-looking picture.
 
-**Date:** 2026-09-18 (proposed; not yet approved or implemented).
+**Date:** 2026-09-18 (proposed). **Revised:** 2026-09-18, incorporating a first review round's
+three amendments (inverter rendered at transistor level, named nets/terminals with per-vector
+connectivity verification, and a semantic — not pixel/snapshot — model-to-SVG bridge test).
+Still not approved or implemented.
