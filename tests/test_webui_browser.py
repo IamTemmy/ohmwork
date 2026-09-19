@@ -1112,6 +1112,94 @@ def test_rich_copy_falls_back_when_clipboarditem_is_unavailable(page):
     assert "\t" in copied
 
 
+# --- Fallback-box ownership is button-specific -----------------------------------------
+#
+# The bug (ChatGPT review of 3fcde44): resetTtExportState() removed every
+# .copy-fallback anywhere inside #tt-result -- so changing the Advanced
+# export format silently deleted a visible "Copy table for Word/Docs"
+# fallback the user hadn't touched at all, even though changing an
+# Advanced export format must not affect the rich-table copy. Reproduced
+# live before fixing: forced all four copy strategies to fail, clicked
+# "Copy table for Word/Docs" (its fallback box appeared), then just
+# switched the Advanced export format radio -- the fallback disappeared
+# with zero interaction with that button. Fixed by scoping fallback
+# removal to a specific button's own parent (removeCopyFallbackFor),
+# used by resetTtExportState for #tt-copy-formatted only, while
+# clearTtOutputDisplay (the complete-result-is-stale case) still clears
+# both.
+
+
+def _force_all_copy_paths_to_fallback(page) -> None:
+    # All four strategies copyText()/the rich-copy handler try, in order,
+    # must fail for the visible-fallback box to appear at all.
+    page.evaluate(
+        """() => {
+            navigator.clipboard.write = () => Promise.reject(new Error("no rich clipboard"));
+            navigator.clipboard.writeText = () => Promise.reject(new Error("no writeText"));
+            document.execCommand = () => false;
+            window.prompt = () => { throw new Error("no prompt"); };
+        }"""
+    )
+
+
+def test_rich_copy_fallback_survives_an_advanced_format_change(page):
+    _run_derivation(page, "xy + xy'")
+    _force_all_copy_paths_to_fallback(page)
+
+    page.click("#tt-copy-rich")
+    page.wait_for_selector("#tt-copy-rich ~ .copy-fallback")
+    fallback = page.locator("#tt-copy-rich ~ .copy-fallback")
+    fallback_text = fallback.text_content()
+    assert "\t" in fallback_text  # tab-separated table
+    assert fallback_text.rstrip().endswith("F = x")
+
+    _open_tt_advanced_exports(page)
+    page.check('input[name="tt-format"][value="md"]')
+
+    assert fallback.count() == 1  # still there
+    assert fallback.text_content() == fallback_text  # unchanged
+    assert page.is_visible("#tt-result")  # the table itself, also unaffected
+
+
+def test_rich_copy_fallback_is_removed_by_editing_the_expression(page):
+    _run_derivation(page, "xy + xy'")
+    _force_all_copy_paths_to_fallback(page)
+    page.click("#tt-copy-rich")
+    page.wait_for_selector("#tt-copy-rich ~ .copy-fallback")
+
+    page.fill("#tt-expr", "a+b")
+    assert page.locator("#tt-copy-rich ~ .copy-fallback").count() == 0
+
+
+def test_rich_copy_fallback_is_removed_by_new_problem(page):
+    _run_derivation(page, "xy + xy'")
+    _force_all_copy_paths_to_fallback(page)
+    page.click("#tt-copy-rich")
+    page.wait_for_selector("#tt-copy-rich ~ .copy-fallback")
+
+    page.click("#tt-new-problem")
+    assert page.locator("#tt-copy-rich ~ .copy-fallback").count() == 0
+
+
+def test_advanced_format_change_removes_only_the_advanced_fallback(page):
+    _run_derivation(page, "xy + xy'")
+    _force_all_copy_paths_to_fallback(page)
+
+    page.click("#tt-copy-rich")
+    page.wait_for_selector("#tt-copy-rich ~ .copy-fallback")
+
+    _open_tt_advanced_exports(page)
+    page.click("#tt-copy-formatted")
+    page.wait_for_selector("#tt-copy-formatted ~ .copy-fallback")
+
+    assert page.locator(".copy-fallback").count() == 2
+
+    page.check('input[name="tt-format"][value="md"]')
+
+    assert page.locator("#tt-copy-formatted ~ .copy-fallback").count() == 0  # its own, gone
+    assert page.locator("#tt-copy-rich ~ .copy-fallback").count() == 1  # Word/Docs, untouched
+
+
 def test_copy_buttons_have_independent_feedback(page):
     _run_derivation(page, "xy + xy'")
     _hijack_clipboard(page)

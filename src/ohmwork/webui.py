@@ -536,10 +536,28 @@ function buildTtPayload() {
   };
 }
 
+function removeCopyFallbackFor(btn) {
+  // A copy-fallback box is always inserted as a sibling of its own
+  // button (showCopyFallback below), so scoping removal to that button's
+  // parent -- never a page- or #tt-result-wide selector -- is what keeps
+  // one button's fallback from being able to touch another's. A prior
+  // version of resetTtExportState used "#tt-result .copy-fallback",
+  // which matched *both* #tt-copy-formatted's and #tt-copy-rich's
+  // fallback boxes since both buttons live inside #tt-result -- a
+  // ChatGPT review caught that changing the Advanced export format was
+  // silently deleting a visible "Copy table for Word/Docs" fallback the
+  // user hadn't touched at all.
+  const existing = btn.parentElement.querySelector(".copy-fallback");
+  if (existing) existing.remove();
+}
+
 function resetTtExportState() {
-  // The export/copy side only: the cached preview text, the copy button's
-  // state, any in-flight "Copy formatted output" fetch, and any copy
-  // fallback box. Kept separate from the table-clearing below so a
+  // The Advanced-export side only: the cached preview text, the
+  // #tt-copy-formatted button's state, any in-flight "Copy formatted
+  // output" fetch, and *only that button's* copy fallback box -- never
+  // #tt-copy-rich's, which belongs to the independent "Copy table for
+  // Word/Docs" button and must survive an Advanced-export format change
+  // untouched. Kept separate from the table-clearing below so a
   // tt-format change can invalidate a pending or already-shown copy
   // *without* touching #tt-result, which is still a perfectly valid,
   // unrelated table -- a ChatGPT review caught that changing the format
@@ -550,8 +568,8 @@ function resetTtExportState() {
   // previously-copied format after switching, which is just as
   // misleading.
   ttCopyRequestToken++;
-  document.querySelectorAll("#tt-result .copy-fallback").forEach(el => el.remove());
   const copyBtn = $("tt-copy-formatted");
+  removeCopyFallbackFor(copyBtn);
   copyBtn.classList.remove("copied");
   copyBtn.textContent = "Copy formatted output";
   $("tt-formatted-preview").textContent = "";
@@ -571,10 +589,11 @@ function clearTtOutputDisplay() {
   clearChildren($("tt-table-head"));
   clearChildren($("tt-table-body"));
   lastTtView = null;
-  // resetTtExportState() above already removed every .copy-fallback box
-  // inside #tt-result (it uses that broad a selector), covering this
-  // button's fallback too -- only its own text/class need resetting here.
+  // The complete result is going stale here (edit, New Problem, or a
+  // newer submission) -- unlike resetTtExportState above, both copy
+  // buttons' fallbacks are cleared, since both are now equally stale.
   const richBtn = $("tt-copy-rich");
+  removeCopyFallbackFor(richBtn);
   richBtn.classList.remove("copied");
   richBtn.textContent = "Copy table for Word/Docs";
 }
@@ -980,8 +999,7 @@ function showCopyFallback(btn, text) {
   // worked in this environment (seen for real in one embedded/automated
   // browser context during testing) -- show the text inline, selected,
   // so the user can copy it by hand. Never throws.
-  const existing = btn.parentElement.querySelector(".copy-fallback");
-  if (existing) existing.remove();
+  removeCopyFallbackFor(btn); // this button's own stale fallback, if any -- never another button's
   const box = document.createElement("pre");
   box.className = "copy-fallback";
   box.textContent = text;
