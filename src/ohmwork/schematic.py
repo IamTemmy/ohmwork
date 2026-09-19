@@ -1490,7 +1490,7 @@ def _validate_source_fidelity(layout: Layout, result: SynthesisResult, output_na
         )
     expected_height = layout.pun_height + layout.pdn_height + 2 * GATE_LANE_CELLS
     if layout.style == "textbook":
-        expected_height *= 2
+        expected_height = 2 * expected_height + 2  # one device-pitch gap between PUN and PDN
     if layout.height != expected_height:
         raise RuntimeError(
             f"layout.height {layout.height} != layout.pun_height + layout.pdn_height + "
@@ -1567,6 +1567,11 @@ def _validate_named_ports(layout: Layout, nets: dict[str, Net]) -> None:
         raise RuntimeError("different gate nets have the same visible label")
     if len(layout.boundaries) != 3 or {b.net_id for b in layout.boundaries} != {"VDD", "GND", "OUT"}:
         raise RuntimeError("textbook layout needs exactly VDD/GND/OUT boundaries")
+    pun_bottom = max(p.y for d in layout.devices if d.role == "pun" for p in (d.source_point, d.drain_point))
+    pdn_top = min(p.y for d in layout.devices if d.role == "pdn" for p in (d.source_point, d.drain_point))
+    output = next(b for b in layout.boundaries if b.net_id == "OUT")
+    if pdn_top - pun_bottom != 200 or output.point.y != (pun_bottom + pdn_top) // 2:
+        raise RuntimeError("output must branch halfway across the PUN/PDN separation")
     for b in layout.boundaries:
         if not any(w.net_id == b.net_id and b.point in (w.p1, w.p2) for w in layout.wires):
             raise RuntimeError("supply/output boundary has no continuous wire")
@@ -1578,9 +1583,10 @@ def _validate_named_ports(layout: Layout, nets: dict[str, Net]) -> None:
 def _textbook_projection(source: Layout) -> Layout:
     """Re-layout the validated topology, replacing ONLY gate distribution wires.
 
-    No resynthesis and no expression parsing. Original source/drain net IDs,
-    device identities and source/drain wires are preserved. Shared inverter
-    drain ports retain the locally coincident PMOS/NMOS drain connection.
+    No resynthesis and no expression parsing. Original source/drain net IDs
+    and device identities are preserved. Output and ground buses are rerouted
+    around the PUN/PDN gap; internal network wires keep their topology. Shared
+    inverter drain ports retain the coincident PMOS/NMOS drain connection.
     """
     core_width = source.width - len(source.primary_nets) - len(source.complement_nets) - len(source.inverter_driven_vars)
     rail_cols = len(source.primary_nets) + len(source.complement_nets)
@@ -1595,10 +1601,46 @@ def _textbook_projection(source: Layout) -> Layout:
     devices = []
     for d in source.devices:
         x = d.x - rail_cols + 1 if d.role == "inverter" else d.x
-        origin, gate, src, drain = _textbook_device_points(x, d.y, d.kind)
-        devices.append(replace(d, x=x, origin=origin, gate_point=gate, source_point=src, drain_point=drain))
+        y = d.y + (1 if d.role == "pdn" else 0)
+        origin, gate, src, drain = _textbook_device_points(x, y, d.kind)
+        devices.append(replace(d, x=x, y=y, origin=origin, gate_point=gate, source_point=src, drain_point=drain))
     gate_nets = {n.id for n in source.nets if n.kind.startswith("gate_")}
-    wires = [replace(w, p1=transform(w.p1), p2=transform(w.p2)) for w in source.wires if w.net_id not in gate_nets]
+    pdn_nets = {n for d in devices if d.role == "pdn" for n in (d.source_net, d.drain_net)} - {"OUT", "GND"}
+    wires = []
+    for w in source.wires:
+        if w.net_id in gate_nets | {"OUT", "GND"}:
+            continue
+        a, b = transform(w.p1), transform(w.p2)
+        if w.net_id in pdn_nets:
+            a, b = Point(a.x, a.y + 200), Point(b.x, b.y + 200)
+        wires.append(replace(w, p1=a, p2=b))
+
+    def bus(net_id: str, terminals: list[Point], bus_y: int, extra_x: int | None = None) -> None:
+        """Join real diffusion terminals to one continuous, explicitly split bus."""
+        xs = sorted({p.x for p in terminals} | ({extra_x} if extra_x is not None else set()))
+        for p in sorted(set(terminals), key=lambda p: (p.x, p.y)):
+            end = Point(p.x, bus_y)
+            if p != end:
+                wires.append(WireSegment(f"{net_id}_DROP_{len(wires)}", net_id, p, end))
+        for a, b in zip(xs, xs[1:]):
+            wires.append(WireSegment(f"{net_id}_BUS_{len(wires)}", net_id, Point(a, bus_y), Point(b, bus_y)))
+
+    output_points = {
+        role: [getattr(d, term + "_point") for d in devices if d.role == role
+               for term in ("source", "drain") if getattr(d, term + "_net") == "OUT"]
+        for role in ("pun", "pdn")
+    }
+    pun_y = max(p.y for p in output_points["pun"])
+    pdn_y = min(p.y for p in output_points["pdn"])
+    spine_x = min(p.x for points in output_points.values() for p in points)
+    middle = Point(spine_x, (pun_y + pdn_y) // 2)
+    bus("OUT", output_points["pun"], pun_y, spine_x)
+    bus("OUT", output_points["pdn"], pdn_y, spine_x)
+    wires.extend((WireSegment("OUT_UPPER", "OUT", Point(spine_x, pun_y), middle),
+                  WireSegment("OUT_LOWER", "OUT", middle, Point(spine_x, pdn_y))))
+    ground_points = [getattr(d, term + "_point") for d in devices
+                     for term in ("source", "drain") if getattr(d, term + "_net") == "GND"]
+    bus("GND", ground_points, max(p.y for p in ground_points))
     ports = []
     nets = {n.id: n for n in source.nets}
     for d in devices:
@@ -1614,7 +1656,7 @@ def _textbook_projection(source: Layout) -> Layout:
         points = [getattr(d, terminal + "_point") for d in devices if d.role != "inverter"
                   for terminal in ("source", "drain") if getattr(d, terminal + "_net") == net_id]
         if net_id == "OUT":
-            start = max(points, key=lambda p: p.x)
+            start = middle
             anchor = Point(core_width * 200 + 65, start.y)
         else:
             rail_y = min(p.y for p in points) if net_id == "VDD" else max(p.y for p in points)
@@ -1631,7 +1673,7 @@ def _textbook_projection(source: Layout) -> Layout:
     inv_count = len(source.inverter_driven_vars)
     return replace(source, devices=tuple(devices), wires=tuple(wires),
                    junctions=_compute_junctions(devices, wires), ports=tuple(ports), boundaries=tuple(boundaries),
-                   style="textbook", width=2 * core_width + 2 + (2 * inv_count + 2 if inv_count else 0), height=2 * source.height)
+                   style="textbook", width=2 * core_width + 2 + (2 * inv_count + 2 if inv_count else 0), height=2 * source.height + 2)
 
 
 def build_textbook_schematic(result: SynthesisResult, output_name: str) -> Layout:

@@ -21,6 +21,20 @@ def test_textbook_acceptance(expr, count):
     assert next(n for n in layout.nets if n.id == "OUT").label == "Y"
     assert all(abs(w.p1.x-w.p2.x) <= 90 and w.p1.y == w.p2.y
                for w in layout.wires if w.net_id.startswith("net_"))
+    pun_bottom = max(p.y for d in layout.devices if d.role == "pun" for p in (d.source_point,d.drain_point))
+    pdn_top = min(p.y for d in layout.devices if d.role == "pdn" for p in (d.source_point,d.drain_point))
+    lead = next(w for w in layout.wires if w.id == "LEAD_OUT")
+    assert pdn_top - pun_bottom == 200
+    assert lead.p1.y == lead.p2.y == (pun_bottom + pdn_top) // 2
+    assert any(j.net_id == "OUT" and j.point == lead.p1 for j in layout.junctions)
+
+
+def test_output_cannot_be_relocated_to_a_network_bus():
+    l = build_textbook_schematic(synthesize_from_input(expr="(abc)'"), "F")
+    b = next(b for b in l.boundaries if b.net_id == "OUT")
+    l = replace(l, boundaries=tuple(replace(p,point=Point(p.point.x,p.point.y-100)) if p==b else p for p in l.boundaries))
+    with pytest.raises(RuntimeError, match="halfway"):
+        validate_layout_geometry(l)
 
 
 def test_dual_rail_has_external_named_complements_without_inverter():
