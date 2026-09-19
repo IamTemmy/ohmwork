@@ -66,3 +66,11 @@ jobs:
 
       - name: Run headless-browser smoke test
         run: pytest tests/test_webui_browser.py -q
+
+      - name: Save schematic visual review artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schematic-visual-review
+          path: test-artifacts/schematics/
+          if-no-files-found: ignore

@@ -311,6 +311,14 @@ def build_schematic_view(layout: Layout) -> dict:
     interpretation of the circuit."""
     return {
         "cell": CELL,
+        "style": layout.style,
+        "ports": [
+            {"id": p.id, "net_id": p.net_id, "label": p.label, "device_id": p.device_id,
+             "terminal": p.terminal, "point": _point_dict(p.point)} for p in layout.ports
+        ],
+        "boundaries": [
+            {"id": b.id, "net_id": b.net_id, "point": _point_dict(b.point)} for b in layout.boundaries
+        ],
         "width": layout.width,
         "height": layout.height,
         "pun_height": layout.pun_height,
