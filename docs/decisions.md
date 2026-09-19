@@ -388,7 +388,7 @@ since hash randomization is fixed per-process and can't be exercised any other w
 
 **Status:** approved for implementation (2026-09-18, after two review rounds — see the
 revision history at the end of this entry). **Phase A (the schematic layout model,
-`src/ohmwork/schematic.py`) is implemented** as of commit `0dc480a` (2026-09-19), with two
+`src/ohmwork/schematic.py`) is implemented** as of commit `0dc480a` (2026-09-19), with four
 corrective follow-up commits after independent review found real adversarial gaps in
 `validate_layout_geometry`/`_canonical_layout_topology`. First round (`8623b13`): a wire routed
 through another net's declared point without being caught, a self-loop device hanging the
@@ -406,9 +406,20 @@ fields said, so a globally-consistent rename (e.g. to `SUPPLY`/`RETURN`) or a pl
 label swap passed every gate; closed with explicit literal-identity checks plus a
 `build_schematic`-level check that the OUT net's label matches the requested `output_name`
 (the one thing `validate_layout_geometry` alone can't verify, having no `output_name` to
-compare against). All three rounds fixed, with regression tests, before Phase B began.
-**Phase B (SVG rendering, `presenter.py`/`webui.py` wiring, "Download SVG", acceptance tests 8
-and 10) is not yet started.** This entry exists specifically so the schematic
+compare against). Fourth round: gates 1-3 never cross-checked against the *particular*
+`SynthesisResult` being rendered — the dual-rail build of a function needing a shared inverter
+has an identical PDN/PUN core topology and computes the identical function (dual-rail's
+external complement net is correct by construction), so it passed electrical behavior,
+geometry integrity, and topology fidelity (which deliberately excludes inverters) when
+substituted for the normal, inverter-bearing result it doesn't belong to. Closed with a fourth
+gate, `_validate_source_fidelity`, checking device-role counts, D12 inverter-mode/accounting,
+`var_order`, dimensions, and the output label directly against `result`/`output_name`; also
+added a cross-process determinism regression (identical inputs produce identical
+nets/devices/wires/junctions and stable ids across different `PYTHONHASHSEED` values), since
+Phase B's model-to-SVG bridge depends on that stability. All four rounds fixed, with
+regression tests, before Phase B began. **Phase B (SVG rendering, `presenter.py`/`webui.py`
+wiring, "Download SVG", acceptance tests 8 and 10) is not yet started.** This entry exists
+specifically so the schematic
 renderer described below was *not* built until this decision (and its acceptance tests) was
 reviewed and approved — a diagram encodes electrical connectivity and can be technically wrong
 even while looking attractive, which is a materially different risk than the wording-only

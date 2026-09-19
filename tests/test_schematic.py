@@ -27,6 +27,14 @@ from ohmwork.schematic import (
 from ohmwork.synth import synthesize
 from ohmwork.verify import verify as verify_networks
 
+import ohmwork.schematic as _schematic_module
+
+# Captured once, before any test monkeypatches _build_layout_unchecked -- a
+# monkeypatch fixture only reverts the attribute at the END of a test, so
+# re-reading `_schematic_module._build_layout_unchecked` mid-test would pick
+# up an already-patched version if a test patches more than once.
+_ORIGINAL_BUILD_LAYOUT_UNCHECKED = _schematic_module._build_layout_unchecked
+
 
 def minterms_from_expr(var_order: list[str], expr_text: str) -> set[int]:
     ast = parse(expr_text)
@@ -790,3 +798,178 @@ def test_regression_output_label_mismatch(monkeypatch):
     monkeypatch.setattr(schematic_module, "_build_layout_unchecked", fake_build)
     with pytest.raises(RuntimeError, match="does not match the requested output_name"):
         schematic_module.build_schematic(result, "F")
+
+
+# --- Fourth corrective round: source fidelity (gate 4) ----------------------
+#
+# A seventh gap: gates 1-3 never cross-check against the PARTICULAR
+# SynthesisResult build_schematic was asked to render. The dual-rail layout
+# for a function needing a shared inverter has an IDENTICAL PDN/PUN core
+# topology and computes the IDENTICAL function (dual-rail's external
+# complement net is correct by construction, no inverter needed) -- so it
+# passes electrical behavior, geometry integrity, AND topology fidelity
+# (which deliberately excludes inverters) when substituted for the normal,
+# inverter-bearing result it doesn't actually belong to.
+
+
+def _monkeypatched_build(monkeypatch, result, output_name, mutate_layout):
+    """Patches _build_layout_unchecked so build_schematic's own pipeline
+    (not just a helper called directly) receives `mutate_layout(real
+    layout)` -- the same pattern the topology-fidelity full-pipeline test
+    uses, to prove build_schematic itself gates on this, not just that a
+    gate function works in isolation. Always builds from the ORIGINAL
+    unpatched function, even if called more than once in the same test --
+    monkeypatch.setattr only reverts at the end of the test, so re-reading
+    the (possibly already-patched) module attribute here would compound
+    mutations across repeated calls within one test."""
+
+    def fake_build(result, output_name):
+        return mutate_layout(_ORIGINAL_BUILD_LAYOUT_UNCHECKED(result, output_name))
+
+    monkeypatch.setattr(_schematic_module, "_build_layout_unchecked", fake_build)
+    return _schematic_module
+
+
+def test_regression_dual_rail_layout_substituted_for_normal_result(monkeypatch):
+    var_order = ["a", "b", "c"]
+    minterms = minterms_from_expr(var_order, "(a'b+c)'")
+    normal_result = synthesize(var_order, minterms)
+    dual_result = synthesize(var_order, minterms, dual_rail=True)
+    assert normal_result.total_transistors == 8
+    assert normal_result.inverter_literals == ("a",)
+
+    dual_layout = build_schematic(dual_result, "F")
+    assert len(dual_layout.devices) == 6
+    assert dual_layout.inverter_driven_vars == ()
+
+    schematic_module = _monkeypatched_build(monkeypatch, normal_result, "F", lambda _layout: dual_layout)
+    with pytest.raises(RuntimeError, match="inverter devices"):
+        schematic_module.build_schematic(normal_result, "F")
+
+
+def test_regression_normal_layout_substituted_for_dual_rail_result(monkeypatch):
+    var_order = ["a", "b", "c"]
+    minterms = minterms_from_expr(var_order, "(a'b+c)'")
+    normal_result = synthesize(var_order, minterms)
+    dual_result = synthesize(var_order, minterms, dual_rail=True)
+
+    normal_layout = build_schematic(normal_result, "F")
+
+    schematic_module = _monkeypatched_build(monkeypatch, dual_result, "F", lambda _layout: normal_layout)
+    with pytest.raises(RuntimeError, match="inverter devices"):
+        schematic_module.build_schematic(dual_result, "F")
+
+
+def test_regression_source_fidelity_mutated_var_order(monkeypatch):
+    var_order = ["a", "b", "c"]
+    minterms = minterms_from_expr(var_order, "(abc)'")
+    result = synthesize(var_order, minterms)
+
+    def mutate(layout):
+        return dataclasses.replace(layout, var_order=("b", "a", "c"))
+
+    schematic_module = _monkeypatched_build(monkeypatch, result, "F", mutate)
+    with pytest.raises(RuntimeError, match="var_order"):
+        schematic_module.build_schematic(result, "F")
+
+
+def test_regression_source_fidelity_mutated_transistor_count_metadata(monkeypatch):
+    # Bumping layout.total_transistors alone (device list unchanged) makes
+    # len(layout.devices) disagree with layout.total_transistors itself --
+    # that's already gate 2's own internal-consistency check (validated
+    # before gate 4 ever runs), so it's what actually fires here. Gate 4's
+    # OWN contribution to transistor-count fidelity -- catching an
+    # internally-consistent layout whose counts still disagree with a
+    # DIFFERENT result -- is what the dual-rail substitution tests above
+    # exercise instead (there's no way to construct the narrower case
+    # without breaking gate 2's own invariant, since the builder always
+    # stamps layout.total_transistors from whatever result built it).
+    var_order = ["a", "b", "c"]
+    minterms = minterms_from_expr(var_order, "(abc)'")
+    result = synthesize(var_order, minterms)
+
+    def mutate(layout):
+        return dataclasses.replace(layout, total_transistors=layout.total_transistors + 2)
+
+    schematic_module = _monkeypatched_build(monkeypatch, result, "F", mutate)
+    with pytest.raises(RuntimeError, match="does not match total_transistors"):
+        schematic_module.build_schematic(result, "F")
+
+
+def test_regression_source_fidelity_mutated_stack_height_and_dimensions(monkeypatch):
+    var_order = ["a", "b", "c", "d"]
+    minterms = minterms_from_expr(var_order, "(abc+d)'")
+    result = synthesize(var_order, minterms)
+
+    def mutate_pun_height(layout):
+        return dataclasses.replace(layout, pun_height=layout.pun_height + 1)
+
+    schematic_module = _monkeypatched_build(monkeypatch, result, "F", mutate_pun_height)
+    with pytest.raises(RuntimeError, match="pun_height"):
+        schematic_module.build_schematic(result, "F")
+
+    def mutate_width(layout):
+        return dataclasses.replace(layout, width=layout.width + 1)
+
+    schematic_module = _monkeypatched_build(monkeypatch, result, "F", mutate_width)
+    with pytest.raises(RuntimeError, match="documented sizing formula"):
+        schematic_module.build_schematic(result, "F")
+
+    def mutate_height(layout):
+        return dataclasses.replace(layout, height=layout.height + 1)
+
+    schematic_module = _monkeypatched_build(monkeypatch, result, "F", mutate_height)
+    with pytest.raises(RuntimeError, match="pun_height \\+ layout.pdn_height"):
+        schematic_module.build_schematic(result, "F")
+
+
+def test_layout_construction_is_deterministic_within_a_process():
+    var_order = ["a", "b", "c", "d"]
+    minterms = minterms_from_expr(var_order, "(a'bc+d)'")
+    result_1 = synthesize(var_order, minterms)
+    result_2 = synthesize(var_order, minterms)
+    layout_1 = build_schematic(result_1, "F")
+    layout_2 = build_schematic(result_2, "F")
+
+    assert layout_1.nets == layout_2.nets
+    assert layout_1.devices == layout_2.devices
+    assert layout_1.wires == layout_2.wires
+    assert layout_1.junctions == layout_2.junctions
+    assert [d.id for d in layout_1.devices] == [d.id for d in layout_2.devices]
+    assert [n.id for n in layout_1.nets] == [n.id for n in layout_2.nets]
+
+
+def test_layout_construction_is_deterministic_across_hash_seeds():
+    """Phase B's eventual data-device-id/data-net-id bridge (D17 acceptance
+    test 8) depends on stable ids/ordering -- verify the builder never
+    depends on set/dict iteration order that PYTHONHASHSEED could perturb,
+    by running the exact same build in fresh subprocesses under different
+    hash seeds and diffing a full repr of the result."""
+    import os
+    import subprocess
+    import sys
+
+    script = (
+        "from ohmwork.synth import synthesize\n"
+        "from ohmwork.schematic import build_schematic\n"
+        "from ohmwork.derivation import all_assignments, evaluate\n"
+        "from ohmwork.parser import parse\n"
+        "var_order = ['a', 'b', 'c', 'd']\n"
+        "ast = parse(\"(a'bc+d)'\")\n"
+        "rows = all_assignments(var_order)\n"
+        "minterms = {i for i, row in enumerate(rows) if evaluate(ast, row)}\n"
+        "result = synthesize(var_order, minterms)\n"
+        "layout = build_schematic(result, 'F')\n"
+        "print(repr(layout))\n"
+    )
+
+    outputs = []
+    for seed in ("0", "1", "982451653"):
+        env = dict(os.environ, PYTHONHASHSEED=seed)
+        proc = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, env=env, check=True
+        )
+        outputs.append(proc.stdout)
+
+    assert len(outputs) == 3
+    assert len(set(outputs)) == 1, "layout construction is not deterministic across PYTHONHASHSEED values"

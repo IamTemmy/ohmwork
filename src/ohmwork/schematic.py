@@ -4,8 +4,8 @@ named nets and typed device terminals with integer coordinates, not just a
 picture, so the ``Network`` tree -> layout conversion is independently
 checkable before any SVG exists (Phase B, not part of this module).
 
-Three genuinely independent correctness gates run before :func:`build_schematic`
-ever returns a :class:`Layout`, each blind to what the other two check:
+Four genuinely independent correctness gates run before :func:`build_schematic`
+ever returns a :class:`Layout`, each blind to what the others check:
 
 1. **Electrical behavior** (:func:`simulate_layout`, exhaustive over every
    input vector) -- net-ID reachability only, never touching wire geometry.
@@ -16,6 +16,12 @@ ever returns a :class:`Layout`, each blind to what the other two check:
    ``result.pdn``/``result.pun``, independent of the exhaustive electrical
    check (a different, equal-cost, tied-minimal network can compute the same
    function without being the same *shape*).
+4. **Source fidelity** (:func:`_validate_source_fidelity`) -- proves the
+   layout's device counts, D12 inverter-mode/accounting, dimensions, and
+   output label all match the *particular* ``result``/``output_name`` being
+   rendered, not just some internally-consistent, same-shaped layout (e.g.
+   the dual-rail build of the same function has an identical PDN/PUN core
+   and passes gates 1-3, but has no inverter devices at all).
 """
 
 from __future__ import annotations
@@ -1304,24 +1310,110 @@ def _validate_topology_fidelity(layout: Layout, result: SynthesisResult) -> None
         )
 
 
+# --- Gate 4: source fidelity -------------------------------------------------
+
+
+def _validate_source_fidelity(layout: Layout, result: SynthesisResult, output_name: str) -> None:
+    """Gate 4: fidelity to the *particular* SynthesisResult being rendered.
+
+    Gates 1-3 all check either the layout's own internal self-consistency
+    (electrical behavior, geometry) or, for topology fidelity, only the
+    PDN/PUN *core* shape -- deliberately excluding inverters (their shape is
+    pinned by validate_layout_geometry's role/kind-pair check instead). None
+    of them ever cross-check the layout's D12 inverter-mode/accounting
+    against the actual `result` object build_schematic was asked to render.
+    That gap is real: the dual-rail layout for a function needing a shared
+    inverter has an IDENTICAL core PDN/PUN topology and computes the
+    IDENTICAL function (dual-rail's external complement net is definitionally
+    correct by construction) -- so it passes gates 1-3 even when substituted
+    for the normal, inverter-bearing result it doesn't actually belong to.
+    This gate closes that by checking device counts, inverter accounting,
+    dimensions, and the output label directly against `result`/`output_name`."""
+    if layout.var_order != tuple(result.var_order):
+        raise RuntimeError(
+            f"layout.var_order {layout.var_order!r} does not match result.var_order "
+            f"{tuple(result.var_order)!r}"
+        )
+
+    pun_count = sum(1 for d in layout.devices if d.role == "pun")
+    if pun_count != result.pun_transistors:
+        raise RuntimeError(
+            f"layout has {pun_count} PUN devices, but result.pun_transistors is "
+            f"{result.pun_transistors}"
+        )
+    pdn_count = sum(1 for d in layout.devices if d.role == "pdn")
+    if pdn_count != result.pdn_transistors:
+        raise RuntimeError(
+            f"layout has {pdn_count} PDN devices, but result.pdn_transistors is "
+            f"{result.pdn_transistors}"
+        )
+    inverter_count = sum(1 for d in layout.devices if d.role == "inverter")
+    if inverter_count != result.inverter_transistors:
+        raise RuntimeError(
+            f"layout has {inverter_count} inverter devices, but result.inverter_transistors is "
+            f"{result.inverter_transistors}"
+        )
+    if not (len(layout.devices) == layout.total_transistors == result.total_transistors):
+        raise RuntimeError(
+            f"device count mismatch: len(layout.devices)={len(layout.devices)}, "
+            f"layout.total_transistors={layout.total_transistors}, "
+            f"result.total_transistors={result.total_transistors}"
+        )
+
+    expected_inverter_driven = () if result.inverter_transistors == 0 else tuple(sorted(result.inverter_literals))
+    if layout.inverter_driven_vars != expected_inverter_driven:
+        raise RuntimeError(
+            f"layout.inverter_driven_vars {layout.inverter_driven_vars!r} does not match the "
+            f"expected {expected_inverter_driven!r} for this result"
+        )
+
+    if layout.pun_height != result.pun_stack_height:
+        raise RuntimeError(
+            f"layout.pun_height {layout.pun_height} != result.pun_stack_height "
+            f"{result.pun_stack_height}"
+        )
+    if layout.pdn_height != result.pdn_stack_height:
+        raise RuntimeError(
+            f"layout.pdn_height {layout.pdn_height} != result.pdn_stack_height "
+            f"{result.pdn_stack_height}"
+        )
+    if layout.height != layout.pun_height + layout.pdn_height:
+        raise RuntimeError(
+            f"layout.height {layout.height} != layout.pun_height + layout.pdn_height "
+            f"({layout.pun_height + layout.pdn_height})"
+        )
+
+    expected_pun_width, _ = _size(result.pun)
+    expected_pdn_width, _ = _size(result.pdn)
+    expected_core_width = max(expected_pun_width, expected_pdn_width)
+    expected_num_rail_cols = len(layout.primary_nets) + len(layout.complement_nets)
+    expected_num_inverter_cols = result.inverter_transistors // 2
+    expected_width = expected_core_width + expected_num_rail_cols + expected_num_inverter_cols
+    if layout.width != expected_width:
+        raise RuntimeError(
+            f"layout.width {layout.width} does not match the documented sizing formula (core "
+            f"width {expected_core_width} + rail columns {expected_num_rail_cols} + inverter "
+            f"columns {expected_num_inverter_cols} = {expected_width})"
+        )
+
+    out_net = next((n for n in layout.nets if n.id == layout.output_net_id), None)
+    if out_net is None or out_net.label != output_name:
+        got = out_net.label if out_net is not None else None
+        raise RuntimeError(
+            f"OUT net's label {got!r} does not match the requested output_name {output_name!r}"
+        )
+
+
 # --- Public entry point -----------------------------------------------------
 
 
 def build_schematic(result: SynthesisResult, output_name: str) -> Layout:
-    """Builds a schematic Layout for `result`, running all three
+    """Builds a schematic Layout for `result`, running all four
     correctness gates before ever returning -- see the module docstring."""
     _validate_result_inverter_bookkeeping(result)
     layout = _build_layout_unchecked(result, output_name)
 
     validate_layout_geometry(layout)  # gate 2: wire/geometry integrity
-
-    out_net = next(n for n in layout.nets if n.id == layout.output_net_id)
-    if out_net.label != output_name:
-        raise RuntimeError(
-            f"internal error: OUT net's label {out_net.label!r} does not match the requested "
-            f"output_name {output_name!r} -- validate_layout_geometry alone can't check this, "
-            "since it has no output_name to compare against"
-        )
 
     for row in all_assignments(result.var_order):  # gate 1: electrical behavior
         state = simulate_layout(layout, row)[layout.output_net_id]
@@ -1337,5 +1429,7 @@ def build_schematic(result: SynthesisResult, output_name: str) -> Layout:
             )
 
     _validate_topology_fidelity(layout, result)  # gate 3: topology fidelity
+
+    _validate_source_fidelity(layout, result, output_name)  # gate 4: source fidelity
 
     return layout
