@@ -107,7 +107,7 @@ class Layout:
     gnd_net_id: str
     primary_nets: tuple[tuple[str, str], ...]  # (var, net_id), var-sorted
     complement_nets: tuple[tuple[str, str], ...]  # (var, net_id), var-sorted
-    inverter_driven_vars: frozenset[str]
+    inverter_driven_vars: tuple[str, ...]  # sorted -- immutable, JSON-serializable (not a frozenset)
     total_transistors: int
     width: int  # grid bounding box (includes gate-rail/inverter columns)
     height: int
@@ -319,21 +319,34 @@ def _generate_bus(ctx: _Ctx, net_id: str, points: list[Point]) -> None:
 # --- Placement pass --------------------------------------------------------
 
 
+def _expected_device_points(x: int, y: int, kind: str) -> tuple[Point, Point, Point, Point]:
+    """(origin, gate_point, source_point, drain_point) for a device at grid
+    cell (x, y) of the given kind -- the single source of truth for both the
+    builder (below) and validate_layout_geometry's consistency check, so the
+    two can never silently drift apart."""
+    origin = Point(x * CELL, y * CELL)
+    top = Point(x * CELL + CELL // 2, y * CELL)
+    bottom = Point(x * CELL + CELL // 2, (y + 1) * CELL)
+    gate = Point((x + 1) * CELL, y * CELL + CELL // 2)
+    if kind == "p":
+        source, drain = top, bottom
+    else:
+        drain, source = top, bottom
+    return origin, gate, source, drain
+
+
 def _place_transistor(
     ctx: _Ctx, transistor: Transistor, role: str, x0: int, y0: int, top_net: str, bottom_net: str
 ) -> tuple[list[Point], list[Point]]:
     var, complemented = _var_and_complement(transistor.literal)
     gate_net_id = ctx.ensure_gate_net(var, complemented)
     device_id = ctx.new_device_id()
-    origin = Point(x0 * CELL, y0 * CELL)
+    origin, gate_point, source_point, drain_point = _expected_device_points(x0, y0, transistor.kind)
     top_point = Point(x0 * CELL + CELL // 2, y0 * CELL)
     bottom_point = Point(x0 * CELL + CELL // 2, (y0 + 1) * CELL)
-    gate_point = Point((x0 + 1) * CELL, y0 * CELL + CELL // 2)
     if transistor.kind == "p":
-        source_point, drain_point = top_point, bottom_point
         source_net, drain_net = top_net, bottom_net
     else:
-        drain_point, source_point = top_point, bottom_point
         drain_net, source_net = top_net, bottom_net
     device = Device(
         id=device_id,
@@ -414,9 +427,7 @@ def _place_inverter_pair(ctx: _Ctx, var: str, x: int, core_height: int) -> tuple
     primary_net = ctx.ensure_gate_net(var, False)
     complement_net = ctx.ensure_gate_net(var, True)
 
-    p_source = Point(x * CELL + CELL // 2, 0)
-    p_drain = Point(x * CELL + CELL // 2, CELL)
-    p_gate = Point((x + 1) * CELL, CELL // 2)
+    p_origin, p_gate, p_source, p_drain = _expected_device_points(x, 0, "p")
     ctx.devices.append(
         Device(
             id=f"INV_{var}_P",
@@ -430,7 +441,7 @@ def _place_inverter_pair(ctx: _Ctx, var: str, x: int, core_height: int) -> tuple
             role="inverter",
             x=x,
             y=0,
-            origin=Point(x * CELL, 0),
+            origin=p_origin,
             gate_point=p_gate,
             source_point=p_source,
             drain_point=p_drain,
@@ -438,9 +449,7 @@ def _place_inverter_pair(ctx: _Ctx, var: str, x: int, core_height: int) -> tuple
     )
     ctx.record_gate_tap(primary_net, p_gate)
 
-    n_drain = Point(x * CELL + CELL // 2, CELL)
-    n_source = Point(x * CELL + CELL // 2, 2 * CELL)
-    n_gate = Point((x + 1) * CELL, CELL + CELL // 2)
+    n_origin, n_gate, n_source, n_drain = _expected_device_points(x, 1, "n")
     ctx.devices.append(
         Device(
             id=f"INV_{var}_N",
@@ -454,7 +463,7 @@ def _place_inverter_pair(ctx: _Ctx, var: str, x: int, core_height: int) -> tuple
             role="inverter",
             x=x,
             y=1,
-            origin=Point(x * CELL, CELL),
+            origin=n_origin,
             gate_point=n_gate,
             source_point=n_source,
             drain_point=n_drain,
@@ -533,7 +542,7 @@ def _build_layout_unchecked(result: SynthesisResult, output_name: str) -> Layout
 
     primary_nets = tuple(sorted((v, _gate_net_id(v, False)) for v in primary_used))
     complement_nets = tuple(sorted((v, _gate_net_id(v, True)) for v in complement_used))
-    inverter_driven_vars = frozenset(inverter_vars)
+    inverter_driven_vars = inverter_vars
 
     return Layout(
         nets=tuple(ctx.nets.values()),
@@ -698,33 +707,6 @@ def verify_layout(
 # --- Gate 2: wire/geometry integrity ---------------------------------------
 
 
-def _collinear_overlap(a: WireSegment, b: WireSegment) -> bool:
-    """True iff `a` and `b` run along the *same infinite line* and their
-    spans overlap in more than a single shared endpoint -- a genuinely
-    ambiguous case (visually indistinguishable from being one wire).
-
-    A plain perpendicular crossing between two segments that don't share a
-    declared point is deliberately NOT flagged here: in standard schematic
-    convention, two wires crossing without a junction dot are an explicit,
-    unambiguous "not connected" -- that convention is exactly why the dot
-    exists. `_required_junction_points` only ever considers a point a
-    junction candidate when it's a declared device terminal or wire
-    endpoint, so a mid-span crossing point never accidentally acquires one;
-    routing wires past each other without a shared point is ordinary,
-    correct schematic geometry, not a defect."""
-    a_horiz = a.p1.y == a.p2.y
-    b_horiz = b.p1.y == b.p2.y
-    if a_horiz and b_horiz and a.p1.y == b.p1.y:
-        a_lo, a_hi = sorted((a.p1.x, a.p2.x))
-        b_lo, b_hi = sorted((b.p1.x, b.p2.x))
-        return max(a_lo, b_lo) < min(a_hi, b_hi)
-    if not a_horiz and not b_horiz and a.p1.x == b.p1.x:
-        a_lo, a_hi = sorted((a.p1.y, a.p2.y))
-        b_lo, b_hi = sorted((b.p1.y, b.p2.y))
-        return max(a_lo, b_lo) < min(a_hi, b_hi)
-    return False
-
-
 def validate_layout_geometry(layout: Layout) -> None:
     """Structural-only validator, independent of `simulate_layout` -- raises
     RuntimeError on the first violation found, in a fixed check order (see
@@ -753,7 +735,18 @@ def validate_layout_geometry(layout: Layout) -> None:
         if d.role not in _DEVICE_ROLES:
             raise RuntimeError(f"device {d.id!r} has unknown role {d.role!r}")
 
-    # 3. referential integrity
+    # 3. no self-loop devices -- a device with source_net == drain_net is electrically
+    # degenerate and would otherwise make _canonical_layout_topology's series-parallel
+    # reduction (gate 3) loop forever on an internal node of degree 2 from the self-loop
+    # alone; rejected here too so a malformed layout is refused before gate 3 ever runs
+    for d in layout.devices:
+        if d.source_net == d.drain_net:
+            raise RuntimeError(
+                f"device {d.id!r} has source_net == drain_net == {d.source_net!r} -- a self-loop "
+                "device cannot be part of a valid circuit"
+            )
+
+    # 4. referential integrity
     for d in layout.devices:
         for net_id in (d.gate_net, d.source_net, d.drain_net):
             if net_id not in net_by_id:
@@ -765,7 +758,7 @@ def validate_layout_geometry(layout: Layout) -> None:
         if j.net_id not in net_by_id:
             raise RuntimeError(f"junction {j.id!r} references nonexistent net {j.net_id!r}")
 
-    # 4. required global nets
+    # 5. required global nets
     for net_id, expected_kind, label in (
         (layout.vdd_net_id, "rail_vdd", "VDD"),
         (layout.gnd_net_id, "rail_gnd", "GND"),
@@ -775,7 +768,32 @@ def validate_layout_geometry(layout: Layout) -> None:
         if net is None or net.kind != expected_kind:
             raise RuntimeError(f"{label} net {net_id!r} missing or has wrong kind")
 
-    # 5. exact, bidirectional mapping validation -- derived only from layout.devices
+    # 6. device geometry consistency -- origin/gate/source/drain points must match the
+    # documented coordinate formulas for (x, y, kind) (the same _expected_device_points
+    # the builder itself uses), and `literal` must match the structured gate identity
+    for d in layout.devices:
+        expected_origin, expected_gate, expected_source, expected_drain = _expected_device_points(
+            d.x, d.y, d.kind
+        )
+        if (d.origin, d.gate_point, d.source_point, d.drain_point) != (
+            expected_origin,
+            expected_gate,
+            expected_source,
+            expected_drain,
+        ):
+            raise RuntimeError(
+                f"device {d.id!r} geometry does not match the documented coordinate formulas for "
+                f"(x={d.x}, y={d.y}, kind={d.kind!r})"
+            )
+        expected_literal = f"{d.gate_var}'" if d.gate_complemented else d.gate_var
+        if d.literal != expected_literal:
+            raise RuntimeError(
+                f"device {d.id!r} literal {d.literal!r} does not match its structured gate identity "
+                f"(gate_var={d.gate_var!r}, gate_complemented={d.gate_complemented!r}, expected "
+                f"{expected_literal!r})"
+            )
+
+    # 7. exact, bidirectional mapping validation -- derived only from layout.devices
     core_devices = [d for d in layout.devices if d.role in ("pdn", "pun")]
     inverter_devices = [d for d in layout.devices if d.role == "inverter"]
     inverter_vars_present = {d.gate_var for d in inverter_devices}
@@ -796,9 +814,13 @@ def validate_layout_geometry(layout: Layout) -> None:
     for v, nid in layout.primary_nets:
         if v not in layout.var_order:
             raise RuntimeError(f"primary_nets key {v!r} is not a member of var_order")
+        if nid != f"net_{v}":
+            raise RuntimeError(f"primary_nets[{v!r}] -> {nid!r} does not follow the net_{{var}} id convention")
         net = net_by_id.get(nid)
         if net is None or net.kind != "gate_primary":
             raise RuntimeError(f"primary_nets[{v!r}] -> {nid!r} is missing or not kind 'gate_primary'")
+        if net.label != v:
+            raise RuntimeError(f"net {nid!r} has label {net.label!r}, expected {v!r}")
 
     complement_keys = [v for v, _ in layout.complement_nets]
     if len(complement_keys) != len(set(complement_keys)):
@@ -814,18 +836,37 @@ def validate_layout_geometry(layout: Layout) -> None:
     for v, nid in layout.complement_nets:
         if v not in layout.var_order:
             raise RuntimeError(f"complement_nets key {v!r} is not a member of var_order")
+        if nid != f"net_{v}_n":
+            raise RuntimeError(f"complement_nets[{v!r}] -> {nid!r} does not follow the net_{{var}}_n id convention")
         net = net_by_id.get(nid)
         expected_kind = "gate_complement_internal" if v in inverter_vars_present else "gate_complement_external"
         if net is None or net.kind != expected_kind:
             raise RuntimeError(f"complement_nets[{v!r}] -> {nid!r} is missing or not kind {expected_kind!r}")
+        if net.label != f"{v}'":
+            raise RuntimeError(f"net {nid!r} has label {net.label!r}, expected {v!r}'")
 
-    if layout.inverter_driven_vars != inverter_vars_present:
+    if layout.inverter_driven_vars != tuple(sorted(inverter_vars_present)):
         raise RuntimeError(
-            f"inverter_driven_vars {sorted(layout.inverter_driven_vars)!r} does not match the actual "
+            f"inverter_driven_vars {list(layout.inverter_driven_vars)!r} does not match the actual "
             f"inverter device pairs found {sorted(inverter_vars_present)!r}"
         )
 
-    # 6. role/kind/inverter-pair consistency, including supply nets
+    # every core device's own gate_net must equal the net its own gate_var/gate_complemented
+    # maps to -- catches both a device-level gate_net mismatch AND a swapped/wrong
+    # primary_nets/complement_nets mapping table (neither is visible from the checks above
+    # alone, since those only check each side's internal self-consistency independently)
+    for d in core_devices:
+        expected_gate_net = (
+            complement_net_id(layout, d.gate_var) if d.gate_complemented else primary_net_id(layout, d.gate_var)
+        )
+        if d.gate_net != expected_gate_net:
+            raise RuntimeError(
+                f"device {d.id!r} (gate_var={d.gate_var!r}, gate_complemented={d.gate_complemented!r}) "
+                f"has gate_net={d.gate_net!r}, but the {'complement' if d.gate_complemented else 'primary'} "
+                f"mapping for {d.gate_var!r} is {expected_gate_net!r}"
+            )
+
+    # 8. role/kind/inverter-pair consistency, including supply nets
     for d in core_devices:
         if d.role == "pdn" and d.kind != "n":
             raise RuntimeError(f"PDN device {d.id!r} has kind {d.kind!r}, expected 'n'")
@@ -857,14 +898,14 @@ def validate_layout_geometry(layout: Layout) -> None:
         if n_dev.source_net != layout.gnd_net_id:
             raise RuntimeError(f"inverter NMOS {n_dev.id!r} source_net is not GND ({layout.gnd_net_id!r})")
 
-    # 7. device count -- the one place this is checked
+    # 9. device count -- the one place this is checked
     if len(layout.devices) != layout.total_transistors:
         raise RuntimeError(
             f"device count {len(layout.devices)} does not match total_transistors "
             f"{layout.total_transistors}"
         )
 
-    # 8. segment shape sanity + point sanity
+    # 10. segment shape sanity + point sanity
     seen_segments: set[tuple[str, frozenset]] = set()
     for w in layout.wires:
         if not (w.p1.x == w.p2.x or w.p1.y == w.p2.y):
@@ -886,7 +927,7 @@ def validate_layout_geometry(layout: Layout) -> None:
             if not (0 <= p.x <= layout.width * CELL and 0 <= p.y <= layout.height * CELL):
                 raise RuntimeError(f"device {d.id!r} point {p!r} is out of bounds")
 
-    # 9. shared touch index, reused by checks 10-14
+    # 11. shared touch index, reused by checks 12-16
     touches: dict[Point, list[tuple[str, str, str]]] = {}
 
     def _add_touch(net_id: str, point: Point, source_kind: str, source_id: str) -> None:
@@ -900,7 +941,7 @@ def validate_layout_geometry(layout: Layout) -> None:
         _add_touch(w.net_id, w.p1, "segment_endpoint", w.id)
         _add_touch(w.net_id, w.p2, "segment_endpoint", w.id)
 
-    # 10. wire-endpoint anchoring
+    # 12. wire-endpoint anchoring
     junction_points = {(j.net_id, j.point) for j in layout.junctions}
     for w in layout.wires:
         for p in (w.p1, w.p2):
@@ -914,28 +955,39 @@ def validate_layout_geometry(layout: Layout) -> None:
                     "terminal, junction, or other wire -- a dangling stub"
                 )
 
-    # 11. accidental-short / cross-net check
+    # 13. accidental-short / cross-net check -- exact point coincidence between different nets
     for point, entries in touches.items():
         nets_here = {e[0] for e in entries}
         if len(nets_here) > 1:
             a, b = sorted(nets_here)
             raise RuntimeError(f"net {a!r} and net {b!r} both touch point {point!r} -- accidental short or wrong net_id")
 
-    # 12. collinear-overlap check (see _collinear_overlap's docstring for why a plain
-    # perpendicular crossing is not flagged -- only a same-line overlap is ambiguous)
-    wires = layout.wires
-    for i in range(len(wires)):
-        for k in range(i + 1, len(wires)):
-            a, b = wires[i], wires[k]
-            if a.net_id == b.net_id:
+    # 14. cross-net interior-touch check: a declared point of one net (a device terminal or
+    # a wire endpoint -- everything in `touches`) must never lie on the strict interior of a
+    # DIFFERENT net's wire segment. This also subsumes a same-line ("collinear") overlap
+    # between two different-net segments, since two non-identical overlapping collinear
+    # segments always put at least one endpoint of one strictly inside the other.
+    #
+    # A plain perpendicular crossing that shares no declared point with anything is still
+    # allowed: in standard schematic convention, two wires crossing without a junction dot
+    # are an explicit, unambiguous "not connected" -- that convention is exactly why the dot
+    # exists, and `_required_junction_points` only ever considers a point a junction
+    # candidate when it's a declared device terminal or wire endpoint, so a mid-span crossing
+    # point never accidentally acquires one. A point *on the interior* of another net's wire
+    # is different: it reads exactly like an unmarked T-tap, not a clean crossing, so it is
+    # rejected here even though it isn't a "collinear" overlap.
+    for w in layout.wires:
+        for p, entries in touches.items():
+            if p == w.p1 or p == w.p2:
                 continue
-            if _collinear_overlap(a, b):
+            other_nets = {e[0] for e in entries if e[0] != w.net_id}
+            if other_nets and _is_interior(p, w):
                 raise RuntimeError(
-                    f"segment {a.id!r} (net {a.net_id!r}) and segment {b.id!r} (net {b.net_id!r}) "
-                    "overlap collinearly -- ambiguous, possibly an accidental connection"
+                    f"point {p!r} (net {sorted(other_nets)[0]!r}) lies on the interior of segment "
+                    f"{w.id!r} (net {w.net_id!r}) with no declared connection"
                 )
 
-    # 13. per-net connected-component check
+    # 15. per-net connected-component check
     net_ids_touched = {e[0] for entries in touches.values() for e in entries}
     for net_id in sorted(net_ids_touched):
         points_for_net = [p for p, entries in touches.items() if any(e[0] == net_id for e in entries)]
@@ -969,7 +1021,7 @@ def validate_layout_geometry(layout: Layout) -> None:
                 "components found)"
             )
 
-    # 14. junction completeness, both directions
+    # 16. junction completeness, both directions
     required = _required_junction_points(layout.devices, layout.wires)
     declared = {(j.net_id, j.point) for j in layout.junctions}
     missing = required - declared
@@ -983,7 +1035,7 @@ def validate_layout_geometry(layout: Layout) -> None:
             f"Junction at {point!r} on net {net_id!r} does not correspond to a real 3-way (or more) connection"
         )
 
-    # 15. domain minimums
+    # 17. domain minimums
     if not any(d.source_net == layout.vdd_net_id for d in layout.devices):
         raise RuntimeError("VDD net is not touched by any device")
     if not any(d.source_net == layout.gnd_net_id for d in layout.devices):
@@ -1030,7 +1082,22 @@ def _canonical_topology(network: Network) -> tuple:
 def _canonical_layout_topology(devices: tuple[Device, ...], top_net: str, bottom_net: str) -> tuple:
     """Independently reconstructs a canonical series/parallel signature from
     the layout's own device graph via classic series-parallel graph
-    reduction -- never touches layout.wires or any Network tree."""
+    reduction -- never touches layout.wires or any Network tree.
+
+    Defensive against a malformed device graph: a self-loop edge
+    (source_net == drain_net) at an internal node has degree 2 purely from
+    itself, so the series-reduction step below would otherwise "reduce" it
+    into a new self-loop of ever-deeper nested signature forever without the
+    edge count ever dropping -- rejected explicitly here, and backed by a
+    strict-decrease + iteration-bound check on every reduction step in case
+    some other malformed shape hits a similar non-terminating case."""
+    for d in devices:
+        if d.source_net == d.drain_net:
+            raise RuntimeError(
+                f"device {d.id!r} has source_net == drain_net == {d.source_net!r} -- a self-loop "
+                "device cannot be part of a valid two-terminal series-parallel network"
+            )
+
     edges: list[tuple[str, str, tuple]] = [
         (d.source_net, d.drain_net, ("T", d.kind, d.gate_var, d.gate_complemented)) for d in devices
     ]
@@ -1069,8 +1136,24 @@ def _canonical_layout_topology(devices: tuple[Device, ...], top_net: str, bottom
         return edges, False
 
     changed = True
+    max_iterations = len(edges) + 1
+    iterations = 0
     while changed:
+        iterations += 1
+        if iterations > max_iterations:
+            raise RuntimeError(
+                f"internal error: series-parallel reduction did not terminate within "
+                f"{max_iterations} iterations for the device graph between {top_net!r} and "
+                f"{bottom_net!r}"
+            )
+        before = len(edges)
         edges, changed = reduce_once(edges)
+        if changed and len(edges) >= before:
+            raise RuntimeError(
+                f"internal error: a series-parallel reduction step did not decrease the edge "
+                f"count ({before} -> {len(edges)}) for the device graph between {top_net!r} and "
+                f"{bottom_net!r}"
+            )
 
     if len(edges) != 1:
         raise RuntimeError(

@@ -384,10 +384,19 @@ since hash randomization is fixed per-process and can't be exercised any other w
 
 ---
 
-## D17 — APPROVED, not yet implemented. What does a real transistor-level schematic show, and how is it built?
+## D17 — APPROVED. Phase A implemented; Phase B pending. What does a real transistor-level schematic show, and how is it built?
 
 **Status:** approved for implementation (2026-09-18, after two review rounds — see the
-revision history at the end of this entry). This entry exists specifically so the schematic
+revision history at the end of this entry). **Phase A (the schematic layout model,
+`src/ohmwork/schematic.py`) is implemented** as of commit `0dc480a` (2026-09-19), with a
+corrective follow-up commit after an independent review found four adversarial gaps (a wire
+routed through another net's declared point without being caught, a self-loop device hanging
+the topology-fidelity graph reduction, nothing cross-checking a device's `gate_net` against
+its own structured gate identity or the primary/complement mapping table, and device geometry/
+`literal` fields never being checked against the documented coordinate formulas) — all four
+fixed, with regression tests, before Phase B began. **Phase B (SVG rendering,
+`presenter.py`/`webui.py` wiring, "Download SVG", acceptance tests 8 and 10) is not yet
+started.** This entry exists specifically so the schematic
 renderer described below was *not* built until this decision (and its acceptance tests) was
 reviewed and approved — a diagram encodes electrical connectivity and can be technically wrong
 even while looking attractive, which is a materially different risk than the wording-only

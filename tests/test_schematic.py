@@ -14,6 +14,7 @@ from ohmwork.network import conducts, dual, to_network
 from ohmwork.parser import parse
 from ohmwork.schematic import (
     CELL,
+    Device,
     Point,
     WireSegment,
     _validate_topology_fidelity,
@@ -486,4 +487,127 @@ def test_mutation_inverter_nmos_source_swapped():
     swapped = dataclasses.replace(n_dev, source_net=layout.vdd_net_id)
     broken = dataclasses.replace(layout, devices=tuple(swapped if d.id == n_dev.id else d for d in layout.devices))
     with pytest.raises(RuntimeError, match="source_net is not GND"):
+        validate_layout_geometry(broken)
+
+
+# --- Corrective regressions (ChatGPT review round on commit 0dc480a) --------
+#
+# Four adversarial gaps: (1) a wire routed through another net's declared
+# point (not just collinear overlap) was accepted; (2) a self-loop device
+# made the topology-fidelity graph reduction loop forever; (3) nothing
+# cross-checked a device's own gate_net against the net its gate_var/
+# gate_complemented actually maps to, so a device-level or mapping-table-level
+# identity swap slipped through all three gates; (4) device geometry
+# (origin/points/orientation) and the `literal` display field were never
+# checked against the documented coordinate formulas / structured identity.
+
+
+def test_regression_wire_routed_through_other_net_gate_terminals():
+    """A NAND3 net_a rerouted along the same row as b/c's gate terminals,
+    passing directly through their (interior, not endpoint) points -- fully
+    self-consistent otherwise (no dangling, no exact-point short), so only
+    the interior-touch check (not the old collinear-overlap-only check) can
+    catch it."""
+    var_order, minterms, layout = _built_layout()
+    others = tuple(w for w in layout.wires if w.net_id != "net_a")
+    rerouted = (
+        WireSegment(id="WA1", net_id="net_a", p1=Point(100, 50), p2=Point(350, 50)),
+        WireSegment(id="WA2", net_id="net_a", p1=Point(100, 150), p2=Point(350, 150)),
+        WireSegment(id="WA3", net_id="net_a", p1=Point(350, 50), p2=Point(350, 150)),
+    )
+    broken = dataclasses.replace(layout, wires=others + rerouted)
+    with pytest.raises(RuntimeError, match="lies on the interior of segment"):
+        validate_layout_geometry(broken)
+    _assert_electrically_untouched(layout, broken, var_order, minterms)
+
+
+def test_regression_self_loop_device_raises_promptly_instead_of_hanging():
+    from ohmwork.schematic import _canonical_layout_topology
+
+    def make_device(id, kind, gate_var, source_net, drain_net):
+        return Device(
+            id=id,
+            kind=kind,
+            gate_var=gate_var,
+            gate_complemented=False,
+            literal=gate_var,
+            gate_net=f"net_{gate_var}",
+            source_net=source_net,
+            drain_net=drain_net,
+            role="pdn",
+            x=0,
+            y=0,
+            origin=Point(0, 0),
+            gate_point=Point(CELL, CELL // 2),
+            source_point=Point(CELL // 2, 0),
+            drain_point=Point(CELL // 2, CELL),
+        )
+
+    devices = (make_device("M0", "n", "a", "J", "J"),)
+    with pytest.raises(RuntimeError, match="self-loop"):
+        _canonical_layout_topology(devices, "OUT", "GND")
+
+
+def test_regression_self_loop_device_rejected_by_validator():
+    var_order, minterms, layout = _built_layout()
+    dev = layout.devices[0]
+    looped = dataclasses.replace(dev, drain_net=dev.source_net)
+    broken = dataclasses.replace(layout, devices=tuple(looped if d.id == dev.id else d for d in layout.devices))
+    with pytest.raises(RuntimeError, match="self-loop"):
+        validate_layout_geometry(broken)
+
+
+def test_regression_swapped_primary_mapping_table():
+    """A pure primary_nets mapping-table swap (devices and wires entirely
+    untouched) for a symmetric NAND3 -- functionally invisible to
+    simulate_layout (AND is commutative) and to the topology-fidelity gate
+    (which never reads primary_nets), so only a direct device-gate_net-to-
+    mapping cross-check can catch it."""
+    var_order, minterms, layout = _built_layout()
+    by_var = dict(layout.primary_nets)
+    swapped = tuple(
+        (v, by_var["b"] if v == "a" else by_var["a"] if v == "b" else nid) for v, nid in layout.primary_nets
+    )
+    broken = dataclasses.replace(layout, primary_nets=swapped)
+    with pytest.raises(RuntimeError, match="does not follow the net_\\{var\\} id convention|mapping for"):
+        validate_layout_geometry(broken)
+    assert verify_layout(broken, var_order, minterms).passed
+
+
+def test_regression_device_x_changed_without_updating_points():
+    var_order, minterms, layout = _built_layout()
+    dev = layout.devices[0]
+    broken_dev = dataclasses.replace(dev, x=dev.x + 1)
+    broken = dataclasses.replace(layout, devices=tuple(broken_dev if d.id == dev.id else d for d in layout.devices))
+    with pytest.raises(RuntimeError, match="geometry does not match the documented coordinate formulas"):
+        validate_layout_geometry(broken)
+
+
+def test_regression_device_origin_inconsistent_with_x_y():
+    var_order, minterms, layout = _built_layout()
+    dev = layout.devices[0]
+    broken_dev = dataclasses.replace(dev, origin=Point(dev.origin.x + CELL, dev.origin.y))
+    broken = dataclasses.replace(layout, devices=tuple(broken_dev if d.id == dev.id else d for d in layout.devices))
+    with pytest.raises(RuntimeError, match="geometry does not match the documented coordinate formulas"):
+        validate_layout_geometry(broken)
+
+
+def test_regression_device_terminal_orientation_swapped():
+    """Swapping a device's own source_point/drain_point (not its kind)
+    violates the documented PMOS-source-toward-top/NMOS-drain-toward-top
+    orientation formula."""
+    var_order, minterms, layout = _built_layout()
+    dev = layout.devices[0]
+    broken_dev = dataclasses.replace(dev, source_point=dev.drain_point, drain_point=dev.source_point)
+    broken = dataclasses.replace(layout, devices=tuple(broken_dev if d.id == dev.id else d for d in layout.devices))
+    with pytest.raises(RuntimeError, match="geometry does not match the documented coordinate formulas"):
+        validate_layout_geometry(broken)
+
+
+def test_regression_device_literal_mismatched():
+    var_order, minterms, layout = _built_layout()
+    dev = layout.devices[0]
+    broken_dev = dataclasses.replace(dev, literal="zzz")
+    broken = dataclasses.replace(layout, devices=tuple(broken_dev if d.id == dev.id else d for d in layout.devices))
+    with pytest.raises(RuntimeError, match="does not match its structured gate identity"):
         validate_layout_geometry(broken)
