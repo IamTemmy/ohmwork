@@ -875,6 +875,11 @@ def test_changing_format_after_a_completed_copy_clears_the_stale_preview(page):
 
 
 def test_two_copy_requests_resolved_out_of_order_leave_only_the_newest_format(page):
+    # Genuinely out-of-order: the *newer* (Markdown) request resolves
+    # first, and the *stale* (Terminal) one only arrives afterward -- the
+    # case that actually exercises the token guard, unlike resolving
+    # index 0 then index 1 (which is just normal request order and would
+    # pass even with a naive "last resolved wins" bug).
     _run_derivation(page, "xy + xy'")
     terminal_response = _real_json(page, "/api/tt", {"expression": "xy + xy'"})
     markdown_response = _real_json(page, "/api/tt", {"expression": "xy + xy'", "md": True})
@@ -887,11 +892,14 @@ def test_two_copy_requests_resolved_out_of_order_leave_only_the_newest_format(pa
     page.check('input[name="tt-format"][value="md"]')  # invalidates it
     page.click("#tt-copy-formatted")  # Markdown copy, index 1, stays pending
 
-    _resolve_fetch(page, 0, terminal_response)  # stale Terminal resolves first
-    page.wait_for_timeout(200)
-    assert page.evaluate("window.__copiedText") is None  # still nothing -- it was stale
-
-    _resolve_fetch(page, 1, markdown_response)  # Markdown resolves second
+    _resolve_fetch(page, 1, markdown_response)  # newer request resolves first
     page.wait_for_timeout(200)
     assert page.evaluate("window.__copiedText") == markdown_response["output"]
     assert page.text_content("#tt-formatted-preview") == markdown_response["output"]
+
+    _resolve_fetch(page, 0, terminal_response)  # stale request arrives last
+    page.wait_for_timeout(200)
+    assert page.evaluate("window.__copiedText") == markdown_response["output"]  # unchanged
+    assert page.text_content("#tt-formatted-preview") == markdown_response["output"]  # unchanged
+    assert page.is_visible("#tt-result")  # the table itself is untouched throughout
+    assert page.text_content("#tt-function-line") == "F = x"
