@@ -75,6 +75,13 @@ def _run_derivation(page, expression: str) -> None:
     page.wait_for_selector("#tt-result:not(.empty)")
 
 
+def _open_tt_advanced_exports(page) -> None:
+    # tt-format, #tt-copy-formatted, and #tt-preview-details all live
+    # inside the collapsed "Advanced exports" <details> now -- open it
+    # before interacting with anything inside.
+    page.click("#tt-advanced-exports summary")
+
+
 def _build_q1_grid(page) -> None:
     _switch_tab(page, "synth")
     page.check('input[name="synth-mode"][value="table"]')
@@ -309,6 +316,29 @@ def _click_and_read_copy(page, button_selector: str) -> str:
     page.click(button_selector)
     page.wait_for_function("window.__copiedText !== null")
     return page.evaluate("window.__copiedText")
+
+
+def _hijack_rich_clipboard(page) -> None:
+    # Stubs the rich, multi-MIME navigator.clipboard.write(ClipboardItem)
+    # path specifically -- separate from _hijack_clipboard above, which
+    # only stubs the plain writeText() path other copy buttons use.
+    page.evaluate(
+        """() => {
+            window.__richClipboard = null;
+            navigator.clipboard.write = async (items) => {
+                const item = items[0];
+                const html = await (await item.getType("text/html")).text();
+                const plain = await (await item.getType("text/plain")).text();
+                window.__richClipboard = { html, plain };
+            };
+        }"""
+    )
+
+
+def _click_and_read_rich_copy(page, button_selector: str) -> dict:
+    page.click(button_selector)
+    page.wait_for_function("window.__richClipboard !== null")
+    return page.evaluate("window.__richClipboard")
 
 
 def test_copy_solution_includes_the_full_student_facing_solution(page):
@@ -572,6 +602,7 @@ def test_changing_tt_format_does_not_hide_the_table(page):
     # (that would previously have been correct, back when the format
     # radios controlled the *visible* output).
     _run_derivation(page, "xy + xy'")
+    _open_tt_advanced_exports(page)
     page.check('input[name="tt-format"][value="md"]')
     assert page.is_visible("#tt-result")
     assert page.text_content("#tt-function-line") == "F = x"
@@ -752,6 +783,7 @@ def test_tt_table_wrapper_scrolls_horizontally(page):
 
 def test_tt_copy_formatted_output_terminal(page):
     _run_derivation(page, "xy + xy'")
+    _open_tt_advanced_exports(page)
     _hijack_clipboard(page)
     copied = _click_and_read_copy(page, "#tt-copy-formatted")
     assert copied.startswith("+---+")  # ASCII box-drawing
@@ -760,6 +792,7 @@ def test_tt_copy_formatted_output_terminal(page):
 
 def test_tt_copy_formatted_output_markdown(page):
     _run_derivation(page, "xy + xy'")
+    _open_tt_advanced_exports(page)
     page.check('input[name="tt-format"][value="md"]')
     _hijack_clipboard(page)
     copied = _click_and_read_copy(page, "#tt-copy-formatted")
@@ -769,6 +802,7 @@ def test_tt_copy_formatted_output_markdown(page):
 
 def test_tt_copy_formatted_output_latex(page):
     _run_derivation(page, "xy + xy'")
+    _open_tt_advanced_exports(page)
     page.check('input[name="tt-format"][value="latex"]')
     _hijack_clipboard(page)
     copied = _click_and_read_copy(page, "#tt-copy-formatted")
@@ -778,6 +812,7 @@ def test_tt_copy_formatted_output_latex(page):
 
 def test_tt_copy_formatted_output_updates_the_preview(page):
     _run_derivation(page, "xy + xy'")
+    _open_tt_advanced_exports(page)
     page.check('input[name="tt-format"][value="md"]')
     _hijack_clipboard(page)
     _click_and_read_copy(page, "#tt-copy-formatted")
@@ -787,6 +822,7 @@ def test_tt_copy_formatted_output_updates_the_preview(page):
 
 def test_tt_copy_formatted_output_shows_copied_feedback(page):
     _run_derivation(page, "xy + xy'")
+    _open_tt_advanced_exports(page)
     _hijack_clipboard(page)
     page.click("#tt-copy-formatted")
     page.wait_for_selector("#tt-copy-formatted.copied")
@@ -797,6 +833,7 @@ def test_editing_during_inflight_tt_copy_prevents_stale_clipboard_write(page):
     _run_derivation(page, "xy + xy'")
     real_response = _real_json(page, "/api/tt", {"expression": "xy + xy'", "md": True})
 
+    _open_tt_advanced_exports(page)
     page.check('input[name="tt-format"][value="md"]')
     _hijack_clipboard(page)
     _install_fetch_mock(page)
@@ -815,6 +852,7 @@ def test_new_problem_during_inflight_tt_copy_resets_the_button(page):
     _run_derivation(page, "xy + xy'")
     real_response = _real_json(page, "/api/tt", {"expression": "xy + xy'"})
 
+    _open_tt_advanced_exports(page)
     _hijack_clipboard(page)
     _install_fetch_mock(page)
 
@@ -845,6 +883,7 @@ def test_changing_format_during_inflight_copy_prevents_stale_clipboard_write(pag
     _run_derivation(page, "xy + xy'")
     terminal_response = _real_json(page, "/api/tt", {"expression": "xy + xy'"})
 
+    _open_tt_advanced_exports(page)
     _hijack_clipboard(page)
     _install_fetch_mock(page)
 
@@ -864,6 +903,7 @@ def test_changing_format_during_inflight_copy_prevents_stale_clipboard_write(pag
 
 def test_changing_format_after_a_completed_copy_clears_the_stale_preview(page):
     _run_derivation(page, "xy + xy'")
+    _open_tt_advanced_exports(page)
     _hijack_clipboard(page)
     _click_and_read_copy(page, "#tt-copy-formatted")  # Terminal, completes fully
     assert page.text_content("#tt-formatted-preview") != ""
@@ -885,6 +925,7 @@ def test_two_copy_requests_resolved_out_of_order_leave_only_the_newest_format(pa
     markdown_response = _real_json(page, "/api/tt", {"expression": "xy + xy'", "md": True})
     assert terminal_response["output"] != markdown_response["output"]
 
+    _open_tt_advanced_exports(page)
     _hijack_clipboard(page)
     _install_fetch_mock(page)
 
@@ -903,3 +944,185 @@ def test_two_copy_requests_resolved_out_of_order_leave_only_the_newest_format(pa
     assert page.text_content("#tt-formatted-preview") == markdown_response["output"]  # unchanged
     assert page.is_visible("#tt-result")  # the table itself is untouched throughout
     assert page.text_content("#tt-function-line") == "F = x"
+
+
+# --- "Copy table for Word/Docs" -------------------------------------------------------
+#
+# The problem: Terminal/Markdown/LaTeX are technically correct, but pasting
+# any of them into Word or Google Docs produces raw pipes/dashes/LaTeX
+# commands, not a table -- because writeText() only ever offers a
+# text/plain clipboard representation. Reproduced live before
+# implementing: hijacking navigator.clipboard.writeText/write and clicking
+# the old "Copy formatted output" button showed exactly one writeText()
+# call (the raw ASCII table) and zero write() calls -- the rich,
+# multi-MIME API was never used at all. "Copy table for Word/Docs" now
+# writes both text/html (a real bordered table) and text/plain (tab-
+# separated) in one clipboard.write([ClipboardItem]) call, built from
+# lastTtView (the already-computed structured result) and a clone of the
+# already-rendered #tt-table DOM -- no second table implementation, no
+# extra /api/tt request.
+
+
+def test_advanced_exports_collapsed_by_default(page):
+    _run_derivation(page, "xy + xy'")
+    assert page.get_attribute("#tt-advanced-exports", "open") is None
+
+
+def test_advanced_export_labels_are_renamed(page):
+    _run_derivation(page, "xy + xy'")
+    page.click("#tt-advanced-exports summary")
+    labels = page.locator("#tt-advanced-exports .row label").all_text_contents()
+    assert any("Plain text / Terminal" in label for label in labels)
+    assert any("Markdown source" in label for label in labels)
+    assert any("LaTeX fragment" in label for label in labels)
+
+
+def test_rich_copy_supplies_both_html_and_plain_text(page):
+    _run_derivation(page, "xy + xy'")
+    _hijack_rich_clipboard(page)
+    data = _click_and_read_rich_copy(page, "#tt-copy-rich")
+    assert data["html"]
+    assert data["plain"]
+
+
+def test_rich_copy_html_matches_current_headers_rows_and_function(page):
+    _run_derivation(page, "xy + xy'")
+    _hijack_rich_clipboard(page)
+    data = _click_and_read_rich_copy(page, "#tt-copy-rich")
+    html = data["html"]
+
+    for header in ["x", "y", "y'", "xy", "xy'", "F"]:
+        assert f">{header}<" in html
+    assert "F = x" in html
+    assert 'class="tt-output-col"' in html  # the output column, carried from the live table
+    assert html.count("<td") == 24  # 4 rows x 6 columns
+
+
+def test_rich_copy_html_has_portable_inline_styling(page):
+    # Word/Docs strip a pasted page's own <style> rules -- the borders and
+    # header shading must travel as inline styles/attributes, not rely on
+    # Ohmwork's own .tt-grid CSS class alone.
+    _run_derivation(page, "xy + xy'")
+    _hijack_rich_clipboard(page)
+    data = _click_and_read_rich_copy(page, "#tt-copy-rich")
+    html = data["html"]
+    assert 'border="1"' in html
+    assert "border-collapse" in html
+    assert "border: 1px solid" in html
+    assert "padding: 4px 10px" in html
+
+
+def test_rich_copy_plain_text_is_tab_separated(page):
+    _run_derivation(page, "xy + xy'")
+    _hijack_rich_clipboard(page)
+    data = _click_and_read_rich_copy(page, "#tt-copy-rich")
+    plain = data["plain"]
+    lines = plain.split("\n")
+    assert lines[0] == "x\ty\ty'\txy\txy'\tF"
+    assert lines[1] == "0\t0\t1\t0\t0\t0"
+    assert plain.rstrip().endswith("F = x")
+
+
+def test_rich_copy_makes_no_additional_api_request(page):
+    _run_derivation(page, "xy + xy'")
+    _hijack_rich_clipboard(page)
+    requests = []
+    page.on("request", lambda req: requests.append(req.url))
+    _click_and_read_rich_copy(page, "#tt-copy-rich")
+    page.wait_for_timeout(150)
+    assert not any("/api/tt" in url for url in requests)
+
+
+def test_editing_expression_hides_the_rich_copy_button(page):
+    _run_derivation(page, "xy + xy'")
+    assert page.is_visible("#tt-copy-rich")
+    page.fill("#tt-expr", "a+b")
+    assert not page.is_visible("#tt-copy-rich")
+
+
+def test_new_problem_hides_the_rich_copy_button(page):
+    _run_derivation(page, "xy + xy'")
+    assert page.is_visible("#tt-copy-rich")
+    page.click("#tt-new-problem")
+    assert not page.is_visible("#tt-copy-rich")
+
+
+def test_changing_advanced_format_leaves_table_and_rich_copy_intact(page):
+    _run_derivation(page, "xy + xy'")
+    page.click("#tt-advanced-exports summary")
+    page.check('input[name="tt-format"][value="md"]')
+
+    assert page.is_visible("#tt-result")
+    assert page.text_content("#tt-function-line") == "F = x"
+
+    _hijack_rich_clipboard(page)
+    data = _click_and_read_rich_copy(page, "#tt-copy-rich")
+    assert "F = x" in data["html"]
+    assert "F = x" in data["plain"]
+
+
+def test_advanced_exports_still_copy_valid_terminal_markdown_latex(page):
+    # Terminal/Markdown/LaTeX must remain byte-identical to before this
+    # change -- same content already pinned by the pre-existing
+    # test_tt_copy_formatted_output_{terminal,markdown,latex} tests above;
+    # this just re-confirms it still works from inside the now-collapsed
+    # Advanced exports section with the renamed labels.
+    _run_derivation(page, "xy + xy'")
+    page.click("#tt-advanced-exports summary")
+
+    _hijack_clipboard(page)
+    terminal_copy = _click_and_read_copy(page, "#tt-copy-formatted")
+    assert terminal_copy.startswith("+---+")
+
+    page.check('input[name="tt-format"][value="latex"]')
+    _hijack_clipboard(page)
+    latex_copy = _click_and_read_copy(page, "#tt-copy-formatted")
+    assert r"\begin{array}" in latex_copy
+
+
+def test_rich_copy_falls_back_when_clipboard_write_is_rejected(page):
+    _run_derivation(page, "xy + xy'")
+    page.evaluate(
+        """() => {
+            window.__copiedText = null;
+            navigator.clipboard.write = () => Promise.reject(new Error("simulated rejection"));
+            navigator.clipboard.writeText = (t) => { window.__copiedText = t; return Promise.resolve(); };
+        }"""
+    )
+    page.click("#tt-copy-rich")
+    page.wait_for_function("window.__copiedText !== null")
+    copied = page.evaluate("window.__copiedText")
+    assert "\t" in copied
+    assert copied.rstrip().endswith("F = x")
+    page.wait_for_selector("#tt-copy-rich.copied")
+
+
+def test_rich_copy_falls_back_when_clipboarditem_is_unavailable(page):
+    _run_derivation(page, "xy + xy'")
+    page.evaluate(
+        """() => {
+            window.__copiedText = null;
+            window.ClipboardItem = undefined;
+            navigator.clipboard.writeText = (t) => { window.__copiedText = t; return Promise.resolve(); };
+        }"""
+    )
+    page.click("#tt-copy-rich")
+    page.wait_for_function("window.__copiedText !== null")
+    copied = page.evaluate("window.__copiedText")
+    assert "\t" in copied
+
+
+def test_copy_buttons_have_independent_feedback(page):
+    _run_derivation(page, "xy + xy'")
+    _hijack_clipboard(page)
+    _hijack_rich_clipboard(page)
+
+    page.click("#tt-copy-rich")
+    page.wait_for_selector("#tt-copy-rich.copied")
+    assert page.text_content("#tt-copy-rich") == "Copied!"
+    assert page.text_content("#tt-copy-formatted") == "Copy formatted output"  # untouched
+
+    page.click("#tt-advanced-exports summary")
+    page.click("#tt-copy-formatted")
+    page.wait_for_selector("#tt-copy-formatted.copied")
+    assert page.text_content("#tt-copy-formatted") == "Copied!"

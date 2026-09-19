@@ -184,6 +184,11 @@ _PAGE = r"""<!doctype html>
   }
   button.copy-btn:hover { background: #8884; }
   button.copy-btn.copied { background: #2e8b5730; border-color: #2e8b57; }
+  button.copy-btn-primary {
+    padding: .55rem 1.3rem; font-size: .95rem; font-weight: 600;
+    background: #5a82ff22; border-color: #5a82ff60;
+  }
+  button.copy-btn-primary:hover { background: #5a82ff38; }
   pre.copy-fallback {
     white-space: pre-wrap; background: #8881; padding: .75rem; border-radius: 6px;
     margin-top: .5rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -231,14 +236,18 @@ _PAGE = r"""<!doctype html>
       </table>
     </div>
 
-    <div class="section">
-      <h3>Export</h3>
-      <p class="hint">Terminal/Markdown/LaTeX are copy formats for the table above — the table
-        itself is always the current result.</p>
+    <div class="row copy-row">
+      <button type="button" class="copy-btn copy-btn-primary" id="tt-copy-rich">Copy table for Word/Docs</button>
+    </div>
+
+    <details class="section" id="tt-advanced-exports">
+      <summary>Advanced exports</summary>
+      <p class="hint">Copy formats for the table above — for Word or Google Docs, use "Copy
+        table for Word/Docs" instead; the table itself is always the current result.</p>
       <div class="row">
-        <label><input type="radio" name="tt-format" value="terminal" checked> Terminal</label>
-        <label><input type="radio" name="tt-format" value="md"> Markdown</label>
-        <label><input type="radio" name="tt-format" value="latex"> LaTeX</label>
+        <label><input type="radio" name="tt-format" value="terminal" checked> Plain text / Terminal</label>
+        <label><input type="radio" name="tt-format" value="md"> Markdown source</label>
+        <label><input type="radio" name="tt-format" value="latex"> LaTeX fragment</label>
       </div>
       <div class="row copy-row">
         <button type="button" class="copy-btn" id="tt-copy-formatted">Copy formatted output</button>
@@ -247,7 +256,7 @@ _PAGE = r"""<!doctype html>
         <summary>Formatted output preview</summary>
         <pre id="tt-formatted-preview"></pre>
       </details>
-    </div>
+    </details>
   </div>
 </form>
 
@@ -510,6 +519,11 @@ async function postJSON(url, payload) {
 let ttRequestToken = 0;
 let ttCopyRequestToken = 0;
 let lastTtFormattedOutput = "";
+// The structured view from the last successfully rendered result --
+// "Copy table for Word/Docs" builds its clipboard content from this (the
+// already-computed derivation result) plus the already-rendered #tt-table
+// DOM, never by re-deriving or hitting /api/tt again.
+let lastTtView = null;
 
 function buildTtPayload() {
   const colsMode = checkedValue("tt-cols");
@@ -556,6 +570,13 @@ function clearTtOutputDisplay() {
   $("tt-function-line").textContent = "";
   clearChildren($("tt-table-head"));
   clearChildren($("tt-table-body"));
+  lastTtView = null;
+  // resetTtExportState() above already removed every .copy-fallback box
+  // inside #tt-result (it uses that broad a selector), covering this
+  // button's fallback too -- only its own text/class need resetting here.
+  const richBtn = $("tt-copy-rich");
+  richBtn.classList.remove("copied");
+  richBtn.textContent = "Copy table for Word/Docs";
 }
 $("tt-expr").addEventListener("input", clearTtOutputDisplay);
 $("tt-cols-input").addEventListener("input", clearTtOutputDisplay);
@@ -594,6 +615,7 @@ function renderTtResult(view, rawOutput) {
 
   lastTtFormattedOutput = rawOutput;
   $("tt-formatted-preview").textContent = rawOutput;
+  lastTtView = view;
 }
 
 $("panel-tt").addEventListener("submit", async (e) => {
@@ -636,6 +658,100 @@ $("tt-copy-formatted").addEventListener("click", async () => {
   lastTtFormattedOutput = result.output;
   $("tt-formatted-preview").textContent = result.output;
   copyText(result.output, btn);
+});
+
+// --- "Copy table for Word/Docs" ---------------------------------------------------
+//
+// Word/Docs users pasting the Terminal/Markdown/LaTeX text above get raw
+// pipes, dashes, or LaTeX commands, not a table -- because writeText()
+// only ever offers a text/plain clipboard representation. This button
+// writes a real text/html table alongside a tab-separated text/plain
+// fallback, in one clipboard operation, entirely from data already on the
+// page (lastTtView, set by renderTtResult, and the already-rendered
+// #tt-table DOM) -- no new /api/tt request, no re-deriving, no second
+// table-building implementation.
+
+function buildTtInlineStyledTableClone() {
+  // Clones the already-rendered #tt-table (built via safe DOM
+  // construction in renderTtResult, textContent only) rather than
+  // building a second one, then layers inline styles onto the *clone* --
+  // Word and Google Docs both strip a pasted page's own <style> rules, so
+  // the borders/padding/header shading have to travel as inline style
+  // attributes to survive the paste.
+  const clone = $("tt-table").cloneNode(true);
+  clone.style.borderCollapse = "collapse";
+  clone.setAttribute("border", "1"); // legacy attribute both Word and Docs also honor
+  clone.querySelectorAll("th, td").forEach(cell => {
+    cell.style.border = "1px solid #888888";
+    cell.style.padding = "4px 10px";
+    cell.style.textAlign = "center";
+  });
+  clone.querySelectorAll("th").forEach(cell => {
+    cell.style.background = "#eeeeee";
+    cell.style.fontWeight = "bold";
+  });
+  clone.querySelectorAll("td.tt-output-col, th.tt-output-col").forEach(cell => {
+    cell.style.background = "#dbe6ff";
+    cell.style.fontWeight = "bold";
+  });
+  // The live table's id/aria-label are meaningless (and, for id, invalid
+  // as a duplicate) once this is pasted somewhere else -- strip them from
+  // the clone and every descendant rather than carrying them along.
+  clone.removeAttribute("id");
+  clone.removeAttribute("aria-label");
+  clone.querySelectorAll("[id]").forEach(el => el.removeAttribute("id"));
+  return clone;
+}
+
+function buildTtRichHtml(view) {
+  // Built entirely with createElement/textContent (the styled clone
+  // above is itself a clone of a safely-built node); reading .innerHTML
+  // back off a node assembled this way is serialization, not an unsafe
+  // injection -- nothing here is ever assigned into innerHTML from a string.
+  const wrapper = document.createElement("div");
+  wrapper.appendChild(buildTtInlineStyledTableClone());
+  const fnLine = document.createElement("p");
+  fnLine.textContent = view.simplified_function;
+  wrapper.appendChild(fnLine);
+  return wrapper.innerHTML;
+}
+
+function buildTtRichPlainText(view) {
+  const lines = [view.headers.join("\t")];
+  view.rows.forEach(row => lines.push(row.map(cell => (cell ? "1" : "0")).join("\t")));
+  lines.push("");
+  lines.push(view.simplified_function);
+  return lines.join("\n");
+}
+
+$("tt-copy-rich").addEventListener("click", async () => {
+  const btn = $("tt-copy-rich");
+  if (!lastTtView) return; // no result to copy -- shouldn't be reachable, #tt-result is hidden
+  const view = lastTtView;
+  const plainText = buildTtRichPlainText(view);
+
+  let copiedRich = false;
+  if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+    try {
+      const html = buildTtRichHtml(view);
+      const item = new ClipboardItem({
+        "text/html": new Blob([html], { type: "text/html" }),
+        "text/plain": new Blob([plainText], { type: "text/plain" }),
+      });
+      await navigator.clipboard.write([item]);
+      copiedRich = true;
+    } catch (e) {
+      // ClipboardItem/write unsupported, permission denied, insecure
+      // context, etc. -- fall through to the plain-text-only defensive
+      // chain below rather than leaving an uncaught rejection.
+    }
+  }
+
+  if (copiedRich) {
+    showCopiedFeedback(btn);
+  } else {
+    await copyText(plainText, btn); // same writeText -> execCommand -> prompt -> visible-fallback chain as every other copy button
+  }
 });
 
 function resetTtForm() {
@@ -882,6 +998,13 @@ function showCopyFallback(btn, text) {
   }
 }
 
+function showCopiedFeedback(btn) {
+  const original = btn.textContent;
+  btn.textContent = "Copied!";
+  btn.classList.add("copied");
+  setTimeout(() => { btn.textContent = original; btn.classList.remove("copied"); }, 1500);
+}
+
 async function copyText(text, btn) {
   let copied = false;
 
@@ -926,10 +1049,7 @@ async function copyText(text, btn) {
     return;
   }
 
-  const original = btn.textContent;
-  btn.textContent = "Copied!";
-  btn.classList.add("copied");
-  setTimeout(() => { btn.textContent = original; btn.classList.remove("copied"); }, 1500);
+  showCopiedFeedback(btn);
 }
 
 $("copy-solution").addEventListener("click", () => copyText(lastSolutionText, $("copy-solution")));

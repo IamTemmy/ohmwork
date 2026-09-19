@@ -9,9 +9,13 @@ covers the highest-value subset of actual clicking/rendering/clipboard
 behavior: tab/result isolation, Q1's single combined AOI/OAI row, grid
 cycling and submission, collapse behavior, error-state cleanup, full Copy
 Solution/Copy Advanced Report content, the Derivation table's structured
-HTML table (M1.3) across all three column modes, and its Copy formatted
-output. Items below marked **(automated)** are covered there — re-checking
-them by hand is optional, not required.
+HTML table (M1.3) across all three column modes, its Copy formatted
+output, and "Copy table for Word/Docs"'s rich (text/html + text/plain)
+clipboard content. Items below marked **(automated)** are covered there —
+re-checking them by hand is optional, not required. What automated tests
+can't cover for the rich copy specifically: whether Word/Google Docs
+*themselves* actually render the pasted HTML as a real table — that needs
+an actual paste into each, listed below.
 
 This checklist covers the rest: what neither structural pytest nor the one
 Chromium smoke test reaches (Q2/Q3-specific cases, light/dark mode,
@@ -35,12 +39,28 @@ Open the printed URL yourself, or drive it with a real browser tool.
       **(automated)**
 - [ ] A wide derivation (many columns) scrolls horizontally rather than breaking the page
       layout. **(automated: wrapper CSS, not a visual check of an actual wide table)**
-- [ ] Terminal/Markdown/LaTeX (under "Export", inside the result) are copy-only formats now
-      — switching them does **not** change or clear the visible table. **(automated)**
-- [ ] "Copy formatted output" copies the selected format's text (verify each of the three)
-      and shows "Copied!" feedback; the collapsed "Formatted output preview" reflects the
-      same text after copying. **(automated: content and feedback, not the click-triggered
-      "Copying…" transition itself)**
+- [ ] Plain text/Terminal, Markdown source, and LaTeX fragment (under the collapsed
+      "Advanced exports" section) are copy-only formats — switching them does **not** change
+      or clear the visible table. **(automated)**
+- [ ] "Copy formatted output" (inside Advanced exports) copies the selected format's text
+      (verify each of the three) and shows "Copied!" feedback; the collapsed "Formatted
+      output preview" reflects the same text after copying. **(automated: content and
+      feedback, not the click-triggered "Copying…" transition itself)**
+- [ ] "Advanced exports" is collapsed by default. **(automated)**
+
+### "Copy table for Word/Docs"
+
+- [ ] Paste "Copy table for Word/Docs" into **Microsoft Word** and confirm it becomes a real
+      bordered table (not raw pipes/dashes/LaTeX text), with the simplified function (e.g.
+      `F = x`) beneath it.
+- [ ] Repeat the same paste in **Google Docs**.
+- [ ] Paste it into a basic plain-text editor (e.g. TextEdit/Notepad in plain-text mode, or a
+      terminal) and confirm the plain-text fallback is still readable — a tab-separated table
+      followed by the simplified function, not the HTML markup itself.
+- [ ] Advanced exports (Terminal/Markdown/LaTeX) still copy valid, correctly-formatted source
+      for each format after this change — spot-check by pasting the Markdown one into a
+      Markdown previewer and the LaTeX one into a LaTeX math block. **(automated: the copied
+      text's content, not rendering it through an actual Markdown/LaTeX processor)**
 
 ## Synthesis tab — grid input
 
