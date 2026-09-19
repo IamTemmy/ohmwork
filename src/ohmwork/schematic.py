@@ -27,7 +27,7 @@ ever returns a :class:`Layout`, each blind to what the others check:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ohmwork.derivation import all_assignments
 from ohmwork.expr import Expr, Not, Var, render as render_expr
@@ -119,6 +119,23 @@ class Junction:
 
 
 @dataclass(frozen=True, slots=True)
+class NamedPort:
+    id: str
+    net_id: str
+    label: str
+    device_id: str
+    terminal: str  # gate, or drain on the PMOS half of a shared inverter
+    point: Point
+
+
+@dataclass(frozen=True, slots=True)
+class Boundary:
+    id: str
+    net_id: str
+    point: Point
+
+
+@dataclass(frozen=True, slots=True)
 class Layout:
     nets: tuple[Net, ...]
     devices: tuple[Device, ...]
@@ -136,6 +153,9 @@ class Layout:
     height: int
     pun_height: int
     pdn_height: int
+    style: str = "wired"
+    ports: tuple[NamedPort, ...] = ()
+    boundaries: tuple[Boundary, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -789,6 +809,10 @@ def validate_layout_geometry(layout: Layout) -> None:
     """Structural-only validator, independent of `simulate_layout` -- raises
     RuntimeError on the first violation found, in a fixed check order (see
     the module docstring / docs/decisions.md D17 for the full rationale)."""
+    if layout.style not in ("wired", "textbook"):
+        raise RuntimeError("unknown schematic style")
+    if layout.style == "wired" and (layout.ports or layout.boundaries):
+        raise RuntimeError("wired layout cannot contain named ports or boundaries")
     # 1. global id uniqueness
     owner: dict[str, str] = {}
     for kind, items in (
@@ -796,6 +820,8 @@ def validate_layout_geometry(layout: Layout) -> None:
         ("device", layout.devices),
         ("wire", layout.wires),
         ("junction", layout.junctions),
+        ("port", layout.ports),
+        ("boundary", layout.boundaries),
     ):
         for item in items:
             if item.id in owner:
@@ -873,6 +899,8 @@ def validate_layout_geometry(layout: Layout) -> None:
         expected_origin, expected_gate, expected_source, expected_drain = _expected_device_points(
             d.x, d.y, d.kind
         )
+        if layout.style == "textbook":
+            expected_origin, expected_gate, expected_source, expected_drain = _textbook_device_points(d.x, d.y, d.kind)
         if (d.origin, d.gate_point, d.source_point, d.drain_point) != (
             expected_origin,
             expected_gate,
@@ -1109,6 +1137,8 @@ def validate_layout_geometry(layout: Layout) -> None:
             if not (0 <= p.x <= layout.width * CELL and 0 <= p.y <= layout.height * CELL):
                 raise RuntimeError(f"device {d.id!r} point {p!r} is out of bounds")
 
+    _validate_named_ports(layout, net_by_id)
+
     # 14. shared touch index, reused by checks 15-19
     touches: dict[Point, list[tuple[str, str, str]]] = {}
 
@@ -1122,6 +1152,10 @@ def validate_layout_geometry(layout: Layout) -> None:
     for w in layout.wires:
         _add_touch(w.net_id, w.p1, "segment_endpoint", w.id)
         _add_touch(w.net_id, w.p2, "segment_endpoint", w.id)
+    for p in layout.ports:
+        _add_touch(p.net_id, p.point, "port", p.id)
+    for b in layout.boundaries:
+        _add_touch(b.net_id, b.point, "boundary", b.id)
 
     # 15. wire-endpoint anchoring
     junction_points = {(j.net_id, j.point) for j in layout.junctions}
@@ -1129,7 +1163,7 @@ def validate_layout_geometry(layout: Layout) -> None:
         for p in (w.p1, w.p2):
             same_net_entries = [e for e in touches.get(p, []) if e[0] == w.net_id]
             anchored = (w.net_id, p) in junction_points
-            anchored = anchored or any(e[1] in ("device_gate", "device_source", "device_drain") for e in same_net_entries)
+            anchored = anchored or any(e[1] in ("device_gate", "device_source", "device_drain", "port", "boundary") for e in same_net_entries)
             anchored = anchored or any(e[1] == "segment_endpoint" and e[2] != w.id for e in same_net_entries)
             if not anchored:
                 raise RuntimeError(
@@ -1196,6 +1230,12 @@ def validate_layout_geometry(layout: Layout) -> None:
             for p in points_for_net:
                 if p != w.p1 and p != w.p2 and _is_interior(p, w):
                     union(p, w.p1)
+        # Only explicitly validated, visible named ports may bridge components.
+        # Every port's local stub was checked before this union, including its
+        # terminal identity and geometry; a net-id match alone is insufficient.
+        named = [p.point for p in layout.ports if p.net_id == net_id]
+        for p in named[1:]:
+            union(named[0], p)
         roots = {find(p) for p in points_for_net}
         if len(roots) > 1:
             raise RuntimeError(
@@ -1449,6 +1489,8 @@ def _validate_source_fidelity(layout: Layout, result: SynthesisResult, output_na
             f"{result.pdn_stack_height}"
         )
     expected_height = layout.pun_height + layout.pdn_height + 2 * GATE_LANE_CELLS
+    if layout.style == "textbook":
+        expected_height *= 2
     if layout.height != expected_height:
         raise RuntimeError(
             f"layout.height {layout.height} != layout.pun_height + layout.pdn_height + "
@@ -1461,6 +1503,8 @@ def _validate_source_fidelity(layout: Layout, result: SynthesisResult, output_na
     expected_num_rail_cols = len(layout.primary_nets) + len(layout.complement_nets)
     expected_num_inverter_cols = result.inverter_transistors // 2
     expected_width = expected_core_width + expected_num_rail_cols + expected_num_inverter_cols
+    if layout.style == "textbook":
+        expected_width = 2 * expected_core_width + 2 + (2 * expected_num_inverter_cols + 2 if expected_num_inverter_cols else 0)
     if layout.width != expected_width:
         raise RuntimeError(
             f"layout.width {layout.width} does not match the documented sizing formula (core "
@@ -1477,6 +1521,131 @@ def _validate_source_fidelity(layout: Layout, result: SynthesisResult, output_na
 
 
 # --- Public entry point -----------------------------------------------------
+
+
+def _textbook_device_points(x: int, y: int, kind: str) -> tuple[Point, Point, Point, Point]:
+    """Generous two-cell pitch; gates face left, diffusion flows down.
+
+    Terminal locations are electrical model geometry. The shorter channel,
+    electrode and bent source/drain leads inside this box are symbol geometry.
+    """
+    origin = Point(200 * x + 100, 200 * y)
+    top = Point(origin.x + 100, origin.y)
+    bottom = Point(top.x, top.y + 200)
+    gate = Point(top.x - 55, top.y + 100)
+    return origin, gate, top if kind == "p" else bottom, bottom if kind == "p" else top
+
+
+def _validate_named_ports(layout: Layout, nets: dict[str, Net]) -> None:
+    if layout.style != "textbook":
+        return
+    devices = {d.id: d for d in layout.devices}
+    expected = {(d.id, "gate") for d in layout.devices}
+    expected |= {(d.id, "drain") for d in layout.devices if d.role == "inverter" and d.kind == "p"}
+    found = [(p.device_id, p.terminal) for p in layout.ports]
+    if len(found) != len(set(found)) or set(found) != expected:
+        raise RuntimeError("named ports must cover every gate and each shared inverter output exactly once")
+    for var in layout.inverter_driven_vars:
+        pair = [d for d in layout.devices if d.role == "inverter" and d.gate_var == var]
+        if len(pair) != 2 or pair[0].drain_point != pair[1].drain_point:
+            raise RuntimeError("shared inverter drains must visibly meet before the named output port")
+    for p in layout.ports:
+        d = devices[p.device_id]
+        net_id = getattr(d, p.terminal + "_net")
+        terminal = getattr(d, p.terminal + "_point")
+        n = nets.get(p.net_id)
+        if n is None or not n.kind.startswith("gate_") or p.net_id != net_id or p.label != n.label:
+            raise RuntimeError("named port label/net/terminal identity mismatch")
+        expected_point = Point(terminal.x - 35, terminal.y) if p.terminal == "gate" else Point(terminal.x + 90, terminal.y)
+        if p.point != expected_point:
+            raise RuntimeError("named port anchor differs from its local terminal stub")
+        matching = [w for w in layout.wires if w.net_id == net_id and {w.p1, w.p2} == {terminal, p.point}]
+        if len(matching) != 1:
+            raise RuntimeError("named port must visibly meet its own terminal through exactly one local stub")
+    labels = [n.label for n in layout.nets if n.kind.startswith("gate_")]
+    if len(labels) != len(set(labels)):
+        raise RuntimeError("different gate nets have the same visible label")
+    if len(layout.boundaries) != 3 or {b.net_id for b in layout.boundaries} != {"VDD", "GND", "OUT"}:
+        raise RuntimeError("textbook layout needs exactly VDD/GND/OUT boundaries")
+    for b in layout.boundaries:
+        if not any(w.net_id == b.net_id and b.point in (w.p1, w.p2) for w in layout.wires):
+            raise RuntimeError("supply/output boundary has no continuous wire")
+    for p in [p.point for p in layout.ports] + [b.point for b in layout.boundaries]:
+        if not (0 <= p.x <= layout.width * CELL and 0 <= p.y <= layout.height * CELL):
+            raise RuntimeError("port or boundary is out of bounds")
+
+
+def _textbook_projection(source: Layout) -> Layout:
+    """Re-layout the validated topology, replacing ONLY gate distribution wires.
+
+    No resynthesis and no expression parsing. Original source/drain net IDs,
+    device identities and source/drain wires are preserved. Shared inverter
+    drain ports retain the locally coincident PMOS/NMOS drain connection.
+    """
+    core_width = source.width - len(source.primary_nets) - len(source.complement_nets) - len(source.inverter_driven_vars)
+    rail_cols = len(source.primary_nets) + len(source.complement_nets)
+    inverter_start = (core_width + rail_cols) * CELL
+
+    def transform(p: Point) -> Point:
+        x = 2 * p.x + 100
+        if p.x >= inverter_start:
+            x += 200 - 200 * rail_cols
+        return Point(x, 2 * p.y)
+
+    devices = []
+    for d in source.devices:
+        x = d.x - rail_cols + 1 if d.role == "inverter" else d.x
+        origin, gate, src, drain = _textbook_device_points(x, d.y, d.kind)
+        devices.append(replace(d, x=x, origin=origin, gate_point=gate, source_point=src, drain_point=drain))
+    gate_nets = {n.id for n in source.nets if n.kind.startswith("gate_")}
+    wires = [replace(w, p1=transform(w.p1), p2=transform(w.p2)) for w in source.wires if w.net_id not in gate_nets]
+    ports = []
+    nets = {n.id: n for n in source.nets}
+    for d in devices:
+        anchor = Point(d.gate_point.x - 35, d.gate_point.y)
+        ports.append(NamedPort(f"PORT_{d.id}", d.gate_net, nets[d.gate_net].label, d.id, "gate", anchor))
+        wires.append(WireSegment(f"STUB_{d.id}", d.gate_net, d.gate_point, anchor))
+        if d.role == "inverter" and d.kind == "p":
+            anchor = Point(d.drain_point.x + 90, d.drain_point.y)
+            ports.append(NamedPort(f"PORT_OUT_{d.id}", d.drain_net, nets[d.drain_net].label, d.id, "drain", anchor))
+            wires.append(WireSegment(f"STUB_OUT_{d.id}", d.drain_net, d.drain_point, anchor))
+    boundaries = []
+    for net_id in ("VDD", "GND", "OUT"):
+        points = [getattr(d, terminal + "_point") for d in devices if d.role != "inverter"
+                  for terminal in ("source", "drain") if getattr(d, terminal + "_net") == net_id]
+        if net_id == "OUT":
+            start = max(points, key=lambda p: p.x)
+            anchor = Point(core_width * 200 + 65, start.y)
+        else:
+            rail_y = min(p.y for p in points) if net_id == "VDD" else max(p.y for p in points)
+            rail_points = [p for p in points if p.y == rail_y]
+            start = Point((min(p.x for p in rail_points) + max(p.x for p in rail_points)) // 2, rail_y)
+            anchor = Point(start.x, start.y + (-65 if net_id == "VDD" else 65))
+            # Split the bus at a new supply tee so its connection is explicit.
+            for i, w in enumerate(wires):
+                if w.net_id == net_id and _is_interior(start, w):
+                    wires[i:i+1] = [replace(w, p2=start), replace(w, id=w.id + "_tail", p1=start)]
+                    break
+        wires.append(WireSegment(f"LEAD_{net_id}", net_id, start, anchor))
+        boundaries.append(Boundary(f"BOUNDARY_{net_id}", net_id, anchor))
+    inv_count = len(source.inverter_driven_vars)
+    return replace(source, devices=tuple(devices), wires=tuple(wires),
+                   junctions=_compute_junctions(devices, wires), ports=tuple(ports), boundaries=tuple(boundaries),
+                   style="textbook", width=2 * core_width + 2 + (2 * inv_count + 2 if inv_count else 0), height=2 * source.height)
+
+
+def build_textbook_schematic(result: SynthesisResult, output_name: str) -> Layout:
+    """A named-port schematic, independently gated after the geometry transform."""
+    source = build_schematic(result, output_name)
+    layout = _textbook_projection(source)
+    validate_layout_geometry(layout)
+    _validate_topology_fidelity(layout, result)
+    _validate_source_fidelity(layout, result, output_name)
+    for row in all_assignments(result.var_order):
+        state = simulate_layout(layout, row)[layout.output_net_id]
+        if state.floating or state.shorted or state.value != conducts(result.pun, row):
+            raise RuntimeError("textbook layout failed electrical verification")
+    return layout
 
 
 def build_schematic(result: SynthesisResult, output_name: str) -> Layout:

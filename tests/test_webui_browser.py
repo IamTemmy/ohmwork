@@ -17,6 +17,7 @@ per Python version.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import threading
 from wsgiref.simple_server import make_server
 
@@ -1297,6 +1298,10 @@ _SCHEMATIC_SNAPSHOT_JS = """(rootSelector) => {
       channel: channelEl ? lineCoords(channelEl) : null,
       gate_electrode: electrodeEl ? lineCoords(electrodeEl) : null,
       gate_connector: connectorEl ? lineCoords(connectorEl) : null,
+      leads: ['source', 'drain'].map(t => {
+        const el = g.querySelector(`[data-role="${t}-lead"]`);
+        return el ? Array.from(el.points).map(p => [p.x, p.y]) : null;
+      }),
       terminals,
     };
   });
@@ -1312,10 +1317,21 @@ _SCHEMATIC_SNAPSHOT_JS = """(rootSelector) => {
       role: el.getAttribute('data-role'),
       wire_id: el.getAttribute('data-wire-id'),
       device_id: deviceGroup ? deviceGroup.getAttribute('data-device-id') : null,
+      boundary_id: el.closest('[data-role="boundary"]')?.getAttribute('data-boundary-id'),
     };
   });
 
-  return { wires, junctions, nets, devices, primitives };
+  const ports = Array.from(root.querySelectorAll('[data-role="port"]')).map(g => ({
+    id:g.getAttribute('data-port-id'), net_id:g.getAttribute('data-net-id'),
+    device_id:g.getAttribute('data-device-id'), terminal:g.getAttribute('data-terminal'),
+    label:g.querySelector('[data-role="port-label"]').textContent,
+    point:{x:Number(g.getAttribute('data-x')),y:Number(g.getAttribute('data-y'))},
+  }));
+  const boundaries = Array.from(root.querySelectorAll('[data-role="boundary"]')).map(g => ({
+    id:g.getAttribute('data-boundary-id'),net_id:g.getAttribute('data-net-id'),
+    bars:Array.from(g.querySelectorAll('line')).map(lineCoords),
+  }));
+  return { wires, junctions, nets, devices, primitives, ports, boundaries };
 }"""
 
 
@@ -1381,6 +1397,20 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
         assert n["label"] == mn["label"]
 
     model_devices = {d["id"]: d for d in schematic["devices"]}
+    model_ports = {p["id"]: p for p in schematic["ports"]}
+    assert len(snapshot["ports"]) == len(model_ports)
+    assert {p["id"] for p in snapshot["ports"]} == set(model_ports)
+    for p in snapshot["ports"]:
+        assert p == model_ports[p["id"]]
+    model_boundaries = {b["id"]: b for b in schematic["boundaries"]}
+    assert len(snapshot["boundaries"]) == len(model_boundaries) == 3
+    assert {b["id"] for b in snapshot["boundaries"]} == set(model_boundaries)
+    for b in snapshot["boundaries"]:
+        mb = model_boundaries[b["id"]]
+        assert b["net_id"] == mb["net_id"]
+        x,y = mb["point"]["x"],mb["point"]["y"]
+        offsets = [(-22,22,0)] if b["net_id"] == "VDD" else [(-24,24,0),(-16,16,9),(-7,7,18)] if b["net_id"] == "GND" else []
+        assert [_seg(bar) for bar in b["bars"]] == [(x+a,y+dy,x+c,y+dy) for a,c,dy in offsets]
     device_ids = [d["id"] for d in snapshot["devices"]]
     assert len(device_ids) == len(model_devices)
     assert set(device_ids) == set(model_devices)
@@ -1391,7 +1421,7 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
         assert d["role"] == md["role"]
         assert d["gate_var"] == md["gate_var"]
         assert d["gate_complemented"] == md["gate_complemented"]
-        assert d["label"] == md["literal"]  # visible label text matches device.literal
+        assert next(p["label"] for p in snapshot["ports"] if p["device_id"] == d["id"] and p["terminal"] == "gate") == md["literal"]
         # PMOS gate-bubble present, NMOS absent -- structurally, not visually.
         assert d["has_gate_bubble"] == (md["kind"] == "p")
 
@@ -1402,12 +1432,16 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
             assert snap_term["net_id"] == model_net
             assert (snap_term["x"], snap_term["y"]) == (model_point["x"], model_point["y"])
 
-        # The visible channel's own endpoints match the model's source/
-        # drain points exactly.
+        # The complete symbol, including its bent source/drain leads,
+        # joins the model's exact terminals to the insulated channel.
         assert d["channel"] is not None
         channel_seg = _seg(d["channel"])
-        assert (channel_seg[0], channel_seg[1]) == (md["source_point"]["x"], md["source_point"]["y"])
-        assert (channel_seg[2], channel_seg[3]) == (md["drain_point"]["x"], md["drain_point"]["y"])
+        cx,cy = md["source_point"]["x"]-16,md["gate_point"]["y"]
+        assert channel_seg == (cx,cy-28,cx,cy+28)
+        for term,lead in zip(("source","drain"),d["leads"]):
+            p = md[term+"_point"]
+            shoulder = cy-28 if p["y"] < cy else cy+28
+            assert lead == [[p["x"],p["y"]],[p["x"],shoulder],[cx,shoulder]]
 
         # The visible gate connector's far endpoint is exactly the model's
         # own gate_point -- the external, model-declared gate connection.
@@ -1426,12 +1460,17 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
     # model-backed wire or one recognized part of exactly one model-backed
     # device symbol -- an accidental untagged conductive primitive is
     # rejected, not silently ignored.
-    recognized_device_roles = {"channel", "gate-electrode", "gate-connector"}
+    recognized_device_roles = {"channel", "gate-electrode", "gate-connector", "source-lead", "drain-lead"}
+    for device_id in model_devices:
+        roles = [p["role"] for p in snapshot["primitives"] if p["device_id"] == device_id]
+        assert sorted(roles) == sorted(recognized_device_roles)
     for prim in snapshot["primitives"]:
         if prim["role"] == "wire":
             assert prim["wire_id"] in model_wires
         elif prim["role"] in recognized_device_roles:
             assert prim["device_id"] in model_devices
+        elif prim["role"] == "supply-symbol":
+            assert prim["boundary_id"] in model_boundaries
         else:
             pytest.fail(f"unclassified conductive primitive in the schematic SVG: {prim!r}")
 
@@ -1445,16 +1484,52 @@ def test_schematic_svg_matches_the_layout_model_exactly(page):
     _assert_snapshot_matches_model(snapshot, schematic)
 
 
-def test_schematic_svg_matches_the_layout_model_for_a_flat_nand(page):
+@pytest.mark.parametrize("expr", ["(abc)'", "(a+b+c+d)'", "(abc+d)'", "a", "a'", "(A0'b1+C2)'"])
+def test_schematic_svg_matches_the_layout_model_for_a_flat_nand(page, expr):
     # A second, structurally different shape (flat parallel/series, no
     # inverter) -- guards against the bridge only happening to work for the
     # nested AOI case above.
-    _submit_via_expression(page, "(abc)'")
-    schematic = _real_json(page, "/api/synth", {"expr": "(abc)'"})["schematic"]
-    assert schematic["total_transistors"] == 6
+    _submit_via_expression(page, expr)
+    schematic = _real_json(page, "/api/synth", {"expr": expr})["schematic"]
 
     snapshot = _schematic_dom_snapshot(page)
     _assert_snapshot_matches_model(snapshot, schematic)
+
+
+@pytest.mark.parametrize("name,expr,dual", [
+    ("nand3", "(abc)'", False), ("nor4", "(a+b+c+d)'", False),
+    ("aoi31", "(abc+d)'", False), ("shared-inverter", "(a'b+c)'", False),
+    ("dual-rail", "(a'b+c)'", True), ("buffer", "a", False),
+    ("inverter", "a'", False), ("long-labels", "(A0'b1+C2)'", False),
+    ("four-inverters", "a'b'c'd + a'b'cd' + a'bc'd' + ab'c'd'", False),
+])
+def test_textbook_visual_and_export_acceptance(page, name, expr, dual):
+    _switch_tab(page, "synth")
+    page.check('input[name="synth-mode"][value="expr"]')
+    page.fill("#synth-expr", expr)
+    if dual:
+        page.check("#synth-dual-rail")
+    page.click("#panel-synth button.submit")
+    page.wait_for_selector("#synth-result:not(.empty)")
+    schematic = _real_json(page, "/api/synth", {"expr":expr,"dual_rail":dual})["schematic"]
+    _assert_snapshot_matches_model(_schematic_dom_snapshot(page), schematic)
+    artifact_dir = Path("test-artifacts/schematics")
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    page.locator("#schematic-svg").screenshot(path=str(artifact_dir / (name+".png")))
+    clipped = page.evaluate("""() => {
+        const svg = document.querySelector('#schematic-svg'), vb = svg.viewBox.baseVal;
+        return Array.from(svg.querySelectorAll('text')).filter(t => {
+            const b = t.getBBox();
+            return b.x < 0 || b.y < 0 || b.x+b.width > vb.width || b.y+b.height > vb.height;
+        }).map(t => t.textContent);
+    }""")
+    assert not clipped, f"clipped schematic labels: {clipped}"
+    with page.expect_download() as info:
+        page.click("#download-svg-btn")
+    target = (artifact_dir / (name+".svg")).resolve()
+    info.value.save_as(str(target))
+    page.goto(target.as_uri())
+    _assert_snapshot_matches_model(page.evaluate(_SCHEMATIC_SNAPSHOT_JS, "svg"), schematic)
 
 
 def test_download_svg_passes_the_same_semantic_assertions(page, tmp_path):
@@ -1587,7 +1662,7 @@ def test_schematic_wide_circuit_scrolls_instead_of_shrinking_at_mobile_width(pag
     assert wrap_scroll["scrollWidth"] > wrap_scroll["clientWidth"]  # the wrapper itself scrolls internally
 
     label_height = page.evaluate(
-        "document.querySelector('.ow-device-label').getBoundingClientRect().height"
+        "document.querySelector('.ow-port-label').getBoundingClientRect().height"
     )
     assert label_height >= 10  # legible -- not shrunk to the ~4-5px the old shrink-to-fit produced
 

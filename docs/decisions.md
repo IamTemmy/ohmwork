@@ -614,7 +614,8 @@ charter's M1a/M1b acceptance tests played for those milestones):
      place of continuous wiring for source/drain paths, internal series/parallel junctions, the
      output path, or VDD/GND.
    - No conductive wire exists in the SVG that isn't backed by a wire segment in the model, and
-     no named-net port exists that isn't backed by a real device gate terminal — ruling out
+     no named-net port exists that isn't backed by a real device gate terminal or the
+     shared inverter output explicitly required above — ruling out
      both an accidental extra connection the model never specified and a decorative port with
      nothing real behind it.
    - A PMOS device's SVG markup includes its gate-bubble element; an NMOS device's does not —
