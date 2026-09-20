@@ -242,3 +242,18 @@ def simplify(var_order: list[str], values: list[bool]) -> Expr:
     into a minimal SOP expression."""
     minterms = {i for i, v in enumerate(values) if v}
     return minimize(var_order, minterms)
+
+
+def prime_implicant_patterns(
+    var_order: list[str], minterms: set[int], dont_cares: set[int] = frozenset()
+) -> tuple[str, ...]:
+    """Expose QM's relevant prime cubes without selecting a cover (D18).
+
+    Bit positions follow var_order; a prime containing only don't-cares is
+    omitted because it cannot help cover a required target cell. Existing
+    minimizer APIs and their ordering/cost policies are unchanged.
+    """
+    return tuple(sorted(
+        p for p in _prime_implicants(len(var_order), minterms | dont_cares)
+        if any(_term_covers(p, m, len(var_order)) for m in minterms)
+    ))
