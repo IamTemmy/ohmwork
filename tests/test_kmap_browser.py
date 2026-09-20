@@ -306,7 +306,7 @@ def test_multi_group_worked_explanation_has_readable_space(page,width):
     assert page.locator('svg.km-svg').get_attribute('data-active-group')=='G2'
 
 
-@pytest.mark.parametrize('width', [1280,900,360])
+@pytest.mark.parametrize('width', [1280,800,360])
 def test_group_card_sections_align_with_content_sized_rows(page,width):
     page.set_viewport_size({'width':width,'height':900})
     page.emulate_media(color_scheme='dark')
@@ -320,7 +320,7 @@ def test_group_card_sections_align_with_content_sized_rows(page,width):
     rows={}
     for item in before:
         rows.setdefault(round(item['card']['top']),[]).append(item)
-    assert len(rows)=={1280:1,900:2,360:3}[width]
+    assert len(rows)=={1280:1,800:2,360:3}[width]
     for row in rows.values():
         for item in row:
             assert abs(item['card']['bottom']-row[0]['card']['bottom'])<1
