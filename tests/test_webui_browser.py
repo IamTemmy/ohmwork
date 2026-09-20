@@ -1333,6 +1333,7 @@ _SCHEMATIC_SNAPSHOT_JS = """(rootSelector) => {
     text_x:Number(g.querySelector('text').getAttribute('x')),
     text_y:Number(g.querySelector('text').getAttribute('y')),
     text_anchor:g.querySelector('text').getAttribute('text-anchor'),
+    text_left:g.querySelector('text').getBBox().x,
     visible: g.querySelector('text').getBoundingClientRect().width > 0 &&
       getComputedStyle(g.querySelector('text')).visibility === 'visible' &&
       getComputedStyle(g.querySelector('text')).opacity !== '0',
@@ -1455,11 +1456,13 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
         assert sorted(annotation["devices"]) == sorted(d["id"] for d in members)
         first = min(d["channel"]["y1"] for d in members)
         last = max(d["channel"]["y2"] for d in members)
-        assert annotation["bracket"] == [[-10,first],[-25,first],[-25,last],[-10,last]]
+        gate_ports = [p for p in snapshot["ports"] if p["device_id"] in annotation["devices"] and p["terminal"] == "gate"]
+        bx = min(p["point"]["x"] for p in gate_ports) - 90
+        assert annotation["bracket"] == [[bx+15,first],[bx,first],[bx,last],[bx+15,last]]
         type_, description = ("PMOS", "pull-up network") if annotation["role"] == "pun" else ("NMOS", "pull-down network")
-        assert annotation["captions"] == [dict(text=type_,x=-50,y=(first+last)/2-8),
-                                           dict(text=description,x=-50,y=(first+last)/2+18)]
-        assert annotation["box"]["x"] + annotation["box"]["width"] < 0
+        assert annotation["captions"] == [dict(text=type_,x=bx-25,y=(first+last)/2-8),
+                                           dict(text=description,x=bx-25,y=(first+last)/2+18)]
+        assert annotation["box"]["x"] + annotation["box"]["width"] + 10 < min(p["text_left"] for p in gate_ports)
         assert annotation["dashed"] != "none"
     assert any(j["net_id"] == "OUT" and (j["x"],j["y"]) == (output_wire["x1"],output_wire["y1"]) for j in snapshot["junctions"])
     device_ids = [d["id"] for d in snapshot["devices"]]

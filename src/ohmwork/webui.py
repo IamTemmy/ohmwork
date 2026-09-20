@@ -1048,20 +1048,23 @@ function renderTextbookSchematic(svg, view) {
   });
   const core = view.devices.filter(d => d.role !== "inverter");
   const top = Math.min(...core.map(d => Math.min(d.source_point.y,d.drain_point.y)));
-  // Annotations occupy their own gutter, outside every electrical primitive.
+  // Annotations sit beside their own network, clear of its gate labels.
   // Their extents follow all device symbols belonging to the network role.
   for (const [role, type, description] of [["pun", "PMOS", "pull-up network"], ["pdn", "NMOS", "pull-down network"]]) {
     const members = core.filter(d => d.role === role);
     const first = Math.min(...members.map(d => d.gate_point.y - 28));
     const last = Math.max(...members.map(d => d.gate_point.y + 28));
     const middle = (first + last) / 2;
+    const ids = new Set(members.map(d=>d.id));
+    const bracketX = Math.min(...view.ports.filter(p=>p.terminal === "gate" && ids.has(p.device_id))
+      .map(p=>p.point.x)) - 90;
     const group = svgEl("g", {"data-role":"network-annotation","data-network":role,
       "data-device-ids":members.map(d=>d.id).join(" ")});
     group.appendChild(svgEl("polyline", {class:"ow-network-bracket", "data-role":"network-bracket",
-      points:`-10,${first} -25,${first} -25,${last} -10,${last}`}));
+      points:`${bracketX+15},${first} ${bracketX},${first} ${bracketX},${last} ${bracketX+15},${last}`}));
     for (const [text, y] of [[type, middle - 8], [description, middle + 18]]) {
       const caption = svgEl("text", {class:"ow-text", "data-role":"network-caption",
-        x:-50, y, "font-size":20, "text-anchor":"end", opacity:.7});
+        x:bracketX-25, y, "font-size":20, "text-anchor":"end", opacity:.7});
       caption.textContent = text;
       group.appendChild(caption);
     }
