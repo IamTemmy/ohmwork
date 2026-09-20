@@ -230,7 +230,7 @@ def test_copy_fallback_clears_and_selected_export_keeps_same_state(page,tmp_path
 
 
 @pytest.mark.parametrize('form', ['SOP','POS'])
-def test_worked_group_steps_reference_copy_and_reset(page,server_url):
+def test_worked_group_steps_reference_copy_and_reset(page,server_url,form):
     payload={'variables':'a,b,c','ones':'0,1,2,3','form':form}
     submit(page,payload)
     view=page.request.post(server_url+'/api/kmap',data=payload).json()['result']
