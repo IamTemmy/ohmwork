@@ -1426,6 +1426,12 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
         x,y = mb["point"]["x"],mb["point"]["y"]
         offsets = [(-22,22,0)] if b["net_id"] == "VDD" else [(-24,24,0),(-16,16,9),(-7,7,18)] if b["net_id"] == "GND" else []
         assert [_seg(bar) for bar in b["bars"]] == [(x+a,y+dy,x+c,y+dy) for a,c,dy in offsets]
+    pun_bottom = max(d[t+"_point"]["y"] for d in schematic["devices"] if d["role"] == "pun" for t in ("source","drain"))
+    pdn_top = min(d[t+"_point"]["y"] for d in schematic["devices"] if d["role"] == "pdn" for t in ("source","drain"))
+    output_wire = next(w for w in snapshot["wires"] if w["id"] == "LEAD_OUT")
+    assert pun_bottom < output_wire["y1"] == output_wire["y2"] < pdn_top
+    assert output_wire["y1"] == (pun_bottom + pdn_top) / 2
+    assert any(j["net_id"] == "OUT" and (j["x"],j["y"]) == (output_wire["x1"],output_wire["y1"]) for j in snapshot["junctions"])
     device_ids = [d["id"] for d in snapshot["devices"]]
     assert len(device_ids) == len(model_devices)
     assert set(device_ids) == set(model_devices)
