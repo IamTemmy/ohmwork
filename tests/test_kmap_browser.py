@@ -236,7 +236,7 @@ def test_worked_group_steps_reference_copy_and_reset(page,server_url,form):
     view=page.request.post(server_url+'/api/kmap',data=payload).json()['result']
     work=view['groups'][0]['work']
     details=page.locator('[data-proof-group=G1]')
-    details.locator('summary').click()
+    page.locator('[data-proof-toggle=G1]').click()
     rows=details.locator('tbody tr')
     assert rows.count()==len(work['steps'])
     for i,step in enumerate(work['steps']):
@@ -266,10 +266,15 @@ def test_multi_group_worked_explanation_has_readable_space(page,width):
     page.emulate_media(color_scheme='dark')
     submit(page,{'variables':'a,b,c,d','ones':'0,2,4,6,8,10,12'})
     assert page.locator('.km-group-section').count()==3
+    positions=lambda: page.locator('.km-group-section').evaluate_all(
+        "els=>els.map(el=>{const r=el.getBoundingClientRect();return [r.x+scrollX,r.y+scrollY,r.width,r.height]})")
+    before=positions()
     details=page.locator('[data-proof-group=G1]')
-    details.locator('summary').click()
+    page.locator('[data-proof-toggle=G1]').click()
+    assert positions()==before
+    assert details.evaluate('el=>el.getBoundingClientRect().top+scrollY')>=max(r[1]+r[3] for r in before)
     section=page.locator('.km-group-section').first
-    assert abs(section.bounding_box()['width']-page.locator('#km-groups').bounding_box()['width'])<2
+    assert abs(details.bounding_box()['width']-page.locator('#km-groups').bounding_box()['width'])<2
     reason=details.locator('tbody tr').nth(1).locator('td').nth(1)
     assert reason.bounding_box()['width']>=220
     assert reason.bounding_box()['height']<200
@@ -280,8 +285,22 @@ def test_multi_group_worked_explanation_has_readable_space(page,width):
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
     assert details.locator('tbody tr').first.locator('td').first.inner_text().startswith("(a' · b' · c' · d') + (")
     page.screenshot(path=f'test-artifacts/kmaps/readable-steps-{width}.png',full_page=True)
-    details.locator('summary').click()
+    page.locator('[data-proof-toggle=G1]').click()
     if width==1280:
         assert section.bounding_box()['width']<page.locator('#km-groups').bounding_box()['width']/2
+    assert positions()==before
+    for group in ['G2','G3']:
+        toggle=page.locator(f'[data-proof-toggle={group}]')
+        toggle.focus();toggle.press('Enter')
+        assert positions()==before
+        assert page.locator('.km-proof-panel:not([hidden])').count()==1
+        assert page.locator('[data-proof-toggle][aria-expanded=true]').count()==1
+        assert page.locator('.km-proof-panel').get_attribute('data-proof-group')==group
+        assert group in page.locator('.km-proof-panel h3').inner_text()
+    page.locator('.km-proof-panel button').focus()
+    page.locator('.km-proof-panel button').press('Escape')
+    assert page.locator('[data-proof-toggle=G3]').evaluate('el=>el===document.activeElement')
+    assert page.locator('.km-proof-panel').is_hidden()
+    assert positions()==before
     page.locator('.km-group-card').nth(1).hover()
     assert page.locator('svg.km-svg').get_attribute('data-active-group')=='G2'
