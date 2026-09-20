@@ -17,6 +17,15 @@ CSS = r"""
   .km-group-card small { display:block; opacity:.8; line-height:1.5; }
   .km-group-card:focus-visible, #panel-kmap button:focus-visible { outline:3px solid #5686ef; outline-offset:3px; }
   #panel-kmap > .km-actions { margin-top:1rem; }
+  .km-group-section { min-width:0; border-left:4px solid var(--group-color); border-radius:8px; }
+  .km-group-section .km-group-card { width:100%; border-left:0; }
+  .km-work { padding:.7rem; overflow-wrap:anywhere; }
+  .km-work summary { cursor:pointer; font-weight:600; }
+  .km-work-scroll { overflow-x:auto; margin-top:.7rem; }
+  .km-work table { width:100%; font-size:.85rem; border-collapse:collapse; }
+  .km-work th, .km-work td { padding:.55rem; vertical-align:top; text-align:left; border:1px solid #8884; }
+  .km-work td:first-child { min-width:170px; font-family:ui-monospace,monospace; }
+  .km-group-section p { overflow-wrap:anywhere; }
   .km-actions { display:flex; flex-wrap:wrap; gap:.5rem; }
   .km-input-grid { overflow-x:auto; max-height:320px; margin-bottom:1rem; }
   .km-input-grid th { position:sticky; top:0; background:light-dark(white,#161616); }
@@ -146,23 +155,44 @@ function renderKmap(view, host, cards, onSelection) {
     'Same group ID = one group. Opposite edges are adjacent.',svg);
   if (!view.groups.length) node('text',{x:24,y:view.legend_y,class:'km-small'},'No groups needed: the selected function is constant.',svg);
   view.groups.forEach((group,i)=>{
-    const y=view.legend_y+i*34;
+    const y=group.legend_y;
     const legend=node('g',{class:'km-legend','data-legend-id':group.id},null,svg);
     node('line',{x1:24,y1:y-5,x2:66,y2:y-5,stroke:group.color,'stroke-width':3,'stroke-dasharray':group.dash},null,legend);
     const wrap=[group.wraps_rows?'top/bottom':'',group.wraps_columns?'left/right':''].filter(Boolean).join(' + ');
-    node('text',{x:80,y},`${group.id} · ${group.term}${wrap?' · wraps '+wrap:''}`,legend);
+    group.legend_lines.forEach((line,j)=>node('text',{x:80,y:y+j*22},line,legend));
     legendNodes.push(legend);
     const button=document.createElement('button'); button.type='button'; button.className='km-group-card';
     button.dataset.groupId=group.id; button.style.setProperty('--group-color',group.color);
     button.setAttribute('aria-pressed','false');
-    const strong=document.createElement('strong'); strong.textContent=`${group.id} · ${group.term}`; button.appendChild(strong);
-    const detail=document.createElement('small'); detail.textContent=`Cells ${group.minterms.join(', ')}${group.essential?' · essential group':''}${wrap?' · wraps '+wrap:''}`;
+    const strong=document.createElement('strong'); strong.textContent=`${group.work.title}: ${group.term}`; button.appendChild(strong);
+    const detail=document.createElement('small'); detail.textContent=`${group.work.notation} = ${group.work.result}${group.essential?' · essential group':''}${wrap?' · wraps '+wrap:''}`;
     button.appendChild(detail);
     const why=document.createElement('small'); why.textContent=group.explanation; button.appendChild(why);
-    cards.appendChild(button); buttons.push(button);
+    const section=document.createElement('section'); section.className='km-group-section';
+    section.style.setProperty('--group-color',group.color); section.appendChild(button);
+    const expansion=document.createElement('p'); expansion.className='km-work';
+    expansion.textContent=group.work.steps[0].expression+' = '+group.work.result; section.appendChild(expansion);
+    const details=document.createElement('details'); details.className='km-work'; details.dataset.proofGroup=group.id;
+    const summary=document.createElement('summary'); summary.textContent='Why this group simplifies'; details.appendChild(summary);
+    if(group.work.note) {const note=document.createElement('p'); note.textContent=group.work.note; details.appendChild(note);}
+    const scroll=document.createElement('div'); scroll.className='km-work-scroll';
+    const table=document.createElement('table'); table.setAttribute('aria-label',group.work.title+' simplification steps');
+    const head=document.createElement('thead'); const hr=document.createElement('tr');
+    for(const text of ['Expression','Law and reason']) {const th=document.createElement('th');th.scope='col';th.textContent=text;hr.appendChild(th);}
+    head.appendChild(hr);table.appendChild(head);const body=document.createElement('tbody');
+    for(const step of group.work.steps) {const tr=document.createElement('tr');
+      for(const text of [step.expression,step.law+': '+step.reason]) {const td=document.createElement('td');td.textContent=text;tr.appendChild(td);}
+      body.appendChild(tr);
+    }
+    table.appendChild(body);scroll.appendChild(table);details.appendChild(scroll);section.appendChild(details);
+    cards.appendChild(section); buttons.push(button);
   });
   view.footer_lines.forEach((line,i)=>node('text',{x:24,y:view.footer_y+i*20,class:'km-small',
     'font-family':'ui-monospace,monospace','font-size':14},line,svg));
+  const reference=document.createElement('details'); reference.className='km-work'; reference.dataset.booleanReference='true';
+  const refTitle=document.createElement('summary');refTitle.textContent='Boolean algebra reference';reference.appendChild(refTitle);
+  for(const law of view.laws) {const p=document.createElement('p');p.textContent=law.name+': '+law.identity;reference.appendChild(p);}
+  cards.appendChild(reference);
   host.appendChild(svg);
   let pinned=null;
   function highlight(id) {

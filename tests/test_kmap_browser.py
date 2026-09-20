@@ -227,3 +227,34 @@ def test_copy_fallback_clears_and_selected_export_keeps_same_state(page,tmp_path
     assert path.read_text()==before
     page.fill('#km-expr','ab')
     assert page.locator('#km-result .copy-fallback').count()==0
+
+
+@pytest.mark.parametrize('form', ['SOP','POS'])
+def test_worked_group_steps_reference_copy_and_reset(page,server_url,form):
+    payload={'variables':'a,b,c','ones':'0,1,2,3','form':form}
+    submit(page,payload)
+    view=page.request.post(server_url+'/api/kmap',data=payload).json()['result']
+    work=view['groups'][0]['work']
+    details=page.locator('[data-proof-group=G1]')
+    details.locator('summary').click()
+    rows=details.locator('tbody tr')
+    assert rows.count()==len(work['steps'])
+    for i,step in enumerate(work['steps']):
+        assert rows.nth(i).locator('td').nth(0).inner_text()==step['expression']
+        assert rows.nth(i).locator('td').nth(1).inner_text()==step['law']+': '+step['reason']
+    assert work['notation'] in page.locator('.km-group-card').first.inner_text()
+    page.locator('.km-group-card').first.hover()
+    assert page.locator('svg.km-svg').get_attribute('data-active-group')=='G1'
+    page.locator('[data-boolean-reference] summary').click()
+    assert "x + x' = 1" in page.locator('[data-boolean-reference]').inner_text()
+    page.evaluate("()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async t=>{window.copied=t}}})")
+    page.click('#km-copy')
+    page.wait_for_function('!!window.copied')
+    assert work['steps'][0]['expression'] in page.evaluate('window.copied')
+    assert 'Distributive' in page.evaluate('window.copied')
+    page.screenshot(path=f'test-artifacts/kmaps/worked-{form}.png',full_page=True)
+    with page.expect_download() as info: page.click('#km-download')
+    assert work['notation'] in Path(info.value.path()).read_text()
+    page.click('#km-new')
+    assert page.locator('[data-proof-group]').count()==0
+    assert page.locator('[data-boolean-reference]').count()==0

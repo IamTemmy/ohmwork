@@ -10,6 +10,7 @@ from dataclasses import asdict
 from textwrap import wrap
 from ohmwork.expr import render
 from ohmwork.kmap import KMap
+from ohmwork.kmap_steps import group_work, LAWS
 
 CELL = 120
 LEFT = 96
@@ -33,7 +34,7 @@ def build_kmap_view(model: KMap) -> dict:
                        'witnesses':g.essential_witnesses,
                        'wraps_rows':g.wraps_rows, 'wraps_columns':g.wraps_columns,
                        'color':COLORS[i % len(COLORS)], 'dash':DASHES[i % len(DASHES)],
-                       'pieces':pieces})
+                       'pieces':pieces, 'work':group_work(model, g)})
     cells=[{**asdict(c), 'x':LEFT+c.column*CELL, 'y':TOP+c.row*CELL,
             'cx':LEFT+(c.column+.5)*CELL, 'cy':TOP+(c.row+.5)*CELL} for c in model.cells]
     target=model.output_name if model.form=='SOP' else model.output_name+"'"
@@ -41,7 +42,20 @@ def build_kmap_view(model: KMap) -> dict:
     footer=wrap(f'{model.output_name} = {render(model.expression)}', width=int((width-48)/8.5))
     xs=[f'm{c.minterm}={c.assigned_value}' for c in sorted(model.cells,key=lambda c:c.minterm) if c.value=='X']
     if xs: footer+=wrap('Selected X values: '+', '.join(xs),width=int((width-48)/8.5))
-    footer_y=TOP+rows*CELL+100+max(1,len(groups))*34
+    legend_y=TOP+rows*CELL+84
+    cursor=legend_y
+    for group in groups:
+        work=group['work']
+        lines=[f"{group['id']} · {group['term']} — {work['title']}"]
+        lines+=wrap(work['notation'], width=int((width-104)/8.5))
+        lines+=wrap(work['steps'][0]['expression']+' = '+work['result'], width=int((width-104)/8.5))
+        edges=[name for flag,name in ((group['wraps_rows'],'top/bottom'),(group['wraps_columns'],'left/right')) if flag]
+        if edges: lines.append('Wraps '+ ' + '.join(edges))
+        lines+=wrap(work['note'], width=int((width-104)/8.5))
+        group['legend_lines']=lines
+        group['legend_y']=cursor
+        cursor+=len(lines)*22+20
+    footer_y=max(cursor,legend_y+34)+24
     return {'output_name':model.output_name, 'form':model.form, 'variables':model.var_order,
             'row_variables':model.row_variables, 'column_variables':model.column_variables,
             'row_labels':model.row_labels, 'column_labels':model.column_labels,
@@ -53,7 +67,7 @@ def build_kmap_view(model: KMap) -> dict:
             'origin':model.origin, 'width':width,
             'height':footer_y+len(footer)*20+24, 'footer_lines':footer, 'footer_y':footer_y,
             'grid':{'left':LEFT,'top':TOP,'cell':CELL,'rows':rows,'columns':cols},
-            'legend_y':TOP+rows*CELL+84}
+            'legend_y':legend_y, 'laws':[{'name':name,'identity':identity} for name,identity in LAWS]}
 
 
 def format_kmap_report(model: KMap) -> str:
@@ -69,6 +83,11 @@ def format_kmap_report(model: KMap) -> str:
     for g in model.groups:
         lines.append(f'{g.id}: {render(g.term)}; cells {", ".join(map(str,g.minterms))}'
                      + ('; essential' if g.essential else ''))
+        work=group_work(model,g)
+        lines.append(work['title']+': '+work['notation'])
+        if work['note']: lines.append(work['note'])
+        for step in work['steps']:
+            lines.append(step['expression']+' — '+step['law']+': '+step['reason'])
         lines.append(g.explanation)
         wrap=[]
         if g.wraps_rows: wrap.append('top/bottom')
