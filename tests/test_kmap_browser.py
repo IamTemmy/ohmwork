@@ -258,3 +258,30 @@ def test_worked_group_steps_reference_copy_and_reset(page,server_url,form):
     page.click('#km-new')
     assert page.locator('[data-proof-group]').count()==0
     assert page.locator('[data-boolean-reference]').count()==0
+
+
+@pytest.mark.parametrize('width', [1280,360])
+def test_multi_group_worked_explanation_has_readable_space(page,width):
+    page.set_viewport_size({'width':width,'height':900})
+    page.emulate_media(color_scheme='dark')
+    submit(page,{'variables':'a,b,c,d','ones':'0,2,4,6,8,10,12'})
+    assert page.locator('.km-group-section').count()==3
+    details=page.locator('[data-proof-group=G1]')
+    details.locator('summary').click()
+    section=page.locator('.km-group-section').first
+    assert abs(section.bounding_box()['width']-page.locator('#km-groups').bounding_box()['width'])<2
+    reason=details.locator('tbody tr').nth(1).locator('td').nth(1)
+    assert reason.bounding_box()['width']>=220
+    assert reason.bounding_box()['height']<200
+    assert reason.evaluate('el=>getComputedStyle(el).overflowWrap')=='normal'
+    if width==360:
+        expression=details.locator('tbody tr').nth(1).locator('td').first
+        assert reason.bounding_box()['y']>=expression.bounding_box()['y']+expression.bounding_box()['height']-1
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    assert details.locator('tbody tr').first.locator('td').first.inner_text().startswith("(a' · b' · c' · d') + (")
+    page.screenshot(path=f'test-artifacts/kmaps/readable-steps-{width}.png',full_page=True)
+    details.locator('summary').click()
+    if width==1280:
+        assert section.bounding_box()['width']<page.locator('#km-groups').bounding_box()['width']/2
+    page.locator('.km-group-card').nth(1).hover()
+    assert page.locator('svg.km-svg').get_attribute('data-active-group')=='G2'
