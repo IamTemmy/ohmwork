@@ -16,6 +16,8 @@ import webbrowser
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 from ohmwork.api import derive_from_input, format_tt_report, synthesize_from_input, kmap_from_input
+from ohmwork.kmap import build_synthesis_kmap
+from ohmwork.expr import render
 from ohmwork.kmap_view import build_kmap_view, format_kmap_report
 from ohmwork.kmap_ui import CSS as KMAP_CSS, HTML as KMAP_HTML, JS as KMAP_JS
 from ohmwork.derivation import variables_in_order
@@ -363,6 +365,22 @@ _PAGE = r"""<!doctype html>
         <button type="button" class="btn-secondary" id="download-svg-btn">Download SVG</button>
       </div>
     </div>
+
+    <section class="section" aria-label="K-map for the chosen circuit">
+      <h3>K-map for this circuit</h3>
+      <p id="synth-km-connection"></p>
+      <p class="mono" id="synth-km-equation"></p>
+      <p id="synth-km-pdn"></p>
+      <div class="km-stage" id="synth-km-stage" tabindex="0" aria-label="Scrollable synthesis K-map"></div>
+      <div class="km-actions">
+        <button type="button" class="btn-secondary" id="synth-km-show-all">Show all groups</button>
+        <button type="button" class="btn-secondary" id="synth-km-download">Download K-map SVG</button>
+        <button type="button" class="btn-secondary" id="synth-km-copy">Copy K-map explanation</button>
+      </div>
+      <p id="synth-km-selection" aria-live="polite"></p>
+      <div class="km-group-list" id="synth-km-groups"></div>
+      <p id="synth-km-assignments"></p>
+    </section>
 
     <div class="section reasoning">
       <h3>Reasoning</h3>
@@ -1200,7 +1218,18 @@ $("download-svg-btn").addEventListener("click", () => {
 let lastSolutionText = "";
 let lastAdvancedText = "";
 
-function renderSynthResult(view, rawOutput, schematic) {
+let synthKmapDiagram = null;
+let synthKmapReport = "";
+function renderSynthResult(view, rawOutput, schematic, kmap) {
+  clearChildren($("synth-km-stage"));
+  clearChildren($("synth-km-groups"));
+  synthKmapReport = kmap.output;
+  $("synth-km-connection").textContent = kmap.connection;
+  $("synth-km-equation").textContent = kmap.view.output_name + " = " + kmap.view.expression;
+  $("synth-km-pdn").textContent = kmap.pdn;
+  $("synth-km-assignments").textContent = kmap.assignments;
+  synthKmapDiagram = renderKmap(kmap.view, $("synth-km-stage"), $("synth-km-groups"),
+    text => $("synth-km-selection").textContent = text);
   renderSchematic(schematic);
   $("res-gate-line").textContent = `${view.gate_name} — ${view.total_transistors} transistors`;
   $("res-function-line").textContent = view.function;
@@ -1275,6 +1304,7 @@ function renderSynthResult(view, rawOutput, schematic) {
   ];
 
   lastSolutionText = [summaryLines, cmosLines, reasoningLines].map(section => section.join("\n")).join("\n\n");
+  lastSolutionText += "\n\nK-map for this circuit:\n" + synthKmapReport;
   lastAdvancedText = rawOutput;
 }
 
@@ -1283,6 +1313,7 @@ let synthRequestToken = 0;
 
 $("panel-synth").addEventListener("submit", async (e) => {
   e.preventDefault();
+  clearSynthResultDisplay();
   const myToken = ++synthRequestToken;
   const payload = {
     dual_rail: $("synth-dual-rail").checked,
@@ -1322,7 +1353,27 @@ $("panel-synth").addEventListener("submit", async (e) => {
   errEl.classList.add("empty");
   errEl.textContent = "";
   resEl.classList.remove("empty");
-  renderSynthResult(result.result, result.output, result.schematic);
+  renderSynthResult(result.result, result.output, result.schematic, result.kmap);
+});
+
+$("synth-km-show-all").addEventListener("click",()=>synthKmapDiagram?.reset());
+$("synth-km-download").addEventListener("click",()=>{
+  if(!synthKmapDiagram) return;
+  const clone=synthKmapDiagram.svg.cloneNode(true);
+  const url=URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)],{type:"image/svg+xml;charset=utf-8"}));
+  const a=document.createElement("a");a.href=url;a.download="ohmwork-synthesis-kmap.svg";a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+});
+$("synth-km-copy").addEventListener("click",async()=>{
+  const text=synthKmapReport, token=synthRequestToken;
+  if(!text) return;
+  try {
+    if(!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+    await navigator.clipboard.writeText(text);
+    if(token===synthRequestToken) $("synth-km-copy").textContent="Copied!";
+  } catch (_) {
+    if(token===synthRequestToken) showCopyFallback($("synth-km-copy"),text);
+  }
 });
 
 // --- Stale-result prevention / New problem ----------------------------------------
@@ -1369,6 +1420,11 @@ function clearSynthResultDisplay() {
   staleSvg.removeAttribute("viewBox");
   staleSvg.removeAttribute("aria-label");
   lastSchematicView = null;
+  synthKmapDiagram = null;
+  synthKmapReport = "";
+  ["synth-km-stage","synth-km-groups","synth-km-connection","synth-km-equation",
+   "synth-km-pdn","synth-km-selection","synth-km-assignments"].forEach(id=>clearChildren($(id)));
+  $("synth-km-copy").textContent = "Copy K-map explanation";
 
   lastSolutionText = "";
   lastAdvancedText = "";
@@ -1593,16 +1649,35 @@ def _handle_synth(environ, start_response):
     except (ParseError, ValueError, RuntimeError) as e:
         return _json_response(start_response, "200 OK", {"ok": False, "error": str(e)})
 
-    output = format_synth_report(result, result.verification)
-    view = build_synth_view(result, output_name=output_name, max_stack_applied=max_stack is not None)
-    # Same already-verified `result` feeds the schematic layout model too
-    # (D17 Phase B) -- build_textbook_schematic() runs all four correctness
-    # gates before returning, so `layout` here is exactly the model the
-    # frontend must render faithfully, never re-derived from `view`.
-    layout = build_textbook_schematic(result, output_name)
-    schematic = build_schematic_view(layout)
+    try:
+        output = format_synth_report(result, result.verification)
+        view = build_synth_view(result, output_name=output_name, max_stack_applied=max_stack is not None)
+        # Same already-verified `result` feeds the schematic layout model too
+        # (D17 Phase B) -- build_textbook_schematic() runs all four correctness
+        # gates before returning, so `layout` here is exactly the model the
+        # frontend must render faithfully, never re-derived from `view`.
+        layout = build_textbook_schematic(result, output_name)
+        schematic = build_schematic_view(layout)
+        model = build_synthesis_kmap(result, output_name)
+        kmap_view = build_kmap_view(model)
+        connection = (
+            f"Group the 0s of {output_name}. Their products give {output_name}'; "
+            f"complementing gives the POS for {output_name}."
+            if model.form == "POS" else
+            f"Group the 1s of {output_name} to obtain its SOP. Complementing this SOP "
+            f"with De Morgan's law gives {output_name}' for the PDN."
+        )
+        connection += " These are the groups chosen for this circuit, not a new minimization."
+        pdn = (f"PDN: {output_name}' = ({render(model.expression)})' = {render(result.chosen.f_prime)}. "
+               f"The NMOS network conducts when {output_name}' is 1.")
+        xs = [f"m{c.minterm} → {c.assigned_value}" for c in sorted(model.cells, key=lambda c:c.minterm) if c.value == "X"]
+        assignments = "Original X cells retained; circuit assignments: " + "; ".join(xs) if xs else ""
+        kmap = {"view": kmap_view, "connection": connection, "pdn": pdn, "assignments": assignments,
+                "output": connection + "\n" + pdn + "\n" + format_kmap_report(model)}
+    except (ParseError, ValueError, RuntimeError) as e:
+        return _json_response(start_response, "200 OK", {"ok": False, "error": str(e)})
     return _json_response(
-        start_response, "200 OK", {"ok": True, "output": output, "result": view, "schematic": schematic}
+        start_response, "200 OK", {"ok": True, "output": output, "result": view, "schematic": schematic, "kmap": kmap}
     )
 
 

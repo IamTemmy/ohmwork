@@ -40,6 +40,10 @@ def build_kmap_view(model: KMap) -> dict:
     target=model.output_name if model.form=='SOP' else model.output_name+"'"
     width=max(480,LEFT+cols*CELL+32)
     footer=wrap(f'{model.output_name} = {render(model.expression)}', width=int((width-48)/8.5))
+    if model.synthesis_f_prime is not None:
+        footer += wrap(
+            f"PDN: {model.output_name}' = ({render(model.expression)})' = {render(model.synthesis_f_prime)}",
+            width=int((width-48)/8.5))
     xs=[f'm{c.minterm}={c.assigned_value}' for c in sorted(model.cells,key=lambda c:c.minterm) if c.value=='X']
     if xs: footer+=wrap('Selected X values: '+', '.join(xs),width=int((width-48)/8.5))
     legend_y=TOP+rows*CELL+84
