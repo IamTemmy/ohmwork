@@ -384,7 +384,7 @@ since hash randomization is fixed per-process and can't be exercised any other w
 
 ---
 
-## D17 — APPROVED. Phase A implemented; Phase B pending. What does a real transistor-level schematic show, and how is it built?
+## D17 — APPROVED. Phase A and Phase B implemented and shipped. What does a real transistor-level schematic show, and how is it built?
 
 **Status:** approved for implementation (2026-09-18, after two review rounds — see the
 revision history at the end of this entry). **Acceptance test 8's connectivity requirement was
@@ -421,7 +421,8 @@ added a cross-process determinism regression (identical inputs produce identical
 nets/devices/wires/junctions and stable ids across different `PYTHONHASHSEED` values), since
 Phase B's model-to-SVG bridge depends on that stability. All four rounds fixed, with
 regression tests, before Phase B began. **Phase B (SVG rendering, `presenter.py`/`webui.py`
-wiring, "Download SVG", acceptance tests 8 and 10) is not yet started.** This entry exists
+wiring, "Download SVG", acceptance tests 8 and 10) is implemented and shipped** — see the
+revision history's final entry for the full implementation/review history. This entry exists
 specifically so the schematic
 renderer described below was *not* built until this decision (and its acceptance tests) was
 reviewed and approved — a diagram encodes electrical connectivity and can be technically wrong
@@ -684,3 +685,231 @@ PUN/PDN-to-VDD/GND connections, which stay continuously wired as before) — see
 conventions" addition above and acceptance test 8's revised wording. This is a documentation-only
 amendment: no renderer, model, or test code was written or changed as part of it; implementation
 against the new convention is a separate, subsequent round, to be reviewed on its own.
+
+**Phase B shipped, 2026-09-19** (four PRs, implemented by Codex against the amendment above,
+each independently reviewed by Claude before merge — methodology: isolated `git worktree` per
+review, never touching the user's own checkout/server; full test suite rerun from a clean venv;
+an independently-written verification script re-deriving each round's key correctness claim from
+raw model data rather than trusting the PR's own helpers/tests; live-browser rendering of the
+acceptance cases plus edge cases; and, from PR #2 onward, pulling the actual live "Download SVG"
+output into a standalone render to confirm export fidelity):
+- **[PR #1](https://github.com/IamTemmy/ohmwork/pull/1)** (`9039d7b`): the named-net gate-port
+  renderer itself — conventional MOSFET symbols, named ports for repeated gate inputs, shared
+  inverters drawn as their own subcircuit, Download SVG. 378 Python + 96 browser tests.
+- **[PR #2](https://github.com/IamTemmy/ohmwork/pull/2)** (`843775e`): moved the output tap off
+  the PUN/PDN's own bus and onto the exact midpoint of a real one-device-pitch gap between the
+  two networks, with its own junction dot; extended ground-bus reconstruction to reach a shared
+  inverter's now-relocated ground connection.
+- **[PR #3](https://github.com/IamTemmy/ohmwork/pull/3)** (`d3bfdad`): fixed the midpoint
+  calculation to center on the *visible* network silhouette (real bus wire, or a lone device's
+  symbol shoulder) rather than the invisible raw device-terminal edge, and anchored PUN/PDN
+  captions to each network's own top row instead of the (now visually-shifting) output boundary.
+- **[PR #4](https://github.com/IamTemmy/ohmwork/pull/4)** (`6297610`+`a531706`): replaced the
+  coordinate-transform approach with a genuine recursive layout algorithm walking the `Network`
+  tree directly — series children centered horizontally, parallel children vertically, both
+  root networks sharing a center axis, using integer half-pitch cells specifically to avoid
+  rounding drift on odd width/height differences. Replaced plain text captions with dashed
+  bracket annotations spanning each network's own transistors, clear of gate labels. Device/net
+  identity from the wired layout is preserved and checked at every recursion step.
+- Merged at `main` `b2b8922`. Final state: 489 Python + browser tests green, plus a
+  from-scratch 25-shape battery (covering shapes beyond the four acceptance cases: wider
+  NAND/NOR, OAI variants, hand-built deep-nested/asymmetric trees, multi-inverter and dual-rail
+  combinations, non-default output names, multi-character variable names) checked structurally
+  and visually with zero problems found, independently cross-checked by a second reviewer
+  (ChatGPT, working from the same repository) with matching results.
+
+---
+
+## D18 — PROPOSED, not yet approved. What does a K-map view show, and how is it built?
+
+**Status:** proposed, pending review — **implementation must not begin on any phase until this
+entry and its acceptance tests are explicitly reviewed and approved**, the same standing rule
+D16 and D17 both followed, and for the same reason: a K-map grouping is a diagram that encodes
+an algebraic claim (which minterms this term covers, why these cells share a group) and can be
+technically wrong while looking attractive — exactly the risk class the decision-entry-first
+rule exists to catch, not a lesser one because it's "just" a grid instead of a transistor
+schematic.
+
+**Trigger:** the charter's own original, never-built vision (§ intro: "the K-map with groupings
+drawn" is listed alongside the schematic as part of what `synth` produces given a truth table);
+D11's already-approved requirement that the tool narrate *why* each group reduces to its term,
+verified against the minterms before printing; D14's already-planned `kmap` subcommand,
+mirroring `tt`. All three have existed since M1a (2026-09-13) and were deliberately deferred
+("K-map rendering" — charter's M1 exclusion list) until real coursework use justified the work,
+the same bar D16 and D17 both cleared. Real use has now cleared it here too: the user wants a
+standalone K-map section (mirroring the Derivation tab) and the K-map worked into `synth`'s own
+"full solution" report, explaining the specific expression the engine already chose.
+
+**Scope: two consumers, one shared model.**
+1. **Standalone K-map view** — new web UI tab (mirroring "Derivation table") and a `kmap` CLI
+   subcommand (D14), for learning/simplifying a function on its own: the user supplies a
+   function (expression or truth table, the same input surface `tt`/`synth` already accept) and
+   sees its K-map, every selected group, and the narrated explanation of each (D11).
+2. **Synthesis-integrated K-map** — embedded in `synth`'s existing report, explaining the
+   *specific* expression `SynthesisResult.chosen` already realized — never a freshly and
+   independently computed "the" simplification of F that might legitimately differ from what
+   was actually built (see point 5).
+
+Both consumers share the same grouping/model logic; only which minterm set gets visualized
+differs (a user-supplied function for the standalone view, vs. `chosen`'s own target minterm
+set for the synth view).
+
+**1. What already exists and must not be broken.** `simplify.py`'s Quine-McCluskey +
+Petrick's-method implementation (`_prime_implicants`, `_essential_cover`,
+`_minimal_extra_cover`, `minimal_covers`, `minimize`) is the actual, already-signed-off (M1a,
+dogfooded, golden-CLI-pinned via `tests/test_golden_cli_output.py`) algorithm that finds minimal
+covers — this is exactly a K-map's own prime-implicant step, and it must be **reused, not
+reimplemented**. It currently works on bit-pattern strings (`'0'`/`'1'`/`'-'`) and returns only
+the final algebraic `Expr` for the winning cover(s), discarding the specific covered-minterm-set
+each term corresponds to — the one thing a visual K-map needs to draw a group's exact shape.
+None of `simplify.py`'s existing public functions may change behavior, signature, or return
+type; new structured data is exposed *alongside* them (a new function or an additive field),
+never in place of them. `synth.py`'s `_build_candidates` already makes the exact choice this
+decision needs to render faithfully — AOI candidates group the *zeros* of F (`zeros = full -
+minterms - dont_cares`) to build F′ directly; OAI candidates group the *ones* of F, then
+structurally De Morgan-complement the result (see point 5) — and `SynthesisResult.chosen`/
+`other_candidates` are read from, never independently re-derived. Separately,
+`derivation.all_assignments` and every minterm-index convention in this codebase is a fixed
+binary count (MSB = first-declared variable), **not** Gray code — a K-map's row/column axes
+need Gray-code ordering for adjacency to hold, and that mapping is new work (point 3).
+`SynthesisResult` does not currently carry the `minterms`/`dont_cares` it was built from (only
+the winning `Candidate`/`Network`/counts) — rendering a K-map for `chosen` needs the actual cell
+values, so this is new data to *add*, without changing any existing field's meaning or the
+golden CLI output.
+
+**2. Supported variable counts; SOP vs. POS.** Same ceiling as everywhere else in the engine
+(D16, `synth.MIN_VARS`/`MAX_VARS`): 1-4 variables — a K-map beyond 4 variables (needing 3D or
+overlaid layout) is out of scope, matching the charter's own "5+ variables" exclusion. Both
+directions are real, distinct pictures, not the same grouping relabeled:
+- **SOP**: group the 1-cells (minterms); each group is a product term; OR them together. This
+  is what the standalone view defaults to, and what `synth`'s OAI candidates are built from.
+- **POS**: group the 0-cells; each group is a *sum* term (the group's own De Morgan dual —
+  variables that are 1 across the group become complemented literals OR'd together, and vice
+  versa); AND the group-terms together. This is what `synth`'s AOI candidates are actually built
+  from — `_build_candidates` groups F's zero-cells directly to get F′, which read pedagogically
+  is "circle the 0s of F to get F′."
+
+The standalone view should let the user choose SOP or POS (or show both) — both are legitimate
+coursework asks. The synth-integration view has **no free choice**: it must show whichever one
+actually matches `chosen.label` (point 5).
+
+**3. Grid layout: Gray-code ordering, cell-to-minterm mapping.** Proposed convention (needs
+review, but pinned to something concrete rather than left to be improvised mid-build): split
+`var_order` into a row-variable group (the first `ceil(n/2)` variables, in D10/`var_order`
+order) and a column-variable group (the remaining `floor(n/2)`) — 4 variables: 2×2 (4×4 grid);
+3 variables: 2×1 (4×2 grid); 2 variables: 1×1 (2×2 grid); 1 variable: 1×0 (a 2×1 grid, degenerate
+but must still render legibly, never crash or get special-cased away). Each axis is labeled in
+standard reflected Gray-code order (2 values: `0,1`; 4 values: `00,01,11,10`) — never plain
+binary, which would break the adjacency property groups depend on. A cell's row-Gray-code and
+column-Gray-code concatenate (row bits then column bits, matching `var_order`'s own bit-position
+convention already used everywhere else) to give its minterm index in the same convention
+`all_assignments`/`simplify.py` already use, invertible in both directions (checked
+independently — acceptance test 1). Edge/corner wraparound (a group spanning the grid's
+left/right edges, top/bottom edges, or all four corners) is a direct, expected consequence of
+Gray-code adjacency wrapping per axis — the *model* represents such a group as one group over
+its true (possibly visually split) cell set; drawing it legibly (e.g. split bracket pieces at
+the wrap) is a rendering concern, not a reason to model it as multiple groups.
+
+**4. Structured group data and verified explanations (D11).** A new structured type (not just
+an `Expr`) records, per selected group: which cells (minterm indices) it covers, which covered
+cells are don't-cares actually being used by this cover, the dash-pattern/term string, whether
+it's essential, and the resulting literal/term. Both the renderer (draw the bracket over exactly
+those cells) and the narration (D11: which variables are eliminated, which are kept, in true or
+complemented form) consume this. Per D11's own already-approved requirement, each group's
+narration must be *recomputed from its own covered-minterm set and checked against the stated
+term* before being shown, never merely asserted — the direct K-map analog of D17's
+`_validate_named_ports`/`_validate_source_fidelity` gates.
+
+**5. F vs. F′: the synth-integration view must explain the actual chosen expression.** The
+single most important correctness rule for that consumer: render the grouping that actually
+produced `SynthesisResult.chosen`, never a freshly-computed simplification of F that a
+standalone call to `minimize()`/`minimal_covers()` might return instead — `_build_candidates`
+explores *every* tied minimal cover in each direction and may pick one that differs from
+`minimize()`'s own separate D5 tie-break. Concretely:
+- `chosen.label == "AOI"`: render F's K-map (1s = `minterms`, dashes = `dont_cares`), with
+  groups covering the **0-cells** that reconstruct `chosen.f_prime`'s own product terms exactly
+  (POS reading) — state explicitly that grouping the 0s gives F′ directly.
+- `chosen.label == "OAI"`: render F's K-map, with groups covering the **1-cells** that
+  reconstruct the *pre-De-Morgan* SOP of F (the OAI candidate's own intermediate step, before
+  complementation) — narrate the subsequent structural complementation as its own explicit step
+  producing the PDN's actual series-of-parallels shape, never silently skip straight to
+  `f_prime`.
+- Either way, the group set shown is reconstructed from `chosen.f_prime` (or an
+  additively-exposed intermediate the chosen candidate already carries) — **never** recomputed
+  independently, so a coincidental re-simplification landing on a different, equally-valid cover
+  can never silently mismatch the PDN the schematic tab shows for the same result.
+- `F` and `F′` must be visibly, unambiguously labeled wherever both appear near each other (the
+  map's own title/legend, not inferred from context) — matching D15's existing concern about the
+  name `F` colliding with other things, and the schematic tab's own complemented-literal
+  labeling conventions (D12).
+
+**6. Acceptance tests** (to exist, reviewed, before implementation starts — same role D16's and
+D17's own lists played):
+1. **Cell-to-minterm/Gray-code correctness**: for every variable count (1-4) and every cell, the
+   row/column Gray-code position maps to the documented minterm index and back, exactly — an
+   independent, from-scratch bit-manipulation check, not a round-trip through the code being
+   tested.
+2. **Singleton groups**: an essential prime implicant covering exactly one minterm (no adjacent
+   1s to merge with) renders as a single-cell group.
+3. **Ordinary (non-wrapping) groups**: standard pairs/quads/octets each render as one contiguous
+   rectangular bracket over exactly its covered cells.
+4. **Overlapping groups**: a cell covered by more than one selected group renders with every one
+   of its groups genuinely distinguishable over that shared cell — not merged, not one hidden
+   behind another, unambiguous from the rendering (not color alone — point 7).
+5. **Edge/corner wraparound**: groups spanning left-right edges, top-bottom edges, and (4-var)
+   all four corners at once each render as one group with the correct wrapped cell set, legible
+   despite the visual split.
+6. **Don't-cares**: a don't-care cell actually used by a selected group renders distinguishably
+   from one that isn't, and from a genuine 0 or 1 (D4: "assignment reported"); the legend
+   distinguishes all three cell states unambiguously.
+7. **Constant functions** (all-0, all-1, including via don't-cares covering every remaining
+   cell): the degenerate "no groups"/"one all-covering group" cases render without crashing and
+   without a misleading empty-looking map.
+8. **Multiple equally-minimal covers**: a function whose `minimal_covers()` returns more than
+   one tied cover — the standalone view states which one it's showing (D5's tie-break, or
+   whatever `minimize()` picks, named as such) and the synth-integration view shows the one
+   `SynthesisResult.chosen` actually used, even when the two differ for the same function.
+9. **F vs. F′ distinction in the synth view**: for both an AOI-chosen and an OAI-chosen example
+   result, the rendered map/groups match point 5's rule exactly — checked structurally, not
+   eyeballed.
+10. **Independent model-to-visual bridge check** (D17 acceptance-test-8's own pattern, applied
+    here): every drawn group in the SVG corresponds to exactly one declared group in the model,
+    covering exactly its declared cells — none missing, none extra, none wrong — located by
+    stable identifiers, the same discipline the schematic renderer already follows.
+11. **Browser-level coverage** (Playwright): group-to-term highlighting (selecting/hovering a
+    term highlights its own group and vice versa, per the visual-design goal below), keyboard
+    accessibility, responsive layout at narrow widths, "Download SVG"/export parity via the same
+    live-DOM-clone technique D17 already proved out (never a re-serialized copy), and the same
+    stale-result-clears discipline every other tab already follows (M1.2/M1.3, D17 test 10).
+
+**7. Visual design** (owned by Codex; constraints only). Per the stated goal: each selected
+group gets a visually distinct color with a matching label for its simplified term, so a student
+sees at a glance which cells produce which term. Codex owns the concrete execution — including
+how overlapping and wraparound groups are drawn — within these constraints, carried over
+directly from D17's "no AI-generated/bitmap images, deterministic inline SVG" rule and this
+project's existing accessibility bar:
+- Group identity must be legible without relying on color alone (pattern, label placement, or
+  an equivalent non-color cue) — colorblind-accessible by construction, not an afterthought.
+- Cell values (0/1/dash) must stay legible where a colored group bracket overlaps or sits
+  adjacent to them.
+- Same "Download SVG" fidelity bar D17 established: the exported file is the same checked DOM,
+  never a separately-serialized copy.
+
+**8. Phasing** (per direction: design both consumers together in this one entry, implement in
+reviewed stages):
+1. **Shared model + grouping + verified explanations** — the K-map data model (grid layout,
+   Gray-code mapping, structured groups, D11 narration) built on `simplify.py`'s existing
+   algorithm, with its own structural test suite (acceptance tests 1-9). No rendering yet.
+   Reviewed and approved before phase 2 starts.
+2. **Standalone K-map view** — the web UI tab + `kmap` CLI subcommand, rendering phase 1's model
+   per the visual-design goals. Reviewed (including acceptance tests 10-11) before phase 3
+   starts.
+3. **Synthesis integration** — the same model/renderer embedded in `synth`'s report, wired to
+   `SynthesisResult.chosen` per point 5, with its own targeted review of the F/F′ correctness
+   rule specifically.
+
+Each phase is its own PR(s), independently reviewed by Claude in an isolated environment before
+merge — the same adversarial-review discipline as D17's four rounds.
+
+**Date:** 2026-09-19 (proposed). Not yet approved — implementation on any phase must not begin
+until this entry and its acceptance tests are explicitly approved.
