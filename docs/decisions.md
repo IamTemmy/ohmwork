@@ -970,3 +970,17 @@ These clarify/supersede ambiguous wording above:
   existing API JSON, schematic, or web interface. Browser overlap/geometry/export assertions
   (including actual path coverage, not merely data-* labels) land with Phase 2. Phase 3 wires
   the adapter into synthesis UI without rerunning synthesis or selecting a new candidate.
+
+### D18 worked-group explanations — 2026-09-20
+
+Owner-requested addition following Phase 2 coursework testing: show group IDs,
+canonical minterm sums (SOP) or maxterm products (POS), literal expansions, and
+an expandable expression/law/reason table. Preserve existing group highlighting.
+Use pairwise distributive, complement, and identity steps from each actual cube;
+verify every intermediate expression against the group's cell set over every
+input vector before presenting it. Mark original X members and their selected
+assignment explicitly. This is explanatory work, not a change to cover selection.
+Include the worked steps in Copy explanation / CLI, expand the SVG legend with
+cell notation and literal expansion, and provide a collapsible Boolean-law
+reference. Full step tables remain in the UI/text report to keep SVG diagrams
+manageable. Owner authorized implementation directly in the conversation.
