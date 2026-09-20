@@ -26,7 +26,7 @@ def test_actual_three_variable_example_and_named_laws():
     model=build_kmap(('a','b','c'),range(4))
     work=group_work(model,model.groups[0])
     assert work['notation']=='m0 + m1 + m2 + m3'
-    assert work['steps'][0]['expression']=="a' · b' · c' + a' · b' · c + a' · b · c' + a' · b · c"
+    assert work['steps'][0]['expression']=="(a' · b' · c') + (a' · b' · c) + (a' · b · c') + (a' · b · c)"
     assert [s['law'] for s in work['steps']]==['Expansion','Distributive','Complement','Identity','Distributive','Complement','Identity']
     assert work['result']=="a'"
     report=format_kmap_report(model)
@@ -57,3 +57,13 @@ def test_long_variable_labels_and_full_map_have_wrapped_export_lines():
     assert view['groups'][0]['work']['result']=='1'
     assert view['footer_y']>view['groups'][0]['legend_y']+22*len(view['groups'][0]['legend_lines'])
     assert view['laws']
+
+
+def test_four_variable_pair_keeps_each_minterm_parenthesized_in_all_views():
+    model=build_kmap(('a','b','c','d'),{0,2})
+    expected="(a' · b' · c' · d') + (a' · b' · c · d')"
+    work=group_work(model,model.groups[0])
+    assert work['notation']=='m0 + m2'
+    assert work['steps'][0]['expression']==expected
+    assert expected in format_kmap_report(model)
+    assert build_kmap_view(model)['groups'][0]['work']['steps'][0]['expression']==expected

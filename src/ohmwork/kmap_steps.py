@@ -29,7 +29,7 @@ def _text(expr):
     if isinstance(expr, Const): return str(int(expr.value))
     if isinstance(expr, Not): return _text(expr.operand) + "'"
     sep = ' · ' if isinstance(expr, And) else ' + '
-    return sep.join('(' + _text(t) + ')' if isinstance(expr, And) and isinstance(t, Or)
+    return sep.join('(' + _text(t) + ')' if isinstance(expr, (And, Or)) and isinstance(t, (And, Or)) and type(expr) is not type(t)
                     else _text(t) for t in expr.operands)
 
 
