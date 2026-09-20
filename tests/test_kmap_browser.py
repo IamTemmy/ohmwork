@@ -304,3 +304,34 @@ def test_multi_group_worked_explanation_has_readable_space(page,width):
     assert positions()==before
     page.locator('.km-group-card').nth(1).hover()
     assert page.locator('svg.km-svg').get_attribute('data-active-group')=='G2'
+
+
+@pytest.mark.parametrize('width', [1280,800,360])
+def test_group_card_sections_align_with_content_sized_rows(page,width):
+    page.set_viewport_size({'width':width,'height':900})
+    page.emulate_media(color_scheme='dark')
+    submit(page,{'variables':'a,b,c,d','ones':'0,2,4,6,8,10,12'})
+    def measurements():
+        return page.locator('.km-group-section').evaluate_all("""els=>els.map(el=>{
+          const rect=e=>{const r=e.getBoundingClientRect();return {top:r.top+scrollY,bottom:r.bottom+scrollY,width:r.width}};
+          return {card:rect(el),parts:[...el.children].map(rect)};
+        })""")
+    before=measurements()
+    rows={}
+    for item in before:
+        rows.setdefault(round(item['card']['top']),[]).append(item)
+    assert len(rows)=={1280:1,800:2,360:3}[width]
+    for row in rows.values():
+        for item in row:
+            assert abs(item['card']['bottom']-row[0]['card']['bottom'])<1
+            assert abs(item['card']['width']-row[0]['card']['width'])<1
+            for part,reference in zip(item['parts'],row[0]['parts']):
+                assert abs(part['top']-reference['top'])<1
+                assert abs(part['bottom']-reference['bottom'])<1
+    assert page.locator('.km-group-section').evaluate_all(
+        "els=>els.every(el=>el.scrollWidth<=el.clientWidth && [...el.children].every(c=>c.scrollHeight<=c.clientHeight))")
+    page.locator('#km-groups').screenshot(path=f'test-artifacts/kmaps/aligned-cards-{width}.png')
+    page.locator('[data-proof-toggle=G1]').click()
+    assert measurements()==before
+    assert page.locator('.km-proof-panel').evaluate('el=>el.getBoundingClientRect().top+scrollY')>=max(i['card']['bottom'] for i in before)
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
