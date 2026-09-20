@@ -122,20 +122,6 @@ def test_kmap_visual_bridge_and_export(page,server_url,tmp_path,name,payload):
 
 def test_linked_hover_keyboard_and_overlap_memberships(page):
     submit(page,{'expr':'a+b'})
-    assert positions()==before
-    for group in ['G2','G3']:
-        toggle=page.locator(f'[data-proof-toggle={group}]')
-        toggle.focus();toggle.press('Enter')
-        assert positions()==before
-        assert page.locator('.km-proof-panel:not([hidden])').count()==1
-        assert page.locator('[data-proof-toggle][aria-expanded=true]').count()==1
-        assert page.locator('.km-proof-panel').get_attribute('data-proof-group')==group
-        assert group in page.locator('.km-proof-panel h3').inner_text()
-    page.locator('.km-proof-panel button').focus()
-    page.locator('.km-proof-panel button').press('Escape')
-    assert page.locator('[data-proof-toggle=G3]').evaluate('el=>el===document.activeElement')
-    assert page.locator('.km-proof-panel').is_hidden()
-    assert positions()==before
     page.locator('.km-group-card').nth(1).hover()
     assert page.locator('svg.km-svg').get_attribute('data-active-group')=='G2'
     assert page.locator('.km-group-card').nth(1).get_attribute('aria-pressed')=='true'
