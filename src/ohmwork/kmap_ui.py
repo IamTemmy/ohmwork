@@ -17,7 +17,10 @@ CSS = r"""
   .km-group-card small { display:block; opacity:.8; line-height:1.5; }
   .km-group-card:focus-visible, #panel-kmap button:focus-visible { outline:3px solid #5686ef; outline-offset:3px; }
   #panel-kmap > .km-actions { margin-top:1rem; }
-  .km-group-section { min-width:0; border-left:4px solid var(--group-color); border-radius:8px; }
+  /* Share content-sized tracks across each card row, including wrapped rows. */
+  .km-group-section { display:grid; grid-row:span 3; grid-template-rows:subgrid; min-width:0; border:1px solid #8884; border-left:4px solid var(--group-color); border-radius:8px; }
+  .km-group-section > .km-work { margin:0; padding:.8rem; }
+  .km-group-section > .km-proof-toggle { margin:0; padding:.8rem; align-self:stretch; }
   .km-proof-panel, .km-group-list > [data-boolean-reference] { grid-column:1 / -1; }
   .km-proof-panel { min-width:0; border-left:4px solid var(--group-color); border-radius:8px; }
   .km-proof-panel[hidden] { display:none; }
@@ -26,7 +29,7 @@ CSS = r"""
   .km-proof-toggle { margin:.7rem; padding:.4rem; color:inherit; background:transparent; border:0; font:inherit; font-weight:600; cursor:pointer; text-align:left; }
   .km-proof-toggle::before { content:'▸ '; }
   .km-proof-toggle[aria-expanded=true]::before { content:'▾ '; }
-  .km-group-section .km-group-card { width:100%; border-left:0; }
+  .km-group-section .km-group-card { display:flex; flex-direction:column; justify-content:flex-start; width:100%; min-width:0; border:0; border-bottom:1px solid #8884; border-radius:4px 4px 0 0; }
   .km-work { padding:.7rem; overflow-wrap:normal; word-break:normal; line-height:1.55; }
   .km-work summary { cursor:pointer; font-weight:600; }
   .km-work-scroll { overflow-x:auto; margin-top:.7rem; }
