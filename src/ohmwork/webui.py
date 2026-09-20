@@ -15,7 +15,9 @@ import sys
 import webbrowser
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
-from ohmwork.api import derive_from_input, format_tt_report, synthesize_from_input
+from ohmwork.api import derive_from_input, format_tt_report, synthesize_from_input, kmap_from_input
+from ohmwork.kmap_view import build_kmap_view, format_kmap_report
+from ohmwork.kmap_ui import CSS as KMAP_CSS, HTML as KMAP_HTML, JS as KMAP_JS
 from ohmwork.derivation import variables_in_order
 from ohmwork.errors import ParseError
 from ohmwork.parser import parse
@@ -1495,6 +1497,16 @@ $("copy-advanced").addEventListener("click", () => copyText(lastAdvancedText, $(
 """
 
 
+# Embed the isolated K-map assets into the same page/script scope. No new
+# transport or asset route; the existing tab handler sees the new tab.
+_PAGE = (_PAGE.replace('</style>', KMAP_CSS + '</style>', 1)
+         .replace('<button type="button" class="tab" data-tab="synth">',
+                  '<button type="button" class="tab" data-tab="kmap">K-map</button>\n'
+                  '<button type="button" class="tab" data-tab="synth">', 1)
+         .replace('<script>', KMAP_HTML + '\n<script>', 1)
+         .replace('</script>', KMAP_JS + '\n</script>', 1))
+
+
 def _json_response(start_response, status: str, payload: dict):
     body = json.dumps(payload).encode("utf-8")
     start_response(status, [("Content-Type", "application/json"), ("Content-Length", str(len(body)))])
@@ -1594,6 +1606,22 @@ def _handle_synth(environ, start_response):
     )
 
 
+def _handle_kmap(environ, start_response):
+    body = _read_json_body(environ)
+    try:
+        if not isinstance(body, dict):
+            raise ValueError('request body must be a JSON object')
+        keys = ('expr', 'variables', 'ones', 'dc', 'table', 'form', 'output_name')
+        if any(key in body and not isinstance(body[key], str) for key in keys):
+            raise ValueError('K-map input fields must be strings')
+        result = kmap_from_input(**{key:body[key] for key in keys if key in body})
+        view = build_kmap_view(result)
+        output = format_kmap_report(result)
+    except (ParseError, ValueError, RuntimeError) as exc:
+        return _json_response(start_response, '200 OK', {'ok':False, 'error':str(exc)})
+    return _json_response(start_response, '200 OK', {'ok':True, 'result':view, 'output':output})
+
+
 def _not_found(environ, start_response):
     body = b"not found"
     start_response("404 Not Found", [("Content-Type", "text/plain"), ("Content-Length", str(len(body)))])
@@ -1666,6 +1694,7 @@ def _reject_hostile_post(environ, start_response):
 _ROUTES = {
     ("GET", "/"): _handle_index,
     ("POST", "/api/tt"): _handle_tt,
+    ("POST", "/api/kmap"): _handle_kmap,
     ("POST", "/api/synth"): _handle_synth,
 }
 

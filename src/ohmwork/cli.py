@@ -1,7 +1,7 @@
 """The ``ohmwork`` command line, per D14: layered subcommands, not modes.
 
 M1a shipped ``tt`` (the derivation table). M1b added ``synth`` (the
-transistor layer) — ``kmap`` is still M1b+ and not registered yet. M1.1 adds
+transistor layer) — D18 adds ``kmap`` for groups and explanations. M1.1 adds
 ``ui``, a local web front end for the same two operations, for people who'd
 rather use form fields than remember flags; it wraps ``ohmwork.api``, the
 same UI-agnostic layer this module's own ``tt``/``synth`` handlers call, so
@@ -15,7 +15,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from ohmwork.api import render_synth, render_tt
+from ohmwork.api import kmap_from_input, render_synth, render_tt
+from ohmwork.kmap_view import format_kmap_report
 from ohmwork.errors import ParseError
 
 
@@ -51,6 +52,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         metavar="LIST",
         help='Comma-separated explicit list of columns to show, e.g. "x,y,xy" (D9). F is always included.',
     )
+
+    kmap = subparsers.add_parser('kmap', help='Show a Karnaugh map with groups and explanations')
+    kmap.add_argument('--expr', help='D8 Boolean expression')
+    kmap.add_argument('--vars', help='Comma-separated variables (1-4), e.g. a,b,c')
+    kmap.add_argument('--ones', help='Indices where F=1; use an empty string for none')
+    kmap.add_argument('--dc', help="Don't-care indices")
+    kmap.add_argument('--table', help='Binary row-ordered 0/1/X string')
+    kmap.add_argument('--form', choices=('sop','pos'), default='sop', help='Group ones (sop) or zeros (pos)')
+    kmap.add_argument('--output-name', default='F', help='Output label (default F)')
 
     synth = subparsers.add_parser(
         "synth",
@@ -139,6 +149,19 @@ def run_synth(args: argparse.Namespace, *, stdout, stderr) -> int:
     return 0
 
 
+def run_kmap(args: argparse.Namespace, *, stdout, stderr) -> int:
+    try:
+        result = kmap_from_input(expr=args.expr, variables=args.vars, ones=args.ones,
+                                 dc=args.dc, table=args.table, form=args.form.upper(),
+                                 output_name=args.output_name)
+        output = format_kmap_report(result)
+    except (ParseError, ValueError, RuntimeError) as exc:
+        print(f"error: {exc}", file=stderr)
+        return 1
+    print(output, file=stdout)
+    return 0
+
+
 def run_ui(args: argparse.Namespace, *, stdout, stderr) -> int:
     from ohmwork.webui import run_server  # imported lazily: only `ui` needs it
 
@@ -152,6 +175,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "tt":
         return run_tt(args, stdout=sys.stdout, stderr=sys.stderr)
+    if args.command == "kmap":
+        return run_kmap(args, stdout=sys.stdout, stderr=sys.stderr)
     if args.command == "synth":
         return run_synth(args, stdout=sys.stdout, stderr=sys.stderr)
     if args.command == "ui":

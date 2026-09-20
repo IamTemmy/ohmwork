@@ -27,6 +27,26 @@ You'll see `(.venv)` in your prompt once it's active; `deactivate` turns it back
 don't want to activate it, prefix every command with `./.venv/bin/` instead (`./.venv/bin/ohmwork ui`,
 `./.venv/bin/pytest`) — same effect, no activation needed.
 
+## Karnaugh maps
+
+The **K-map** tab in `ohmwork ui` accepts an expression, a clickable truth-table
+input grid, minterm/don't-care lists, or a binary-order bit string (1–4 variables).
+Choose SOP to group ones or POS to group zeros. Select a colored group or its
+explanation to isolate it; group IDs and stroke patterns distinguish overlaps
+and wraparound pieces without relying on color alone. Original X cells remain
+visible, with the chosen assignments listed separately.
+
+Download SVG preserves the displayed map, group legend, result, and X assignments.
+Copy explanation gives a plain-text derivation. The command-line equivalent is:
+
+```sh
+ohmwork kmap --expr "ab + a'c"
+ohmwork kmap --vars "a,b,c,d" --ones "0,2,8,10"
+ohmwork kmap --vars "a,b" --table "1X00" --form pos --output-name Y
+```
+
+This is the standalone view. Synthesis integration is the next D18 phase.
+
 ## Usage
 
 ```bash
