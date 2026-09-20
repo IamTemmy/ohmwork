@@ -1341,11 +1341,15 @@ _SCHEMATIC_SNAPSHOT_JS = """(rootSelector) => {
     id:g.getAttribute('data-boundary-id'),net_id:g.getAttribute('data-net-id'),
     bars:Array.from(g.querySelectorAll('line')).map(lineCoords),
   }));
-  const captions = Array.from(root.querySelectorAll('[data-role="network-caption"]')).map(el => ({
-    role:el.getAttribute('data-network'),x:Number(el.getAttribute('x')),y:Number(el.getAttribute('y')),
-    text:el.textContent,
+  const annotations = Array.from(root.querySelectorAll('[data-role="network-annotation"]')).map(g => ({
+    role:g.getAttribute('data-network'), devices:g.getAttribute('data-device-ids').split(' '),
+    bracket:Array.from(g.querySelector('polyline').points).map(p=>[p.x,p.y]),
+    captions:Array.from(g.querySelectorAll('text')).map(t=>({text:t.textContent,x:Number(t.getAttribute('x')),y:Number(t.getAttribute('y'))})),
+    dashed:getComputedStyle(g.querySelector('polyline')).strokeDasharray,
+    box:(()=>{const b=g.getBBox();return {x:b.x,y:b.y,width:b.width,height:b.height};})(),
   }));
-  return { wires, junctions, nets, devices, primitives, ports, boundaries, captions };
+  return { wires, junctions, nets, devices, primitives, ports, boundaries, annotations };
+
 }"""
 
 
@@ -1444,14 +1448,19 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
     lower = min([d["channel"]["y1"] for d in snapshot["devices"] if d["role"] == "pdn"]
                 + [y for y in buses if y > tap_y])
     assert tap_y - upper == lower - tap_y
-    assert len(snapshot["captions"]) == 2
-    for caption in snapshot["captions"]:
-        role = caption["role"]
-        network_top = min(d[t+"_point"]["y"] for d in schematic["devices"]
-                          if d["role"] == role for t in ("source", "drain"))
-        assert caption["y"] == network_top - 18
-        assert caption["x"] == 35
-        assert caption["text"] == {"pun":"PUN · PMOS", "pdn":"PDN · NMOS"}[role]
+    assert len(snapshot["annotations"]) == 2
+    assert {a["role"] for a in snapshot["annotations"]} == {"pun", "pdn"}
+    for annotation in snapshot["annotations"]:
+        members = [d for d in snapshot["devices"] if d["role"] == annotation["role"]]
+        assert sorted(annotation["devices"]) == sorted(d["id"] for d in members)
+        first = min(d["channel"]["y1"] for d in members)
+        last = max(d["channel"]["y2"] for d in members)
+        assert annotation["bracket"] == [[-10,first],[-25,first],[-25,last],[-10,last]]
+        type_, description = ("PMOS", "pull-up network") if annotation["role"] == "pun" else ("NMOS", "pull-down network")
+        assert annotation["captions"] == [dict(text=type_,x=-50,y=(first+last)/2-8),
+                                           dict(text=description,x=-50,y=(first+last)/2+18)]
+        assert annotation["box"]["x"] + annotation["box"]["width"] < 0
+        assert annotation["dashed"] != "none"
     assert any(j["net_id"] == "OUT" and (j["x"],j["y"]) == (output_wire["x1"],output_wire["y1"]) for j in snapshot["junctions"])
     device_ids = [d["id"] for d in snapshot["devices"]]
     assert len(device_ids) == len(model_devices)
@@ -1521,6 +1530,9 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
             assert prim["device_id"] in model_devices
         elif prim["role"] == "junction":
             pass  # already compared one-for-one above, including coordinates
+        elif prim["role"] == "network-bracket":
+            assert prim["device_id"] is None and prim["wire_id"] is None
+            assert len([p for p in snapshot["primitives"] if p["role"] == "network-bracket"]) == 2
         elif prim["role"] == "output-endpoint":
             assert model_boundaries[prim["boundary_id"]]["net_id"] == "OUT"
         else:
@@ -1580,7 +1592,7 @@ def test_textbook_visual_and_export_acceptance(page, name, expr, dual):
         const svg = document.querySelector('#schematic-svg'), vb = svg.viewBox.baseVal;
         return Array.from(svg.querySelectorAll('text')).filter(t => {
             const b = t.getBBox();
-            return b.x < 0 || b.y < 0 || b.x+b.width > vb.width || b.y+b.height > vb.height;
+            return b.x < vb.x || b.y < vb.y || b.x+b.width > vb.x+vb.width || b.y+b.height > vb.y+vb.height;
         }).map(t => t.textContent);
     }""")
     assert not clipped, f"clipped schematic labels: {clipped}"

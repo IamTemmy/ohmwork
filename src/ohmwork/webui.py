@@ -845,6 +845,7 @@ const SCHEMATIC_SVG_STYLE_CSS = `
   .ow-text { fill: currentColor; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .ow-port-label { font-size: 26px; }
   .ow-section-label { opacity: .6; }
+  .ow-network-bracket { stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 5 4; opacity: .45; fill: none; }
   .ow-net-label { font-weight: 700; }
 `;
 
@@ -991,15 +992,16 @@ let lastSchematicView = null;
 function renderTextbookSchematic(svg, view) {
   const w = view.width * view.cell;
   const h = view.height * view.cell;
-  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  const annotationWidth = 280;
+  svg.setAttribute("viewBox", `${-annotationWidth} 0 ${w + annotationWidth} ${h}`);
   svg.setAttribute("aria-label", `Transistor-level schematic: ${view.total_transistors} transistors. Matching gate labels denote the same electrical net.`);
-  const displayWidth = Math.max(MIN_DISPLAY_WIDTH, Math.round(w * PIXELS_PER_UNIT));
+  const displayWidth = Math.max(MIN_DISPLAY_WIDTH, Math.round((w + annotationWidth) * PIXELS_PER_UNIT));
   svg.style.width = `${displayWidth}px`;
   // A standalone SVG without an explicit height can inherit the browser
   // viewport's height and shrink its contents to fit. Carry both dimensions
   // into Download SVG so device/label scale is identical inside and outside
   // the app, including diagrams taller than the viewport.
-  svg.style.height = `${displayWidth * h / w}px`;
+  svg.style.height = `${displayWidth * h / (w + annotationWidth)}px`;
   const netById = Object.fromEntries(view.nets.map(n => [n.id, n]));
   function label(text, x, y, attrs = {}) {
     const el = svgEl("text", {class: "ow-text", x, y, "font-size": 26, ...attrs});
@@ -1046,11 +1048,24 @@ function renderTextbookSchematic(svg, view) {
   });
   const core = view.devices.filter(d => d.role !== "inverter");
   const top = Math.min(...core.map(d => Math.min(d.source_point.y,d.drain_point.y)));
-  for (const [role, caption] of [["pun", "PUN · PMOS"], ["pdn", "PDN · NMOS"]]) {
-    const networkTop = Math.min(...core.filter(d => d.role === role)
-      .map(d => Math.min(d.source_point.y, d.drain_point.y)));
-    label(caption, 35, networkTop - 18,
-      {"font-size":20,"opacity":.65,"data-role":"network-caption","data-network":role});
+  // Annotations occupy their own gutter, outside every electrical primitive.
+  // Their extents follow all device symbols belonging to the network role.
+  for (const [role, type, description] of [["pun", "PMOS", "pull-up network"], ["pdn", "NMOS", "pull-down network"]]) {
+    const members = core.filter(d => d.role === role);
+    const first = Math.min(...members.map(d => d.gate_point.y - 28));
+    const last = Math.max(...members.map(d => d.gate_point.y + 28));
+    const middle = (first + last) / 2;
+    const group = svgEl("g", {"data-role":"network-annotation","data-network":role,
+      "data-device-ids":members.map(d=>d.id).join(" ")});
+    group.appendChild(svgEl("polyline", {class:"ow-network-bracket", "data-role":"network-bracket",
+      points:`-10,${first} -25,${first} -25,${last} -10,${last}`}));
+    for (const [text, y] of [[type, middle - 8], [description, middle + 18]]) {
+      const caption = svgEl("text", {class:"ow-text", "data-role":"network-caption",
+        x:-50, y, "font-size":20, "text-anchor":"end", opacity:.7});
+      caption.textContent = text;
+      group.appendChild(caption);
+    }
+    svg.appendChild(group);
   }
   const inverters = view.devices.filter(d => d.role === "inverter" && d.kind === "p");
   inverters.forEach(d => label(`Shared ${d.gate_var} → ${d.gate_var}'`, d.source_point.x - 95, top - 75, {"font-size":22}));
