@@ -194,3 +194,26 @@ def render_synth(
     # result.verification is guaranteed to have passed, or it would have
     # raised RuntimeError above instead of reaching this line.
     return format_synth_report(result, result.verification)
+
+
+def kmap_from_input(
+    *, expr: str | None = None, variables: str | None = None,
+    ones: str | None = None, dc: str | None = None, table: str | None = None,
+    form: str = 'SOP', output_name: str = 'F',
+):
+    """One standalone map, with the 4-variable cap BEFORE truth enumeration."""
+    from ohmwork.kmap import build_kmap
+    if expr is not None:
+        if any(x is not None for x in (variables,ones,dc,table)):
+            raise ValueError('--expr cannot be combined with --vars/--ones/--dc/--table')
+        ast=parse(expr)
+        var_order=variables_in_order(ast)
+        if not 1 <= len(var_order) <= 4:
+            raise ValueError('kmap supports 1-4 variables')
+        minterms={i for i,row in enumerate(all_assignments(var_order)) if evaluate(ast,row)}
+        dont_cares=set()
+    else:
+        if variables is not None and not 1 <= len(parse_var_list(variables)) <= 4:
+            raise ValueError('kmap supports 1-4 variables')
+        var_order,minterms,dont_cares=resolve_truth_table(variables=variables,ones=ones,dc=dc,table=table)
+    return build_kmap(var_order,minterms,dont_cares,form=form,output_name=output_name)
