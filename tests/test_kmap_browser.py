@@ -34,6 +34,17 @@ def snapshot(page):
       values:[...svg.querySelectorAll('[data-cell-text]')].map(t=>({m:+t.dataset.cellText,text:t.textContent})),
       memberships:[...svg.querySelectorAll('[data-membership]')].map(t=>({m:+t.dataset.memberCell,id:t.dataset.membership,text:t.textContent})),
       legends:[...svg.querySelectorAll('[data-legend-id]')].map(g=>({id:g.dataset.legendId,text:g.textContent})),
+      pieceCount:svg.querySelectorAll('.km-piece').length,
+      badgeCount:svg.querySelectorAll('.km-badge').length,
+      badBadges:[...svg.querySelectorAll('.km-badge')].filter(r=>{
+        const index=r.hasAttribute('data-index-badge'), cellId=index?r.dataset.indexBadge:r.dataset.badgeCell;
+        const c=svg.querySelector(`[data-role=cells] [data-minterm="${cellId}"] rect`);
+        if(!c || (!index && !r.dataset.groupBadge)) return true;
+        const b=r.getBBox(), box=c.getBBox();
+        const value=svg.querySelector(`[data-cell-text="${cellId}"]`).getBBox();
+        const touchesValue=b.x<value.x+value.width && b.x+b.width>value.x && b.y<value.y+value.height && b.y+b.height>value.y;
+        return b.width>(index?29:22) || b.height>(index?17:15) || b.x<box.x || b.y<box.y || b.x+b.width>box.x+box.width || b.y+b.height>box.y+box.height || touchesValue;
+      }).length,
       unclassified:[...svg.querySelectorAll('rect')].filter(r=>!r.matches('.km-piece,.km-grid-cell,.km-badge')).length,
       clipped:[...svg.querySelectorAll('text')].filter(t=>{const b=t.getBBox(),v=svg.viewBox.baseVal;
         return b.x<v.x || b.y<v.y || b.x+b.width>v.x+v.width || b.y+b.height>v.y+v.height;}).map(t=>t.textContent),
@@ -45,7 +56,9 @@ def snapshot(page):
 
 def bridge(s,view):
     assert s['box']==[0,0,view['width'],view['height']]
-    assert not s['clipped'] and s['unclassified']==0
+    assert not s['clipped'] and s['unclassified']==0 and s['badBadges']==0
+    assert s['pieceCount']==sum(len(g['pieces']) for g in view['groups'])
+    assert s['badgeCount']==len(view['cells'])+sum(len(c['group_ids']) for c in view['cells'])
     assert len(s['cells'])==len(view['cells']) and len(s['groups'])==len(view['groups'])
     assert {c['m'] for c in s['cells']}=={c['minterm'] for c in view['cells']}
     for a,b in zip(s['cells'],view['cells']):
@@ -91,6 +104,12 @@ def test_kmap_visual_bridge_and_export(page,server_url,tmp_path,name,payload):
     bridge(snapshot(page),view)
     folder=Path('test-artifacts/kmaps');folder.mkdir(parents=True,exist_ok=True)
     page.locator('svg.km-svg').screenshot(path=str(folder/(name+'.png')))
+    if name in ('corners','six-overlaps'):
+        page.screenshot(path=str(folder/(name+'-page.png')),full_page=True)
+    if name=='six-overlaps':
+        page.locator('.km-group-card').nth(4).click()
+        page.locator('svg.km-svg').screenshot(path=str(folder/'six-overlaps-selected.png'))
+        page.click('#km-show-all')
     before=page.locator('svg.km-svg').evaluate('svg=>new XMLSerializer().serializeToString(svg)')
     with page.expect_download() as info: page.click('#km-download')
     path=tmp_path/'map.svg';info.value.save_as(path)
@@ -167,7 +186,10 @@ def test_mobile_dark_mode_copy_and_standalone_style(page):
     page.set_viewport_size({'width':360,'height':820});page.emulate_media(color_scheme='dark')
     submit(page,CASES[0][1])
     dark=snapshot(page)['color']
+    page.screenshot(path='test-artifacts/kmaps/mobile-dark.png',full_page=True)
+    page.set_viewport_size({'width':900,'height':1000})
     page.locator('svg.km-svg').screenshot(path='test-artifacts/kmaps/corners-dark.png')
+    page.set_viewport_size({'width':360,'height':820})
     assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
     assert page.locator('#km-stage').evaluate('el=>el.scrollWidth>el.clientWidth')
     page.emulate_media(color_scheme='light')
@@ -176,3 +198,32 @@ def test_mobile_dark_mode_copy_and_standalone_style(page):
     page.click('#km-copy')
     page.wait_for_function('!!window.copied')
     assert 'G1' in page.evaluate('window.copied') and 'wraps' in page.evaluate('window.copied')
+
+
+def test_newer_success_wins_when_responses_arrive_out_of_order(page,server_url):
+    first=page.request.post(server_url+'/api/kmap',data={'expr':'a'}).json()
+    second=page.request.post(server_url+'/api/kmap',data={'expr':'b'}).json()
+    page.click('.tab[data-tab=kmap]')
+    page.evaluate('''()=>{window.pending=[];window.fetch=()=>new Promise(resolve=>window.pending.push(resolve));}''')
+    page.fill('#km-expr','a');page.click('#km-run')
+    page.fill('#km-expr','b');page.click('#km-run')
+    page.evaluate('data=>window.pending[1]({json:async()=>data})',second)
+    page.wait_for_selector('#km-result:not([hidden])')
+    assert page.locator('#km-equation').inner_text()=='F = b'
+    page.evaluate('data=>window.pending[0]({json:async()=>data})',first)
+    page.wait_for_timeout(100)
+    assert page.locator('#km-equation').inner_text()=='F = b'
+
+
+def test_copy_fallback_clears_and_selected_export_keeps_same_state(page,tmp_path):
+    submit(page,{'expr':'a+b'})
+    page.evaluate("()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined})")
+    page.click('#km-copy')
+    assert 'G1' in page.locator('#km-result .copy-fallback').inner_text()
+    page.locator('.km-group-card').first.click()
+    before=page.locator('svg.km-svg').evaluate('svg=>new XMLSerializer().serializeToString(svg)')
+    with page.expect_download() as info: page.click('#km-download')
+    path=tmp_path/'selected.svg';info.value.save_as(path)
+    assert path.read_text()==before
+    page.fill('#km-expr','ab')
+    assert page.locator('#km-result .copy-fallback').count()==0

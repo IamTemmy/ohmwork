@@ -101,7 +101,7 @@ function renderKmap(view, host, cards, onSelection) {
   node('title',{},`${view.output_name} = ${view.expression}`,svg);
   node('desc',{},`Gray-code axes. Matching group IDs and stroke patterns identify one group, including split pieces across opposite edges. X means don't-care.`,svg);
   node('text',{x:24,y:34,class:'km-title'},`${view.output_name} · Karnaugh map`,svg);
-  node('text',{x:24,y:58,class:'km-small'},`${view.form} · group ${view.grouping_value}s · ${view.groups.length} groups · X = don't-care`,svg);
+  node('text',{x:24,y:58,class:'km-small'},`${view.form} · group ${view.grouping_value}s · ${view.groups.length} ${view.groups.length===1?'group':'groups'} · X = don't-care`,svg);
   const grid=view.grid;
   node('text',{x:grid.left+grid.columns*grid.cell/2,y:82,class:'km-axis'},view.column_variables.join(''),svg);
   node('text',{x:32,y:grid.top+grid.rows*grid.cell/2,class:'km-axis'},view.row_variables.join('') || '—',svg);
@@ -130,12 +130,13 @@ function renderKmap(view, host, cards, onSelection) {
   // Text is always above tinted group regions, never obscured by their fills.
   for (const c of view.cells) {
     node('text',{x:c.cx,y:c.cy,class:'km-value','data-cell-text':c.minterm},c.value,svg);
-    node('text',{x:c.x+7,y:c.y+grid.cell-8,class:'km-index'},`m${c.minterm}`,svg);
+    node('rect',{x:c.x+3,y:c.y+3,width:29,height:17,rx:2,class:'km-badge','data-index-badge':c.minterm},null,svg);
+    node('text',{x:c.x+7,y:c.y+15,class:'km-index','data-index-text':c.minterm},`m${c.minterm}`,svg);
     const count=c.group_ids.length;
     c.group_ids.forEach((id,i)=>{
       const row=Math.floor(i/4), rowCount=Math.min(4,count-row*4);
-      const x=c.cx+(i%4-(rowCount-1)/2)*24, y=c.cy+26+row*16;
-      node('rect',{x:x-11,y:y-11,width:22,height:15,rx:3,class:'km-badge'},null,svg);
+      const x=c.cx+(i%4-(rowCount-1)/2)*24, y=c.cy+30+row*16;
+      node('rect',{x:x-11,y:y-11,width:22,height:15,rx:3,class:'km-badge','data-group-badge':id,'data-badge-cell':c.minterm},null,svg);
       node('text',{x,y,class:'km-small','text-anchor':'middle','font-weight':600,
         'data-membership':id,'data-member-cell':c.minterm},id,svg);
     });
@@ -175,6 +176,9 @@ function renderKmap(view, host, cards, onSelection) {
     cellLayer.querySelectorAll('[data-minterm]').forEach(el=>{
       const cell=view.cells.find(c=>String(c.minterm)===el.dataset.minterm);
       el.classList.toggle('km-active-cell',!!id && cell.group_ids.includes(id));
+    });
+    svg.querySelectorAll('[data-membership]').forEach(el=>{
+      el.style.opacity=id && el.dataset.membership!==id?'.2':'1';
     });
     const group=view.groups.find(g=>g.id===id);
     onSelection(group ? `${group.id} → ${group.term}. ${group.explanation}` : 'Select a group or term to isolate it. Select again, or press Escape, to show all.');
@@ -257,7 +261,7 @@ function renderKmap(view, host, cards, onSelection) {
     if(!response.ok) {$k('km-error').textContent=response.error || 'Could not build the map.';return;}
     const view=response.result;report=response.output;
     $k('km-equation').textContent=`${view.output_name} = ${view.expression}`;
-    $k('km-summary').textContent=`${view.form} · ${view.term_count} groups · ${view.literal_count} literals · verified for all ${view.cells.length} inputs`;
+    $k('km-summary').textContent=`${view.form} · ${view.term_count} ${view.term_count===1?'group':'groups'} · ${view.literal_count} ${view.literal_count===1?'literal':'literals'} · verified for all ${view.cells.length} inputs`;
     $k('km-direction').textContent=view.form==='SOP'?'Group the 1s. Each colored group contributes one product term.':
       `Group the 0s. Their products give ${view.grouped_target} = ${view.grouped_expression}; complementing gives the POS above.`;
     diagram=renderKmap(view,$k('km-stage'),$k('km-groups'),text=>$k('km-selection').textContent=text);
