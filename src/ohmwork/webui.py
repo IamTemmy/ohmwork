@@ -1046,9 +1046,12 @@ function renderTextbookSchematic(svg, view) {
   });
   const core = view.devices.filter(d => d.role !== "inverter");
   const top = Math.min(...core.map(d => Math.min(d.source_point.y,d.drain_point.y)));
-  const out = view.boundaries.find(b => b.net_id === "OUT");
-  label("PUN · PMOS", 35, top - 18, {"font-size":20,"opacity":.65});
-  label("PDN · NMOS", 35, out.point.y + 42, {"font-size":20,"opacity":.65});
+  for (const [role, caption] of [["pun", "PUN · PMOS"], ["pdn", "PDN · NMOS"]]) {
+    const networkTop = Math.min(...core.filter(d => d.role === role)
+      .map(d => Math.min(d.source_point.y, d.drain_point.y)));
+    label(caption, 35, networkTop - 18,
+      {"font-size":20,"opacity":.65,"data-role":"network-caption","data-network":role});
+  }
   const inverters = view.devices.filter(d => d.role === "inverter" && d.kind === "p");
   inverters.forEach(d => label(`Shared ${d.gate_var} → ${d.gate_var}'`, d.source_point.x - 95, top - 75, {"font-size":22}));
   const external = view.nets.filter(n => n.kind === "gate_complement_external");

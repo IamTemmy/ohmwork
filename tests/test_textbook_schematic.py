@@ -25,7 +25,9 @@ def test_textbook_acceptance(expr, count):
     pdn_top = min(p.y for d in layout.devices if d.role == "pdn" for p in (d.source_point,d.drain_point))
     lead = next(w for w in layout.wires if w.id == "LEAD_OUT")
     assert pdn_top - pun_bottom == 200
-    assert lead.p1.y == lead.p2.y == (pun_bottom + pdn_top) // 2
+    expected_y = {"(abc)'":536, "(a+b+c+d)'":1064, "(abc+d)'":664,
+                  "(a'b+c)'":664, "a":500, "a'":500, "(A0'b1+C2)'":664}[expr]
+    assert lead.p1.y == lead.p2.y == expected_y
     assert any(j.net_id == "OUT" and j.point == lead.p1 for j in layout.junctions)
 
 

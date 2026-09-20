@@ -1341,7 +1341,11 @@ _SCHEMATIC_SNAPSHOT_JS = """(rootSelector) => {
     id:g.getAttribute('data-boundary-id'),net_id:g.getAttribute('data-net-id'),
     bars:Array.from(g.querySelectorAll('line')).map(lineCoords),
   }));
-  return { wires, junctions, nets, devices, primitives, ports, boundaries };
+  const captions = Array.from(root.querySelectorAll('[data-role="network-caption"]')).map(el => ({
+    role:el.getAttribute('data-network'),x:Number(el.getAttribute('x')),y:Number(el.getAttribute('y')),
+    text:el.textContent,
+  }));
+  return { wires, junctions, nets, devices, primitives, ports, boundaries, captions };
 }"""
 
 
@@ -1430,7 +1434,24 @@ def _assert_snapshot_matches_model(snapshot: dict, schematic: dict) -> None:
     pdn_top = min(d[t+"_point"]["y"] for d in schematic["devices"] if d["role"] == "pdn" for t in ("source","drain"))
     output_wire = next(w for w in snapshot["wires"] if w["id"] == "LEAD_OUT")
     assert pun_bottom < output_wire["y1"] == output_wire["y2"] < pdn_top
-    assert output_wire["y1"] == (pun_bottom + pdn_top) / 2
+    # Measure the rendered network silhouette, not invisible model anchors:
+    # the last channel shoulder or an actual horizontal OUT bus bounds the gap.
+    tap_y = output_wire["y1"]
+    buses = [w["y1"] for w in snapshot["wires"] if w["net_id"] == "OUT"
+             and w["id"] != "LEAD_OUT" and w["y1"] == w["y2"] and w["x1"] != w["x2"]]
+    upper = max([d["channel"]["y2"] for d in snapshot["devices"] if d["role"] == "pun"]
+                + [y for y in buses if y < tap_y])
+    lower = min([d["channel"]["y1"] for d in snapshot["devices"] if d["role"] == "pdn"]
+                + [y for y in buses if y > tap_y])
+    assert tap_y - upper == lower - tap_y
+    assert len(snapshot["captions"]) == 2
+    for caption in snapshot["captions"]:
+        role = caption["role"]
+        network_top = min(d[t+"_point"]["y"] for d in schematic["devices"]
+                          if d["role"] == role for t in ("source", "drain"))
+        assert caption["y"] == network_top - 18
+        assert caption["x"] == 35
+        assert caption["text"] == {"pun":"PUN · PMOS", "pdn":"PDN · NMOS"}[role]
     assert any(j["net_id"] == "OUT" and (j["x"],j["y"]) == (output_wire["x1"],output_wire["y1"]) for j in snapshot["junctions"])
     device_ids = [d["id"] for d in snapshot["devices"]]
     assert len(device_ids) == len(model_devices)
@@ -1533,6 +1554,8 @@ def test_schematic_svg_matches_the_layout_model_for_a_flat_nand(page, expr):
     ("dual-rail", "(a'b+c)'", True), ("buffer", "a", False),
     ("inverter", "a'", False), ("long-labels", "(A0'b1+C2)'", False),
     ("four-inverters", "a'b'c'd + a'b'cd' + a'bc'd' + ab'c'd'", False),
+    ("aoi22", "(ab+cd)'", False), ("oai31", "((a+b+c)d)'", False),
+    ("nor2", "(a+b)'", False), ("nand4", "(abcd)'", False),
 ])
 def test_textbook_visual_and_export_acceptance(page, name, expr, dual):
     _switch_tab(page, "synth")

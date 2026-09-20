@@ -1536,6 +1536,26 @@ def _textbook_device_points(x: int, y: int, kind: str) -> tuple[Point, Point, Po
     return origin, gate, top if kind == "p" else bottom, bottom if kind == "p" else top
 
 
+def _textbook_output_span(devices: list[Device] | tuple[Device, ...]) -> tuple[int, int]:
+    """Visible ends of the inter-network wire, including symbol lead shoulders.
+
+    A horizontal output bus visibly bounds a network. With a single column,
+    the terminal anchor is invisible on a straight lead, so use the MOS glyph's
+    shoulder instead (28 units from its gate centre, pinned by SVG tests).
+    """
+    ends = {role: [(d, getattr(d, t + "_point")) for d in devices if d.role == role
+                   for t in ("source", "drain") if getattr(d, t + "_net") == "OUT"]
+            for role in ("pun", "pdn")}
+    spine_x = min(p.x for pairs in ends.values() for _, p in pairs)
+    def edge(role: str) -> int:
+        pairs = ends[role]
+        has_bus = len({p.x for _, p in pairs} | {spine_x}) > 1
+        ys = [p.y if has_bus else d.gate_point.y + (28 if role == "pun" else -28)
+              for d, p in pairs]
+        return max(ys) if role == "pun" else min(ys)
+    return edge("pun"), edge("pdn")
+
+
 def _validate_named_ports(layout: Layout, nets: dict[str, Net]) -> None:
     if layout.style != "textbook":
         return
@@ -1570,8 +1590,9 @@ def _validate_named_ports(layout: Layout, nets: dict[str, Net]) -> None:
     pun_bottom = max(p.y for d in layout.devices if d.role == "pun" for p in (d.source_point, d.drain_point))
     pdn_top = min(p.y for d in layout.devices if d.role == "pdn" for p in (d.source_point, d.drain_point))
     output = next(b for b in layout.boundaries if b.net_id == "OUT")
-    if pdn_top - pun_bottom != 200 or output.point.y != (pun_bottom + pdn_top) // 2:
-        raise RuntimeError("output must branch halfway across the PUN/PDN separation")
+    visible_bottom, visible_top = _textbook_output_span(layout.devices)
+    if pdn_top - pun_bottom != 200 or output.point.y != (visible_bottom + visible_top) // 2:
+        raise RuntimeError("output must branch halfway across the visible PUN/PDN separation")
     for b in layout.boundaries:
         if not any(w.net_id == b.net_id and b.point in (w.p1, w.p2) for w in layout.wires):
             raise RuntimeError("supply/output boundary has no continuous wire")
@@ -1581,7 +1602,7 @@ def _validate_named_ports(layout: Layout, nets: dict[str, Net]) -> None:
 
 
 def _textbook_projection(source: Layout) -> Layout:
-    """Re-layout the validated topology, replacing ONLY gate distribution wires.
+    """Re-layout the validated topology with named gate ports and separated networks.
 
     No resynthesis and no expression parsing. Original source/drain net IDs
     and device identities are preserved. Output and ground buses are rerouted
@@ -1633,7 +1654,8 @@ def _textbook_projection(source: Layout) -> Layout:
     pun_y = max(p.y for p in output_points["pun"])
     pdn_y = min(p.y for p in output_points["pdn"])
     spine_x = min(p.x for points in output_points.values() for p in points)
-    middle = Point(spine_x, (pun_y + pdn_y) // 2)
+    visible_bottom, visible_top = _textbook_output_span(devices)
+    middle = Point(spine_x, (visible_bottom + visible_top) // 2)
     bus("OUT", output_points["pun"], pun_y, spine_x)
     bus("OUT", output_points["pdn"], pdn_y, spine_x)
     wires.extend((WireSegment("OUT_UPPER", "OUT", Point(spine_x, pun_y), middle),
