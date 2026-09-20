@@ -367,11 +367,11 @@ def test_synthesis_and_standalone_kmaps_have_independent_panels(page):
     from test_webui_browser import _submit_via_expression
     submit(page,{'expr':'a+b'})
     page.locator('#km-groups [data-proof-toggle=G1]').click()
-    original=page.locator('#km-groups .km-proof-panel').inner_text()
+    original=page.locator('#km-groups .km-proof-panel').evaluate('el=>el.outerHTML')
     _submit_via_expression(page,"((a+b)(c+d))'")
     page.locator('#synth-km-groups [data-proof-toggle=G2]').click()
     assert page.locator('#synth-km-groups .km-proof-panel').get_attribute('data-proof-group')=='G2'
-    assert page.locator('#km-groups .km-proof-panel').inner_text()==original
+    assert page.locator('#km-groups .km-proof-panel').evaluate('el=>el.outerHTML')==original
     ids=page.locator('[id]').evaluate_all('els=>els.map(e=>e.id)')
     assert len(ids)==len(set(ids))
     page.set_viewport_size({'width':360,'height':820})
@@ -379,7 +379,7 @@ def test_synthesis_and_standalone_kmaps_have_independent_panels(page):
     page.click('#synth-new-problem')
     assert page.locator('#synth-km-stage svg').count()==0
     assert page.locator('#synth-km-groups').inner_text()==''
-    assert page.locator('#km-groups .km-proof-panel').inner_text()==original
+    assert page.locator('#km-groups .km-proof-panel').evaluate('el=>el.outerHTML')==original
 
 
 def test_synthesis_kmap_discards_response_after_edit(page,server_url):
