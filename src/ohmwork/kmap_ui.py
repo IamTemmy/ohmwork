@@ -16,6 +16,7 @@ CSS = r"""
   .km-group-card strong { display:block; margin-bottom:.3rem; }
   .km-group-card small { display:block; opacity:.8; line-height:1.5; }
   .km-group-card:focus-visible, #panel-kmap button:focus-visible { outline:3px solid #5686ef; outline-offset:3px; }
+  #panel-kmap > .km-actions { margin-top:1rem; }
   .km-actions { display:flex; flex-wrap:wrap; gap:.5rem; }
   .km-input-grid { overflow-x:auto; max-height:320px; margin-bottom:1rem; }
   .km-input-grid th { position:sticky; top:0; background:light-dark(white,#161616); }
@@ -30,19 +31,19 @@ HTML = r"""
     <label>Result form
       <select id="km-form"><option value="SOP">Sum of products · group 1s</option><option value="POS">Product of sums · group 0s</option></select>
     </label>
-    <label>Output name <input id="km-output-name" value="F" maxlength="2" autocomplete="off"></label>
+    <label>Output name <input type="text" id="km-output-name" value="F" maxlength="2" autocomplete="off"></label>
   </div>
   <label id="km-expr-field">Expression
-    <input id="km-expr" placeholder="e.g. ab + a'c" autocomplete="off" spellcheck="false">
+    <input type="text" id="km-expr" placeholder="e.g. ab + a'c" autocomplete="off" spellcheck="false">
   </label>
   <div id="km-truth-fields" hidden>
-    <label>Variables in order (1–4, comma-separated)<input id="km-vars" placeholder="a, b, c" autocomplete="off" spellcheck="false"></label>
+    <label>Variables in order (1–4, comma-separated)<input type="text" id="km-vars" placeholder="a, b, c" autocomplete="off" spellcheck="false"></label>
     <div class="km-input-grid" id="km-input-grid"></div>
     <div id="km-minterm-fields" hidden>
-      <label>1-cell indices (leave empty for none)<input id="km-ones" placeholder="0, 2, 8, 10" autocomplete="off"></label>
-      <label>Don't-care indices (optional)<input id="km-dc" placeholder="1, 3" autocomplete="off"></label>
+      <label>1-cell indices (leave empty for none)<input type="text" id="km-ones" placeholder="0, 2, 8, 10" autocomplete="off"></label>
+      <label>Don't-care indices (optional)<input type="text" id="km-dc" placeholder="1, 3" autocomplete="off"></label>
     </div>
-    <label id="km-bits-field" hidden>Values in binary row order (0/1/X)<input id="km-bits" placeholder="00010111" autocomplete="off" spellcheck="false"></label>
+    <label id="km-bits-field" hidden>Values in binary row order (0/1/X)<input type="text" id="km-bits" placeholder="00010111" autocomplete="off" spellcheck="false"></label>
   </div>
   <div class="km-actions"><button type="submit" class="submit" id="km-run">Build K-map</button><button type="button" class="copy-btn" id="km-new">New problem</button></div>
   <p id="km-error" class="km-error" role="alert"></p>
