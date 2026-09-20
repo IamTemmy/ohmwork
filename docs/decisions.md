@@ -720,11 +720,11 @@ output into a standalone render to confirm export fidelity):
 
 ---
 
-## D18 — PROPOSED, not yet approved. What does a K-map view show, and how is it built?
+## D18 — Reviewed for Phase 1 implementation. What does a K-map view show, and how is it built?
 
-**Status:** proposed, pending review — **implementation must not begin on any phase until this
-entry and its acceptance tests are explicitly reviewed and approved**, the same standing rule
-D16 and D17 both followed, and for the same reason: a K-map grouping is a diagram that encodes
+**Status:** reviewed by Codex against the engine on 2026-09-20; Phase 1 implementation
+authorized by the owner in the accompanying conversation. Claude independently reviews the
+Phase 1 PR before merge and before Phase 2 starts. The reason for this staged review remains: a K-map grouping is a diagram that encodes
 an algebraic claim (which minterms this term covers, why these cells share a group) and can be
 technically wrong while looking attractive — exactly the risk class the decision-entry-first
 rule exists to catch, not a lesser one because it's "just" a grid instead of a transistor
@@ -795,9 +795,9 @@ actually matches `chosen.label` (point 5).
 
 **3. Grid layout: Gray-code ordering, cell-to-minterm mapping.** Proposed convention (needs
 review, but pinned to something concrete rather than left to be improvised mid-build): split
-`var_order` into a row-variable group (the first `ceil(n/2)` variables, in D10/`var_order`
-order) and a column-variable group (the remaining `floor(n/2)`) — 4 variables: 2×2 (4×4 grid);
-3 variables: 2×1 (4×2 grid); 2 variables: 1×1 (2×2 grid); 1 variable: 1×0 (a 2×1 grid, degenerate
+`var_order` into a row-variable group (the first `floor(n/2)` variables, in D10/`var_order`
+order) and a column-variable group (the remaining `ceil(n/2)`) — 4 variables: 2×2 (4×4 grid);
+3 variables: 1×2 (2×4 grid); 2 variables: 1×1 (2×2 grid); 1 variable: 0×1 (a 1×2 grid, degenerate
 but must still render legibly, never crash or get special-cased away). Each axis is labeled in
 standard reflected Gray-code order (2 values: `0,1`; 4 values: `00,01,11,10`) — never plain
 binary, which would break the adjacency property groups depend on. A cell's row-Gray-code and
@@ -911,5 +911,62 @@ reviewed stages):
 Each phase is its own PR(s), independently reviewed by Claude in an isolated environment before
 merge — the same adversarial-review discipline as D17's four rounds.
 
-**Date:** 2026-09-19 (proposed). Not yet approved — implementation on any phase must not begin
-until this entry and its acceptance tests are explicitly approved.
+**Date:** 2026-09-19 (proposed); reviewed/amended 2026-09-20 under the owner's explicit
+implementation authorization. Phase 1 only proceeds now; independent review precedes Phase 2.
+
+
+### D18 review clarifications — 2026-09-20 (before implementation)
+
+These clarify/supersede ambiguous wording above:
+
+- **Polarity:** zero-groups yield an SOP for F′, or, after complementing each product
+  into a sum and ANDing, a POS for F. Those are different expressions, never the same
+  formula with a different output label. The model records both the grouped-target SOP
+  and the resulting expression for F. AOI reads chosen.f_prime directly as that target SOP;
+  OAI structurally complements chosen.f_prime to recover its original SOP for F. Unsupported
+  shapes are rejected rather than expanded, reoptimized, or guessed. Existing AOI/OAI ASTs
+  (including bare literals/products) are reconstructible. The synthesis adapter must check
+  exact AST round-trip back to the chosen expression, not equivalence alone.
+- **Grid choice:** first floor(n/2) variables on rows, remainder on columns: 1×2, 2×2,
+  2×4, 4×4. This is an explicit product convention, not a claim that transposed maps are
+  mathematically wrong. Zero-bit row labels are the empty bit string. Variable order is
+  the supplied order, never alphabetical sorting. Minterm numbering remains binary.
+- **Scope:** K-map Phase 1 supports 1–4 variables; this does not assert every existing
+  derivation/minimization endpoint has the synthesis variable cap.
+- **Reuse:** the existing Expr-returning minimizer already retains sufficient cube structure
+  to recover exact group membership without parsing text. No optimization refactor is needed.
+  A small additive prime-pattern query may expose the existing QM output for essentiality;
+  production code must not introduce a second minimizer. Synthesis reconstruction never calls
+  minimal_covers/minimize again; examining all primes for essentiality is not cover selection.
+- **Constants:** SOP with no required ones is F=0/no groups; POS with no required zeros is
+  F=1/no groups. If at least one required target cell exists and every other cell is a
+  don't-care, one whole-map group yields F=1 (SOP) or F=0 (POS). Thus an entirely unspecified
+  map deterministically chooses 0 in SOP and 1 in POS; both are valid and explicitly reported.
+  A standalone map may be constant even though CMOS synthesis currently rejects constant
+  networks; this phase does not change that existing synthesis behavior.
+- **Don't-cares:** keep the original X value, group-membership/used status, and selected F
+  assignment separately. An uncovered X is assigned 0 for SOP or 1 for POS. A used X takes
+  the grouping value. Integration checks assignments against the chosen candidate including
+  the engine's verification.dont_care_assignments; it never erases input provenance.
+- **Essentiality:** essential means a prime implicant uniquely covers a required target cell
+  among ALL legal prime implicants, not merely among selected groups. Store witness minterms.
+  Do not add a group containing only don't-cares. Record term count/literal count and all
+  tied standalone expressions, but do not claim to minimize transistor count.
+- **Verification:** separately enumerate legal Boolean cubes in the checker (at most 3^4)
+  to verify prime/essential status and optimal standalone cover cost without relying on QM
+  or Petrick. Recompute fixed/varying variable facts from group members, prove complete cube
+  membership (a power-of-two count alone is insufficient), exact legal cell membership,
+  required coverage, term polarity, deterministic IDs, expression equivalence on all care
+  rows, and don't-care assignments. Verify row/column mappings and visible rectangle pieces
+  against their actual cell sets; wrapped pieces remain one group with one ID.
+- **Additional acceptance tests:** invalid inputs, variable permutations/letter-digit names,
+  all-X maps in both forms, checker mutation tests (wrong membership, diagonal/non-cube group,
+  wrong polarity/explanation/essentiality, missing or duplicate coverage, wrong grid/pieces,
+  source substitution), determinism across hash seeds, exhaustive fully specified 1–3-variable
+  functions and 1–2-variable ternary tables, representative 4-variable tables. Test the
+  synthesis tie case where inverter cost chooses a different cover from standalone D5.
+- **Phase boundary:** Phase 1 exposes immutable Python model objects and builders, including
+  a synthesis adapter and input provenance on SynthesisResult. It changes no CLI output,
+  existing API JSON, schematic, or web interface. Browser overlap/geometry/export assertions
+  (including actual path coverage, not merely data-* labels) land with Phase 2. Phase 3 wires
+  the adapter into synthesis UI without rerunning synthesis or selecting a new candidate.
