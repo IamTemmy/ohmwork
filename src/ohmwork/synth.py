@@ -294,6 +294,10 @@ class SynthesisResult:
     chosen: Candidate  # the exact winning candidate (identity-comparable against other_candidates)
     other_candidates: tuple[Candidate, ...]  # every candidate considered, for "show the work"
     verification: VerificationResult  # D7: always populated, always checked before return
+    # D18: immutable input provenance; None distinguishes legacy/manual results
+    # from a real empty set. Appended defaults preserve existing constructors.
+    minterms: frozenset[int] | None = None
+    dont_cares: frozenset[int] | None = None
 
 
 def synthesize(
@@ -394,4 +398,6 @@ def synthesize(
         chosen=chosen,
         other_candidates=tuple(candidates),
         verification=verification,
+        minterms=frozenset(minterms),
+        dont_cares=frozenset(dont_cares),
     )
