@@ -18,7 +18,14 @@ CSS = r"""
   .km-group-card:focus-visible, #panel-kmap button:focus-visible { outline:3px solid #5686ef; outline-offset:3px; }
   #panel-kmap > .km-actions { margin-top:1rem; }
   .km-group-section { min-width:0; border-left:4px solid var(--group-color); border-radius:8px; }
-  .km-group-section:has(details[open]), .km-group-list > [data-boolean-reference] { grid-column:1 / -1; }
+  .km-proof-panel, .km-group-list > [data-boolean-reference] { grid-column:1 / -1; }
+  .km-proof-panel { min-width:0; border-left:4px solid var(--group-color); border-radius:8px; }
+  .km-proof-panel[hidden] { display:none; }
+  .km-proof-heading { display:flex; justify-content:space-between; align-items:center; gap:1rem; }
+  .km-proof-heading h3 { margin:0; }
+  .km-proof-toggle { margin:.7rem; padding:.4rem; color:inherit; background:transparent; border:0; font:inherit; font-weight:600; cursor:pointer; text-align:left; }
+  .km-proof-toggle::before { content:'▸ '; }
+  .km-proof-toggle[aria-expanded=true]::before { content:'▾ '; }
   .km-group-section .km-group-card { width:100%; border-left:0; }
   .km-work { padding:.7rem; overflow-wrap:normal; word-break:normal; line-height:1.55; }
   .km-work summary { cursor:pointer; font-weight:600; }
@@ -165,6 +172,41 @@ function renderKmap(view, host, cards, onSelection) {
   node('text',{x:24,y:grid.top+grid.rows*grid.cell+28,class:'km-small'},
     'Same group ID = one group. Opposite edges are adjacent.',svg);
   if (!view.groups.length) node('text',{x:24,y:view.legend_y,class:'km-small'},'No groups needed: the selected function is constant.',svg);
+  const proof=document.createElement('section'); proof.className='km-proof-panel km-work';
+  proof.id=cards.id+'-proof-panel'; proof.hidden=true; proof.setAttribute('role','region');
+  proof.setAttribute('aria-labelledby',proof.id+'-title');
+  let proofToggle=null;
+  function closeProof() {
+    const toggle=proofToggle;
+    if(toggle) toggle.setAttribute('aria-expanded','false');
+    proofToggle=null; proof.hidden=true; proof.replaceChildren(); delete proof.dataset.proofGroup;
+    if(toggle) toggle.focus();
+  }
+  function showProof(group,toggle) {
+    if(proofToggle===toggle) {closeProof();return;}
+    if(proofToggle) proofToggle.setAttribute('aria-expanded','false');
+    proofToggle=toggle; toggle.setAttribute('aria-expanded','true');
+    proof.replaceChildren(); proof.hidden=false; proof.dataset.proofGroup=group.id;
+    proof.style.setProperty('--group-color',group.color);
+    const heading=document.createElement('div'); heading.className='km-proof-heading';
+    const title=document.createElement('h3');title.id=proof.id+'-title';
+    title.textContent=group.work.title+': '+group.term+' — Why this group simplifies';heading.appendChild(title);
+    const close=document.createElement('button');close.type='button';close.textContent='Close explanation';
+    close.addEventListener('click',closeProof);heading.appendChild(close);proof.appendChild(heading);
+    if(group.work.note) {const note=document.createElement('p'); note.textContent=group.work.note; proof.appendChild(note);}
+    const scroll=document.createElement('div'); scroll.className='km-work-scroll';
+    const table=document.createElement('table'); table.setAttribute('aria-label',group.work.title+' simplification steps');
+    const head=document.createElement('thead'); const hr=document.createElement('tr');
+    for(const text of ['Expression','Law and reason']) {const th=document.createElement('th');th.scope='col';th.textContent=text;hr.appendChild(th);}
+    head.appendChild(hr);table.appendChild(head);const body=document.createElement('tbody');
+    for(const step of group.work.steps) {const tr=document.createElement('tr');
+      for(const text of [step.expression,step.law+': '+step.reason]) {const td=document.createElement('td');td.textContent=text;tr.appendChild(td);}
+      body.appendChild(tr);
+    }
+    table.appendChild(body);scroll.appendChild(table);proof.appendChild(scroll);
+
+  }
+  proof.addEventListener('keydown',e=>{if(e.key==='Escape') {e.preventDefault();closeProof();}});
   view.groups.forEach((group,i)=>{
     const y=group.legend_y;
     const legend=node('g',{class:'km-legend','data-legend-id':group.id},null,svg);
@@ -183,19 +225,12 @@ function renderKmap(view, host, cards, onSelection) {
     section.style.setProperty('--group-color',group.color); section.appendChild(button);
     const expansion=document.createElement('p'); expansion.className='km-work';
     expansion.textContent=group.work.steps[0].expression+' = '+group.work.result; section.appendChild(expansion);
-    const details=document.createElement('details'); details.className='km-work'; details.dataset.proofGroup=group.id;
-    const summary=document.createElement('summary'); summary.textContent='Why this group simplifies'; details.appendChild(summary);
-    if(group.work.note) {const note=document.createElement('p'); note.textContent=group.work.note; details.appendChild(note);}
-    const scroll=document.createElement('div'); scroll.className='km-work-scroll';
-    const table=document.createElement('table'); table.setAttribute('aria-label',group.work.title+' simplification steps');
-    const head=document.createElement('thead'); const hr=document.createElement('tr');
-    for(const text of ['Expression','Law and reason']) {const th=document.createElement('th');th.scope='col';th.textContent=text;hr.appendChild(th);}
-    head.appendChild(hr);table.appendChild(head);const body=document.createElement('tbody');
-    for(const step of group.work.steps) {const tr=document.createElement('tr');
-      for(const text of [step.expression,step.law+': '+step.reason]) {const td=document.createElement('td');td.textContent=text;tr.appendChild(td);}
-      body.appendChild(tr);
-    }
-    table.appendChild(body);scroll.appendChild(table);details.appendChild(scroll);section.appendChild(details);
+    const toggle=document.createElement('button'); toggle.type='button'; toggle.className='km-proof-toggle';
+    toggle.textContent='Why this group simplifies'; toggle.dataset.proofToggle=group.id;
+    toggle.setAttribute('aria-expanded','false'); toggle.setAttribute('aria-controls',proof.id);
+    toggle.addEventListener('click',()=>showProof(group,toggle));
+    toggle.addEventListener('keydown',e=>{if(e.key==='Escape' && !proof.hidden) {e.preventDefault();closeProof();}});
+    section.appendChild(toggle);
     cards.appendChild(section); buttons.push(button);
   });
   view.footer_lines.forEach((line,i)=>node('text',{x:24,y:view.footer_y+i*20,class:'km-small',
@@ -203,6 +238,7 @@ function renderKmap(view, host, cards, onSelection) {
   const reference=document.createElement('details'); reference.className='km-work'; reference.dataset.booleanReference='true';
   const refTitle=document.createElement('summary');refTitle.textContent='Boolean algebra reference';reference.appendChild(refTitle);
   for(const law of view.laws) {const p=document.createElement('p');p.textContent=law.name+': '+law.identity;reference.appendChild(p);}
+  cards.appendChild(proof);
   cards.appendChild(reference);
   host.appendChild(svg);
   let pinned=null;
