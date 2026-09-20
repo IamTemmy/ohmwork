@@ -95,7 +95,7 @@ class Device:
     source_net: str
     drain_net: str
     role: str  # "pdn" | "pun" | "inverter"
-    x: int
+    x: int  # wired: device-pitch cells; textbook: half-pitch cells (100 units)
     y: int
     origin: Point
     gate_point: Point
@@ -1529,31 +1529,24 @@ def _textbook_device_points(x: int, y: int, kind: str) -> tuple[Point, Point, Po
     Terminal locations are electrical model geometry. The shorter channel,
     electrode and bent source/drain leads inside this box are symbol geometry.
     """
-    origin = Point(200 * x + 100, 200 * y)
+    origin = Point(100 * x + 100, 100 * y)
     top = Point(origin.x + 100, origin.y)
     bottom = Point(top.x, top.y + 200)
     gate = Point(top.x - 55, top.y + 100)
     return origin, gate, top if kind == "p" else bottom, bottom if kind == "p" else top
 
 
-def _textbook_output_span(devices: list[Device] | tuple[Device, ...]) -> tuple[int, int]:
-    """Visible ends of the inter-network wire, including symbol lead shoulders.
-
-    A horizontal output bus visibly bounds a network. With a single column,
-    the terminal anchor is invisible on a straight lead, so use the MOS glyph's
-    shoulder instead (28 units from its gate centre, pinned by SVG tests).
-    """
-    ends = {role: [(d, getattr(d, t + "_point")) for d in devices if d.role == role
-                   for t in ("source", "drain") if getattr(d, t + "_net") == "OUT"]
-            for role in ("pun", "pdn")}
-    spine_x = min(p.x for pairs in ends.values() for _, p in pairs)
-    def edge(role: str) -> int:
-        pairs = ends[role]
-        has_bus = len({p.x for _, p in pairs} | {spine_x}) > 1
-        ys = [p.y if has_bus else d.gate_point.y + (28 if role == "pun" else -28)
-              for d, p in pairs]
-        return max(ys) if role == "pun" else min(ys)
-    return edge("pun"), edge("pdn")
+def _textbook_output_span(devices: list[Device] | tuple[Device, ...],
+                          wires: list[WireSegment] | tuple[WireSegment, ...]) -> tuple[int, int]:
+    """Visible network edges: actual OUT buses, or MOS channel shoulders."""
+    pun = [d for d in devices if d.role == "pun"]
+    pdn = [d for d in devices if d.role == "pdn"]
+    pun_bottom = max(p.y for d in pun for p in (d.source_point, d.drain_point))
+    pdn_top = min(p.y for d in pdn for p in (d.source_point, d.drain_point))
+    buses = [w.p1.y for w in wires if w.net_id == "OUT" and w.id != "LEAD_OUT"
+             and w.p1.y == w.p2.y and w.p1.x != w.p2.x]
+    return (max([d.gate_point.y + 28 for d in pun] + [y for y in buses if y <= pun_bottom]),
+            min([d.gate_point.y - 28 for d in pdn] + [y for y in buses if y >= pdn_top]))
 
 
 def _validate_named_ports(layout: Layout, nets: dict[str, Net]) -> None:
@@ -1590,7 +1583,7 @@ def _validate_named_ports(layout: Layout, nets: dict[str, Net]) -> None:
     pun_bottom = max(p.y for d in layout.devices if d.role == "pun" for p in (d.source_point, d.drain_point))
     pdn_top = min(p.y for d in layout.devices if d.role == "pdn" for p in (d.source_point, d.drain_point))
     output = next(b for b in layout.boundaries if b.net_id == "OUT")
-    visible_bottom, visible_top = _textbook_output_span(layout.devices)
+    visible_bottom, visible_top = _textbook_output_span(layout.devices, layout.wires)
     if pdn_top - pun_bottom != 200 or output.point.y != (visible_bottom + visible_top) // 2:
         raise RuntimeError("output must branch halfway across the visible PUN/PDN separation")
     for b in layout.boundaries:
@@ -1601,68 +1594,96 @@ def _validate_named_ports(layout: Layout, nets: dict[str, Net]) -> None:
             raise RuntimeError("port or boundary is out of bounds")
 
 
-def _textbook_projection(source: Layout) -> Layout:
-    """Re-layout the validated topology with named gate ports and separated networks.
+def _textbook_projection(source: Layout, result: SynthesisResult) -> Layout:
+    """Balance series/parallel subtrees without changing any device or net identity.
 
-    No resynthesis and no expression parsing. Original source/drain net IDs
-    and device identities are preserved. Output and ground buses are rerouted
-    around the PUN/PDN gap; internal network wires keep their topology. Shared
-    inverter drain ports retain the coincident PMOS/NMOS drain connection.
+    Series children are centered horizontally; parallel children vertically.
+    Root networks share a center axis. Integer half-pitch cells allow symmetric
+    placement for even and odd branch widths without floating-point rounding.
+    Every electrical connection is reconstructed as a real wire and revalidated.
     """
-    core_width = source.width - len(source.primary_nets) - len(source.complement_nets) - len(source.inverter_driven_vars)
-    rail_cols = len(source.primary_nets) + len(source.complement_nets)
-    inverter_start = (core_width + rail_cols) * CELL
+    core_width = max(_size(result.pun)[0], _size(result.pdn)[0])
+    devices: list[Device] = []
+    wires: list[WireSegment] = []
 
-    def transform(p: Point) -> Point:
-        x = 2 * p.x + 100
-        if p.x >= inverter_start:
-            x += 200 - 200 * rail_cols
-        return Point(x, 2 * p.y)
+    def wire(net: str, a: Point, b: Point) -> None:
+        if a != b:
+            wires.append(WireSegment(f"BAL_{len(wires)}", net, a, b))
 
-    devices = []
-    for d in source.devices:
-        x = d.x - rail_cols + 1 if d.role == "inverter" else d.x
-        y = d.y + (1 if d.role == "pdn" else 0)
-        origin, gate, src, drain = _textbook_device_points(x, y, d.kind)
-        devices.append(replace(d, x=x, y=y, origin=origin, gate_point=gate, source_point=src, drain_point=drain))
-    gate_nets = {n.id for n in source.nets if n.kind.startswith("gate_")}
-    pdn_nets = {n for d in devices if d.role == "pdn" for n in (d.source_net, d.drain_net)} - {"OUT", "GND"}
-    wires = []
-    for w in source.wires:
-        if w.net_id in gate_nets | {"OUT", "GND"}:
-            continue
-        a, b = transform(w.p1), transform(w.p2)
-        if w.net_id in pdn_nets:
-            a, b = Point(a.x, a.y + 200), Point(b.x, b.y + 200)
-        wires.append(replace(w, p1=a, p2=b))
+    def bus(net: str, points: list[Point], y: int, extra_x: int | None = None) -> None:
+        xs = sorted({p.x for p in points} | ({extra_x} if extra_x is not None else set()))
+        for p in sorted(set(points), key=lambda p: (p.x, p.y)):
+            wire(net, p, Point(p.x, y))
+        for left, right in zip(xs, xs[1:]):
+            wire(net, Point(left, y), Point(right, y))
 
-    def bus(net_id: str, terminals: list[Point], bus_y: int, extra_x: int | None = None) -> None:
-        """Join real diffusion terminals to one continuous, explicitly split bus."""
-        xs = sorted({p.x for p in terminals} | ({extra_x} if extra_x is not None else set()))
-        for p in sorted(set(terminals), key=lambda p: (p.x, p.y)):
-            end = Point(p.x, bus_y)
-            if p != end:
-                wires.append(WireSegment(f"{net_id}_DROP_{len(wires)}", net_id, p, end))
-        for a, b in zip(xs, xs[1:]):
-            wires.append(WireSegment(f"{net_id}_BUS_{len(wires)}", net_id, Point(a, bus_y), Point(b, bus_y)))
+    def place(network: Network, role: str, x: int, y: int, originals) -> tuple[list[Point], list[Point], str, str]:
+        if isinstance(network, Transistor):
+            d = next(originals)
+            var, comp = _var_and_complement(network.literal)
+            if (d.kind, d.gate_var, d.gate_complemented) != (network.kind, var, comp):
+                raise RuntimeError("balanced traversal changed device identity")
+            origin, gate, src, drain = _textbook_device_points(x, y, d.kind)
+            devices.append(replace(d, x=x, y=y, origin=origin, gate_point=gate,
+                                   source_point=src, drain_point=drain))
+            return ([src], [drain], d.source_net, d.drain_net) if d.kind == "p" else ([drain], [src], d.drain_net, d.source_net)
+        width, height = _size(network)
+        if isinstance(network, Series):
+            first = previous = None
+            for child in network.branches:
+                cw, ch = _size(child)
+                current = place(child, role, x + width - cw, y, originals)
+                if previous:
+                    if previous[3] != current[2]:
+                        raise RuntimeError("balanced series boundary changed net identity")
+                    bus(current[2], previous[1] + current[0], y * 100)
+                else:
+                    first = current
+                previous = current
+                y += 2 * ch
+            return first[0], previous[1], first[2], previous[3]
+        if isinstance(network, Parallel):
+            tops, bottoms = [], []
+            top_net = bottom_net = None
+            for child in network.branches:
+                cw, ch = _size(child)
+                tp, bp, tn, bn = place(child, role, x, y + height - ch, originals)
+                if top_net is not None and (tn, bn) != (top_net, bottom_net):
+                    raise RuntimeError("balanced parallel boundary changed net identity")
+                top_net, bottom_net = tn, bn
+                for points, target_y, net, collected in ((tp, y*100, tn, tops), (bp, (y+2*height)*100, bn, bottoms)):
+                    for p in points:
+                        end = Point(p.x, target_y)
+                        wire(net, p, end)
+                        collected.append(end)
+                x += 2 * cw
+            return tops, bottoms, top_net, bottom_net
+        raise TypeError(f"unknown network {network!r}")
 
-    output_points = {
-        role: [getattr(d, term + "_point") for d in devices if d.role == role
-               for term in ("source", "drain") if getattr(d, term + "_net") == "OUT"]
-        for role in ("pun", "pdn")
-    }
-    pun_y = max(p.y for p in output_points["pun"])
-    pdn_y = min(p.y for p in output_points["pdn"])
-    spine_x = min(p.x for points in output_points.values() for p in points)
-    visible_bottom, visible_top = _textbook_output_span(devices)
-    middle = Point(spine_x, (visible_bottom + visible_top) // 2)
-    bus("OUT", output_points["pun"], pun_y, spine_x)
-    bus("OUT", output_points["pdn"], pdn_y, spine_x)
-    wires.extend((WireSegment("OUT_UPPER", "OUT", Point(spine_x, pun_y), middle),
-                  WireSegment("OUT_LOWER", "OUT", middle, Point(spine_x, pdn_y))))
-    ground_points = [getattr(d, term + "_point") for d in devices
-                     for term in ("source", "drain") if getattr(d, term + "_net") == "GND"]
-    bus("GND", ground_points, max(p.y for p in ground_points))
+    roots = {}
+    for role, network, y in (("pun", result.pun, 2), ("pdn", result.pdn, 4 + 2*source.pun_height)):
+        originals = iter(d for d in source.devices if d.role == role)
+        roots[role] = place(network, role, core_width - _size(network)[0], y, originals)
+        if next(originals, None) is not None:
+            raise RuntimeError("balanced traversal omitted devices")
+    for index, var in enumerate(source.inverter_driven_vars):
+        for d in [d for d in source.devices if d.role == "inverter" and d.gate_var == var]:
+            x, y = 2*(core_width+1+index), 2*d.y
+            origin, gate, src, drain = _textbook_device_points(x, y, d.kind)
+            devices.append(replace(d, x=x, y=y, origin=origin, gate_point=gate,
+                                   source_point=src, drain_point=drain))
+
+    spine_x = 100 * (core_width + 1)
+    pun_y, pdn_y = 200 + 200*source.pun_height, 400 + 200*source.pun_height
+    bus("OUT", roots["pun"][1], pun_y, spine_x)
+    bus("OUT", roots["pdn"][0], pdn_y, spine_x)
+    visible_bottom, visible_top = _textbook_output_span(devices, wires)
+    middle = Point(spine_x, (visible_bottom + visible_top)//2)
+    wires.extend((WireSegment("OUT_UPPER", "OUT", Point(spine_x,pun_y), middle),
+                  WireSegment("OUT_LOWER", "OUT", middle, Point(spine_x,pdn_y))))
+    for net, root_points in (("VDD", roots["pun"][0]), ("GND", roots["pdn"][1])):
+        points = root_points + [d.source_point for d in devices if d.role == "inverter" and d.source_net == net]
+        bus(net, points, root_points[0].y, spine_x)
     ports = []
     nets = {n.id: n for n in source.nets}
     for d in devices:
@@ -1681,9 +1702,8 @@ def _textbook_projection(source: Layout) -> Layout:
             start = middle
             anchor = Point(core_width * 200 + 65, start.y)
         else:
-            rail_y = min(p.y for p in points) if net_id == "VDD" else max(p.y for p in points)
-            rail_points = [p for p in points if p.y == rail_y]
-            start = Point((min(p.x for p in rail_points) + max(p.x for p in rail_points)) // 2, rail_y)
+            rail_y = roots["pun"][0][0].y if net_id == "VDD" else roots["pdn"][1][0].y
+            start = Point(spine_x, rail_y)
             anchor = Point(start.x, start.y + (-65 if net_id == "VDD" else 65))
             # Split the bus at a new supply tee so its connection is explicit.
             for i, w in enumerate(wires):
@@ -1701,7 +1721,7 @@ def _textbook_projection(source: Layout) -> Layout:
 def build_textbook_schematic(result: SynthesisResult, output_name: str) -> Layout:
     """A named-port schematic, independently gated after the geometry transform."""
     source = build_schematic(result, output_name)
-    layout = _textbook_projection(source)
+    layout = _textbook_projection(source, result)
     if layout.style != "textbook":
         raise RuntimeError("textbook projection returned the wrong layout style")
     validate_layout_geometry(layout)

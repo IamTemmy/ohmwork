@@ -79,7 +79,7 @@ def test_output_name_changes_only_output_label():
 
 
 def test_textbook_builder_rejects_a_wired_layout_substitution(monkeypatch):
-    monkeypatch.setattr("ohmwork.schematic._textbook_projection", lambda source: source)
+    monkeypatch.setattr("ohmwork.schematic._textbook_projection", lambda source, result: source)
     with pytest.raises(RuntimeError, match="wrong layout style"):
         build_textbook_schematic(synthesize_from_input(expr="(abc)'"), "F")
 
@@ -102,3 +102,48 @@ def test_exhaustive_small_functions_and_four_variable_dont_cares():
             assert verify_layout(l,variables,ones,dc).passed
             checked += 1
     assert checked >= 1000
+
+
+def test_aoi31_balances_both_d_devices_and_preserves_electrical_identity():
+    from ohmwork.schematic import build_schematic
+    r = synthesize_from_input(expr="(abc+d)'")
+    l = build_textbook_schematic(r, "M")
+    wired = build_schematic(r, "M")
+    identity = lambda d: (d.id,d.role,d.kind,d.gate_net,d.source_net,d.drain_net)
+    assert sorted(map(identity,l.devices)) == sorted(map(identity,wired.devices))
+    pun = {d.gate_var:d for d in l.devices if d.role == "pun"}
+    pdn = {d.gate_var:d for d in l.devices if d.role == "pdn"}
+    assert pun['d'].source_point.x == (pun['a'].source_point.x + pun['c'].source_point.x)/2
+    assert pdn['d'].gate_point.y == pdn['b'].gate_point.y
+    out = next(b.point for b in l.boundaries if b.net_id == 'OUT')
+    lead = next(w for w in l.wires if w.id == 'LEAD_OUT')
+    assert lead.p1.x == pun['d'].source_point.x
+    assert out.y == lead.p1.y
+    assert (pdn['a'].source_point.x + pdn['d'].source_point.x)/2 == lead.p1.x
+
+
+@pytest.mark.parametrize('expr', ["(abc)'", "(a+b+c+d)'", "(abc+d)'", "((a+b+c)d)'",
+    "(ab+cd)'", "(a'b+c)'", "a", "a'", "a'b'c'd+a'b'cd'+a'bc'd'+ab'c'd'"])
+def test_recursive_balance_is_based_on_subtree_extents(expr):
+    from ohmwork.network import Transistor, Series, Parallel
+    r = synthesize_from_input(expr=expr)
+    l = build_textbook_schematic(r, 'Y')
+    roots = []
+    for role, network in [('pun',r.pun),('pdn',r.pdn)]:
+        devices = iter(d for d in l.devices if d.role == role)
+        def walk(n):
+            if isinstance(n, Transistor):
+                d=next(devices)
+                return [d]
+            children = [walk(c) for c in n.branches]
+            bounds = [(min(d.source_point.x for d in ds), max(d.source_point.x for d in ds),
+                       min(d.gate_point.y for d in ds), max(d.gate_point.y for d in ds)) for ds in children]
+            if isinstance(n, Series):
+                assert len({left+right for left,right,top,bottom in bounds}) == 1
+            elif isinstance(n, Parallel):
+                assert len({top+bottom for left,right,top,bottom in bounds}) == 1
+            return [d for ds in children for d in ds]
+        ds=walk(network)
+        roots.append(min(d.source_point.x for d in ds)+max(d.source_point.x for d in ds))
+        assert next(devices,None) is None
+    assert roots[0] == roots[1]
