@@ -368,6 +368,7 @@ _PAGE = r"""<!doctype html>
 
     <section class="section" aria-label="K-map for the chosen circuit">
       <h3>K-map for this circuit</h3>
+      <p id="synth-km-selection-reason"></p>
       <p id="synth-km-connection"></p>
       <p class="mono" id="synth-km-equation"></p>
       <p id="synth-km-pdn"></p>
@@ -1225,6 +1226,7 @@ function renderSynthResult(view, rawOutput, schematic, kmap) {
   clearChildren($("synth-km-stage"));
   clearChildren($("synth-km-groups"));
   synthKmapReport = kmap.output;
+  $("synth-km-selection-reason").textContent = kmap.selection_reason;
   $("synth-km-connection").textContent = kmap.connection;
   $("synth-km-equation").textContent = kmap.view.output_name + " = " + kmap.view.expression;
   $("synth-km-pdn").textContent = kmap.pdn;
@@ -1423,7 +1425,7 @@ function clearSynthResultDisplay() {
   lastSchematicView = null;
   synthKmapDiagram = null;
   synthKmapReport = "";
-  ["synth-km-stage","synth-km-groups","synth-km-connection","synth-km-equation",
+  ["synth-km-stage","synth-km-groups","synth-km-selection-reason","synth-km-connection","synth-km-equation",
    "synth-km-pdn","synth-km-selection","synth-km-assignments"].forEach(id=>clearChildren($(id)));
   $("synth-km-copy").textContent = "Copy K-map explanation";
 
@@ -1673,8 +1675,9 @@ def _handle_synth(environ, start_response):
                f"The NMOS network conducts when {output_name}' is 1.")
         xs = [f"m{c.minterm} → {c.assigned_value}" for c in sorted(model.cells, key=lambda c:c.minterm) if c.value == "X"]
         assignments = "Original X cells retained; circuit assignments: " + "; ".join(xs) if xs else ""
-        kmap = {"view": kmap_view, "connection": connection, "pdn": pdn, "assignments": assignments,
-                "output": connection + "\n" + pdn + "\n" + format_kmap_report(model)}
+        selection_reason = view["reasoning"]["kmap_selection_note"]
+        kmap = {"selection_reason": selection_reason, "view": kmap_view, "connection": connection, "pdn": pdn, "assignments": assignments,
+                "output": selection_reason + "\n" + connection + "\n" + pdn + "\n" + format_kmap_report(model)}
     except (ParseError, ValueError, RuntimeError) as e:
         return _json_response(start_response, "200 OK", {"ok": False, "error": str(e)})
     return _json_response(
