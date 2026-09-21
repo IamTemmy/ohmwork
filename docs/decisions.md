@@ -984,3 +984,218 @@ Include the worked steps in Copy explanation / CLI, expand the SVG legend with
 cell notation and literal expansion, and provide a collapsible Boolean-law
 reference. Full step tables remain in the UI/text report to keep SVG diagrams
 manageable. Owner authorized implementation directly in the conversation.
+
+## D19 — PROPOSED, revised after Codex's review round, still not yet approved. What does a SPICE netlist export show, and how is it built?
+
+**Status:** drafted by Claude (2026-09-21); Codex reviewed the first draft against the actual
+`Layout` code and ngspice documentation the same day and found one genuine correctness bug (point
+1) plus five scope/precision gaps (points 2-6, folded into the numbered proposal below). This
+revision resolves all six. **Still not approved** — same process as D16/D17/D18: this revised
+entry goes back to Codex for final review, and only after that does the owner explicitly
+authorize implementation. The Layout-based connectivity approach itself (build from the
+already-verified schematic model, never a second circuit-construction path) is unchanged and was
+not in question.
+
+**Trigger:** the charter's own original v1 scope (§6: "SPICE netlist export") — deferred since
+M1b alongside K-map rendering and the schematic, both of which have since shipped (D17, D18).
+Owner asked, after D18 Phase 3/the selection-explanation follow-up landed, what's left against
+that original scope; this is the one remaining in-scope-but-unbuilt item.
+
+**Scope: one new consumer, no new modeling.** Unlike D17/D18, this needs no new topology
+computation — `schematic.py`'s already-built, already-verified `Layout` (D17 Phase A, four
+correctness gates, cross-process-deterministic ids) has every fact a netlist needs: `Device.kind`
+("n"/"p"), `.gate_net`/`.source_net`/`.drain_net`, `.role`, `Layout.vdd_net_id`/`gnd_net_id`/
+`output_net_id`, `primary_nets`/`complement_nets`/`inverter_driven_vars`, all already electrically
+checked. This entry is a **presentation/export layer over that existing model** — the same
+relationship `kmap_view.py` has to `kmap.py`'s `KMap`, or the SVG renderer has to `Layout` itself
+— never a second circuit-construction path. It must build from `Layout`, never re-derive
+connectivity from `Network`/`SynthesisResult` independently.
+
+**1. Node naming must not rely on SPICE being case-sensitive — it isn't.** Codex reproduced this
+against the actual code: `(aA)'` is a valid two-variable expression under D8 (variables are
+case-sensitive single letters), and `_gate_net_id` (`schematic.py`) produces the Python-distinct
+net ids `net_a` and `net_A` — confirmed independently by running `build_textbook_schematic` on
+`(aA)'` before writing this revision: `var_order=['a','A']`,
+`nets=['GND','OUT','VDD','net_A','net_a','pdn_j0']`. SPICE node names are matched
+case-insensitively by every mainstream simulator, so a naive text-format export using these ids
+verbatim would silently short `net_a` and `net_A` together in the actual simulated circuit — two
+logically distinct signals merged into one wire, a real electrical wrong-answer, not a cosmetic
+one. **This was the original draft's point 3 ("reuse Layout's net ids verbatim") and it is wrong;
+replaced entirely:**
+   - Every net gets a **synthetic, purely-lowercase-ASCII-and-digit canonical SPICE name**,
+     assigned once, deterministically, in a fixed order (`Layout.nets` iteration order, which is
+     itself already deterministic) — e.g. `n0`, `n1`, `n2`, ... — except the two names SPICE
+     itself treats specially: **`0` for ground** (point 2) and a literal `VDD` for the supply
+     rail (safe: fixed, single, never user-influenced, never collides since it's excluded from
+     the `n<i>` pool). Because the synthetic scheme never uses a letter whose case could
+     collide with another synthetic name, it is collision-free *by construction*, not by
+     detecting and patching collisions after the fact.
+   - **Explicit mapping back to `Layout` ids is emitted as netlist comments** (`* n3 = net_a`,
+     one line per net, in the same deterministic order) so the file stays auditable against the
+     model that generated it — addresses Codex's "explicit mapping back to Layout IDs"
+     requirement directly, and matches this project's standing rule that a generated artifact
+     must stay traceable to its verified source, not just internally self-consistent.
+   - **Regression test, added to point 9's acceptance list**: build the netlist for `(aA)'`
+     (and, generalized, for every case using two variables differing only in case — the
+     parametrization should include at least one case with three: e.g. a var_order containing
+     `a`, `A`, `a0`), and assert (a) the emitted node names, lower-cased, contain no duplicates
+     (the collision-freedom property, checked directly rather than trusted), and (b) the
+     comment-mapping round-trips exactly back to the distinct `Layout.nets` ids it names.
+
+**2. Export interface: both a reusable subcircuit and a runnable example, pins fully specified.**
+Two artifacts, both generated from the same `Layout`/device records (never two independent code
+paths):
+   - **`.SUBCKT`** — the pure connectivity template (point 3 below). Pin order, fixed:
+     `.SUBCKT <GateName> <output> <input-1> [<input-1>_N if dual-rail exposes it] <input-2> ...
+     GND` — one pin per `Layout.primary_nets` entry in `var_order` order; when `Layout.style`'s
+     synthesis was built `dual_rail=True`, one additional pin per `Layout.complement_nets` entry
+     (also `var_order` order) for each variable whose complement is an **external** input rather
+     than an internally-generated inverter output (`var not in Layout.inverter_driven_vars`) —
+     non-dual-rail complement nets stay internal to the subcircuit, never exposed as pins, since
+     they're generated by an internal inverter device, not supplied by the caller. **`VDD` is not
+     a subcircuit pin** — a `.SUBCKT` conventionally takes its supply from a net already visible
+     in its defining scope rather than as a formal parameter, so `VDD` is referenced directly
+     inside the subcircuit body. **Ground is a subcircuit pin** (the last one, fixed position),
+     per Codex's instruction: the subcircuit exposes a ground pin, and the *caller* connects it
+     to node `0` — the subcircuit itself never hardcodes `0` internally, so it stays a genuinely
+     reusable component rather than one only valid at the top level.
+   - **Standalone simulation deck** — instantiates the `.SUBCKT` once, ties `VDD` to a DC source
+     (`VDD_SRC VDD 0 DC <value>`, value from point 3's educational example parameters), ties the
+     subcircuit's ground pin to node `0`, and adds one independent voltage source per exposed
+     input pin. This is the artifact point 4's ngspice CI job actually drives.
+   - **Top-level ground is node `0`** (SPICE's own reserved global ground, required by every
+     mainstream simulator) — used directly in the standalone deck; the `.SUBCKT`'s own ground pin
+     is what a caller (the standalone deck, or a student's own larger circuit) wires to `0`, per
+     the point above.
+
+**3. Connectivity is separated from analog assumptions — Codex's correction accepted, original
+point 6 was wrong.** Codex is right on both counts: `LEVEL=1` with no other parameters still pulls
+in the simulator's own built-in numeric defaults (`VTO`, `KP`, etc. all have simulator-defined
+values even unspecified) — that is a specific, if generic, analog claim, not "no claim" as the
+first draft said; and tying bulk to the supply rail is the correct *connectivity* convention
+regardless of whether body effect is modeled — it does not itself disable body effect, which is
+governed by the model's own `GAMMA`/`PHI` parameters and operating-point `V_SB`, not by which net
+bulk happens to be wired to. Resolved by generating **two clearly distinct artifacts from the same
+device records**, matching point 2's split exactly:
+   - The **`.SUBCKT` connectivity template carries no `.model`/sizing data at all** — its `M`
+     lines reference model names (`NMOS_MODEL`/`PMOS_MODEL`) that are **not defined anywhere in
+     the file**, and every `M` line's `W=`/`L=` are left as the literal token `TBD` (not a number
+     — a value that fails to parse as one), so the file cannot silently "run" with fabricated
+     numbers; a header comment states plainly that this file requires the caller to supply
+     `.model` cards and real `W`/`L` values (via `.include`/`.lib` and edited `M` lines) before it
+     will simulate. This directly satisfies "never advertise unresolved sizing placeholders as
+     runnable."
+   - The **educational simulation example** (the standalone deck from point 2) carries explicit,
+     fully-written-out illustrative parameters: real numeric `.model` cards (a named, generic,
+     publicly-documented Level-1 parameter set, cited in a comment as illustrative/generic and not
+     tied to a specific fab process) and one uniform illustrative `W`/`L` for every transistor,
+     both clearly labeled in a header comment as "illustrative values for simulation, not a sizing
+     recommendation." This is the artifact meant to actually run, and the only one point 4's CI
+     job simulates.
+
+**4. ngspice verification: dedicated CI job, never a local requirement, exhaustive and strict.**
+Codex is right that a Python packaging extra does not install the `ngspice` binary (it's a system
+package, not `pip`-installable in general) — the earlier "optional dev extra, self-skip like
+Playwright" framing conflated the two and is replaced:
+   - A **separate CI job** (its own workflow entry, not folded into the existing Python/Chromium
+     matrix) explicitly installs `ngspice` on the runner and runs the electrical suite. Export
+     users and local `pip install -e ".[dev]"` never need `ngspice` present — the suite
+     self-skips locally exactly like the Chromium suite already does when its own extra is
+     missing, but the *CI-required* copy of it only runs in that dedicated job.
+   - For each representative case (point 5's battery), the job generates the standalone example
+     deck, then for **every one of the 2^n input combinations** (exhaustive, matching D7's own
+     "every input vector" bar, never a sample) sets the input sources accordingly and runs an
+     ngspice DC operating-point analysis with the pinned supply voltage, pinned `.model`
+     parameters, and pinned sizing from point 3's example.
+   - **Explicit output thresholds**, not left implicit: an output below a documented fraction of
+     the supply is logic-0, above a documented (higher) fraction is logic-1, and anything in
+     between is an **ambiguous level that fails the test** rather than being rounded either way.
+   - **Non-convergence fails the test** for that input vector — never silently skipped or ignored.
+   - **Don't-care rows are checked against the chosen circuit's own reported assignment**, not
+     against "any" logically-acceptable value: for each don't-care minterm, the expected level is
+     `result.verification.dont_care_assignments[minterm]` (already computed, already the actual
+     value this specific circuit produces — a real transistor network has no "don't care" at
+     simulation time, it does something specific), not re-derived independently.
+
+**5. Expanded acceptance coverage** (supersedes/extends the original draft's list 1-8; still to
+exist, reviewed, before implementation):
+1. **Structural round-trip**: every `Layout.device` appears exactly once, with its own id and
+   exactly its own drain/gate/source/bulk *synthetic* nets (point 1) in the documented column
+   order — checked by parsing the emitted text back into structured device records and comparing
+   against `Layout`, never eyeballed.
+2. **Net inventory closure**: every node name referenced appears in the point-1 mapping; no
+   invented/orphan names; the comment-mapping is itself exactly bijective with `Layout.nets`.
+3. **Case-insensitive naming collisions** (point 1's regression case): `(aA)'` and a 3-variable
+   case-differing set (`a`/`A`/`a0`) — lower-cased emitted names contain zero duplicates.
+4. **Device count matches the report**: exactly `SynthesisResult.total_transistors`, across
+   NAND3/NOR4/AOI31/AOI21 (shared inverter)/AND (dual-simultaneous-shared-inverter case)/
+   dual-rail/wide (40T) cases — the same battery D17's own review used.
+5. **Device/model polarity**: every device whose `Layout.Device.kind == "p"` references the PMOS
+   model name and every `"n"` device references the NMOS model name, no exceptions, in both the
+   template and the example artifact.
+6. **Bulk convention**: every PMOS device's bulk is `VDD`, every NMOS device's bulk is the
+   subcircuit's ground pin (or `0` in the standalone deck) — no exceptions.
+7. **VDD/ground/output identity**: `VDD` is the literal supply name; the output pin/node matches
+   `Layout.output_net_id`'s mapped synthetic name; ground follows point 2's pin/node-0 rule.
+8. **Dual-rail external complement ports**: for a dual-rail result, every variable whose
+   complement is actually used as a gate net gets its own exposed pin (point 2), named and ordered
+   correctly, and is *not* also driven by an internal inverter device.
+9. **Shared inverters**: an AOI21-style case with one shared inverter driving multiple gates
+   emits exactly one inverter's worth of devices, wired to every consuming gate — the same
+   single-inverter-multiple-fanout fact D12/D17 already established, now also checked at the
+   netlist level.
+10. **Unused declared variables**: a `var_order` entry the synthesized function does not actually
+    depend on still gets a correctly-named, correctly-ordered pin (no crash, no silently dropped
+    pin, no renumbering that shifts other pins).
+11. **Custom output names**: `output_name` other than `F` flows through to the mapped output pin
+    name/comment correctly.
+12. **Wired vs. textbook `Layout.style` equivalence**: for the same `SynthesisResult`, exporting
+    from both the "wired" and "textbook" schematic layouts (D17 Phase A vs. Phase B) yields
+    *electrically* equivalent netlists (same device roles/kinds and same net-equivalence classes
+    under the point-1 mapping) even if geometry/internal ids differ — proves the exporter depends
+    only on electrical facts, never on which layout algorithm produced the `Layout`.
+13. **Determinism**: identical `Layout` input produces byte-identical netlist text across runs and
+    `PYTHONHASHSEED` values.
+14. **Mutation tests**: wrong bulk assignment, swapped drain/source, a missing device, two
+    distinct `Layout` nets incorrectly mapped to the same synthetic name (the exact class of bug
+    point 1 exists to prevent) — each independently caught by tests 1, 3, or 6.
+15. **(CI-only, point 4)**: the exhaustive ngspice DC-sweep suite itself, including the
+    don't-care-vs-`dont_care_assignments` check and the ambiguous-level/non-convergence failure
+    modes.
+
+**6. Compatibility claims, qualified.** The netlist targets a portable SPICE3-style syntax
+*intended* to be readable by common simulators (ngspice, LTspice, HSPICE) — but **only ngspice
+compatibility is actually verified** (point 4's CI job). Documentation and any in-file comments
+must say exactly that: "tested with ngspice; written in portable SPICE3-style syntax intended to
+work with other simulators, which are untested" — never an unqualified "works in LTspice/HSPICE"
+claim this project hasn't earned.
+
+**7. What stays excluded** (unchanged from D17 point 6): real transistor sizing as a *design
+output* (point 3's illustrative examples are explicitly not that), body-effect modeling beyond
+the bulk-tie connectivity convention, analog parasitics (wire R/C, junction capacitance), physical
+layout/DRC, arbitrary non-series-parallel circuits, multi-output netlists.
+
+**8. CLI/UI surface.** Mirrors D17/D18's established pattern: a `--netlist` flag or output mode on
+`synth` (CLI, likely emitting both artifacts or one selectable via a further flag), and "Download
+SPICE netlist" button(s) beside the existing "Download SVG" button in the web UI's synthesis
+report (server-side generation from `Layout`, downloaded as `.cir` file(s), no client-side
+reconstruction). Exact flag names/UI copy left to implementation.
+
+**9. Phasing.** The scope grew materially in this revision (two generated artifacts instead of
+one, a dedicated CI job with a new system-level dependency, an exhaustive electrical-simulation
+acceptance suite) — closer to D17/D18's weight than the original draft's "single round" estimate.
+Whether this still fits one PR/review round or wants its own two-phase split (connectivity
+model+template first, example deck+ngspice CI second, reviewed separately) is left for Codex's
+final pass and the owner's call, not decided here.
+
+**Claude's read on Codex's review, for the owner:** no technical disagreement with any of the six
+points — point 1 was reproduced and confirmed independently before writing this revision (exact
+repro above), and points 2-6 are each either a correctness fix (3) or a precision/honesty
+improvement (2, 4, 5, 6) consistent with this project's existing bar. The one thing worth the
+owner's attention explicitly: this revision is meaningfully bigger in scope than the original
+draft (point 9) — worth confirming that's still wanted before this goes to implementation, not a
+reason to push back on any individual point.
+
+**Date:** 2026-09-21 (revised after Codex's first review round). Still not approved —
+implementation must not begin until Codex's final pass on this revision comes back clean and the
+owner explicitly authorizes it, per this project's standing decision-entry-first discipline.
