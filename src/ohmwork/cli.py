@@ -15,7 +15,10 @@ from __future__ import annotations
 import argparse
 import sys
 
-from ohmwork.api import kmap_from_input, render_synth, render_tt
+from ohmwork.api import kmap_from_input, render_synth, render_tt, synthesize_from_input
+from ohmwork.presenter import validate_output_name
+from ohmwork.schematic import build_textbook_schematic
+from ohmwork.spice_exports import build_spice_exports
 from ohmwork.kmap_view import format_kmap_report
 from ohmwork.errors import ParseError
 
@@ -88,6 +91,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Reject any candidate whose series stack height exceeds N (D3's opt-in constraint)",
     )
 
+    synth.add_argument(
+        "--netlist", nargs="?", const="template", choices=("template", "example"),
+        help="Print only SPICE: template (default, needs models/sizes) or educational example (all inputs 0)",
+    )
+    synth.add_argument("--output-name", help="SPICE output label; requires --netlist (default F)")
+
     ui = subparsers.add_parser(
         "ui",
         help="Start a local web page for tt/synth (M1.1) instead of the command line",
@@ -126,7 +135,10 @@ def run_tt(args: argparse.Namespace, *, stdout, stderr) -> int:
 
 def run_synth(args: argparse.Namespace, *, stdout, stderr) -> int:
     try:
-        output = render_synth(
+        if args.output_name is not None and args.netlist is None:
+            raise ValueError("--output-name requires --netlist on synth")
+        operation = synthesize_from_input if args.netlist else render_synth
+        output = operation(
             expr=args.expr,
             variables=args.vars,
             ones=args.ones,
@@ -135,17 +147,20 @@ def run_synth(args: argparse.Namespace, *, stdout, stderr) -> int:
             dual_rail=args.dual_rail,
             max_stack=args.max_stack,
         )
+        if args.netlist:
+            name = validate_output_name(args.output_name, output.var_order)
+            layout = build_textbook_schematic(output, name)
+            output = build_spice_exports(layout)[args.netlist]["text"]
     except (ValueError, ParseError) as e:
         print(f"error: {e}", file=stderr)
         return 1
     except RuntimeError as e:
-        # render_synth() only raises this if synthesize()'s own D7
-        # verification failed — a bug in ohmwork, not bad input. Never
-        # printed as a valid design.
+        # Synthesis, layout, and export validation failures never produce
+        # a partial report or a netlist that looks like a valid design.
         print(f"error: {e}", file=stderr)
         return 1
 
-    print(output, file=stdout)
+    print(output, file=stdout, end="" if args.netlist else "\n")
     return 0
 
 

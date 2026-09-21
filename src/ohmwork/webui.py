@@ -26,6 +26,7 @@ from ohmwork.parser import parse
 from ohmwork.presenter import build_schematic_view, build_synth_view, build_tt_view, validate_output_name
 from ohmwork.report import format_synth_report
 from ohmwork.schematic import build_textbook_schematic
+from ohmwork.spice_exports import build_spice_exports
 
 # The server binds to loopback only (D-adjacent: see run_server's default
 # host), but loopback binding alone doesn't stop a hostile page the user
@@ -363,8 +364,17 @@ _PAGE = r"""<!doctype html>
       </div>
       <div class="row">
         <button type="button" class="btn-secondary" id="download-svg-btn">Download SVG</button>
+        <button type="button" class="btn-secondary" id="download-spice-template" disabled aria-describedby="spice-template-note">Download SPICE template</button>
+        <button type="button" class="btn-secondary" id="download-spice-example" disabled aria-describedby="spice-example-note">Download SPICE example</button>
       </div>
     </div>
+
+    <section class="section" id="spice-export-help" aria-label="About SPICE downloads" hidden>
+      <h3>About SPICE downloads</h3>
+      <p id="spice-template-note"><strong>Connectivity template:</strong> not runnable as-is. Supply transistor models and replace W=TBD / L=TBD before simulation. Both power rails are subcircuit pins.</p>
+      <p id="spice-example-note"><strong>Educational example:</strong> runnable with ngspice, using an illustrative 5 V supply, uniform W=10u / L=1u, and cited example models. All logical inputs start at 0; external complements are driven to 1. This is one DC operating point, not a truth-table sweep or a fabrication-ready design.</p>
+      <p>Both files describe this exact circuit. Model sources, assumptions, pin order, and node mappings are included in the files. Other simulators are untested.</p>
+    </section>
 
     <section class="section" aria-label="K-map for the chosen circuit">
       <h3>K-map for this circuit</h3>
@@ -1215,6 +1225,22 @@ $("download-svg-btn").addEventListener("click", () => {
   URL.revokeObjectURL(url);
 });
 
+let lastSpiceExports = null;
+for (const kind of ["template", "example"]) {
+  $("download-spice-" + kind).addEventListener("click", () => {
+    const artifact = lastSpiceExports?.[kind];
+    if (!artifact) return;
+    const url = URL.createObjectURL(new Blob([artifact.text], {type: "text/plain;charset=utf-8"}));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = artifact.filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+}
+
 // --- Synth result rendering ------------------------------------------------------
 
 let lastSolutionText = "";
@@ -1222,7 +1248,11 @@ let lastAdvancedText = "";
 
 let synthKmapDiagram = null;
 let synthKmapReport = "";
-function renderSynthResult(view, rawOutput, schematic, kmap) {
+function renderSynthResult(view, rawOutput, schematic, kmap, spice) {
+  lastSpiceExports = spice;
+  $("download-spice-template").disabled = !spice?.template;
+  $("download-spice-example").disabled = !spice?.example;
+  $("spice-export-help").hidden = !spice;
   clearChildren($("synth-km-stage"));
   clearChildren($("synth-km-groups"));
   synthKmapReport = kmap.output;
@@ -1356,7 +1386,7 @@ $("panel-synth").addEventListener("submit", async (e) => {
   errEl.classList.add("empty");
   errEl.textContent = "";
   resEl.classList.remove("empty");
-  renderSynthResult(result.result, result.output, result.schematic, result.kmap);
+  renderSynthResult(result.result, result.output, result.schematic, result.kmap, result.spice);
 });
 
 $("synth-km-show-all").addEventListener("click",()=>synthKmapDiagram?.reset());
@@ -1423,6 +1453,10 @@ function clearSynthResultDisplay() {
   staleSvg.removeAttribute("viewBox");
   staleSvg.removeAttribute("aria-label");
   lastSchematicView = null;
+  lastSpiceExports = null;
+  $("download-spice-template").disabled = true;
+  $("download-spice-example").disabled = true;
+  $("spice-export-help").hidden = true;
   synthKmapDiagram = null;
   synthKmapReport = "";
   ["synth-km-stage","synth-km-groups","synth-km-selection-reason","synth-km-connection","synth-km-equation",
@@ -1661,6 +1695,7 @@ def _handle_synth(environ, start_response):
         # frontend must render faithfully, never re-derived from `view`.
         layout = build_textbook_schematic(result, output_name)
         schematic = build_schematic_view(layout)
+        spice = build_spice_exports(layout)
         model = build_synthesis_kmap(result, output_name)
         kmap_view = build_kmap_view(model)
         connection = (
@@ -1681,7 +1716,7 @@ def _handle_synth(environ, start_response):
     except (ParseError, ValueError, RuntimeError) as e:
         return _json_response(start_response, "200 OK", {"ok": False, "error": str(e)})
     return _json_response(
-        start_response, "200 OK", {"ok": True, "output": output, "result": view, "schematic": schematic, "kmap": kmap}
+        start_response, "200 OK", {"ok": True, "output": output, "result": view, "schematic": schematic, "kmap": kmap, "spice": spice}
     )
 
 
