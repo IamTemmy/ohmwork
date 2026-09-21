@@ -147,6 +147,28 @@ def _selection_reasoning(groups: list[CandidateGroup], *, max_stack_applied: boo
     return prefix + base
 
 
+def _kmap_selection_reasoning(result: SynthesisResult, groups: list[CandidateGroup],
+                              *, max_stack_applied: bool) -> str:
+    """Explain the selected construction using only candidates actually considered."""
+    chosen = result.chosen
+    direction = "0s" if chosen.label == "AOI" else "1s"
+    expansion = "AND–OR–Invert" if chosen.label == "AOI" else "OR–AND–Invert"
+    costs = []
+    for label in ("AOI", "OAI"):
+        candidates = [c for c in result.other_candidates if c.label == label]
+        if candidates:
+            costs.append(f"{label}: {min(c.total_cost for c in candidates)} transistors")
+    return (
+        f"Why group {direction}? This map follows the selected {chosen.label} "
+        f"({expansion}) construction. "
+        + _selection_reasoning(groups, max_stack_applied=max_stack_applied)
+        + " Best total in each available construction: " + "; ".join(costs) + ". "
+        f"The chosen total is {chosen.core_cost} core + {chosen.inverter_cost} "
+        "input-inverter transistors (shared inverters counted once; supplied complements cost none). "
+        "The comparison is within Ohmwork's supported search, not every possible circuit."
+    )
+
+
 def _flat_topology_kind(network: Network) -> str | None:
     """"series", "parallel", or "single" for a flat (one-level) network —
     None for anything with nested structure (AOI/OAI shapes), where a
@@ -249,6 +271,7 @@ def build_synth_view(
         "stack_advisory": result.stack_advisory,
         "reasoning": {
             "chosen_label": result.chosen_label,
+            "kmap_selection_note": _kmap_selection_reasoning(result, groups, max_stack_applied=max_stack_applied),
             "selection_note": _selection_reasoning(groups, max_stack_applied=max_stack_applied),
             "minimality_summary": _minimality_summary(result),
             "minimality_detail": result.minimality_proof,

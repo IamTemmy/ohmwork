@@ -350,6 +350,8 @@ def test_synthesis_kmap_bridge_steps_and_export(page,server_url,tmp_path,case,ex
     data=page.request.post(server_url+'/api/synth',data={'expr':expr}).json()['kmap']
     bridge(snapshot(page),data['view'])
     assert page.locator('#synth-km-connection').inner_text()==data['connection']
+    assert page.locator('#synth-km-selection-reason').inner_text()==data['selection_reason']
+    page.locator('[aria-label="K-map for the chosen circuit"]').screenshot(path=f'test-artifacts/kmaps/selection-{case}.png')
     assert page.locator('#synth-km-pdn').inner_text()==data['pdn']
     page.locator('#synth-km-groups [data-proof-toggle=G1]').click()
     assert page.locator('#synth-km-groups .km-proof-panel').is_visible()
@@ -367,6 +369,7 @@ def test_synthesis_kmap_bridge_steps_and_export(page,server_url,tmp_path,case,ex
     assert page.locator('#synth-km-stage svg').count()==0
     assert page.locator('#synth-km-groups').inner_text()==''
     assert page.locator('#synth-km-connection').inner_text()==''
+    assert page.locator('#synth-km-selection-reason').inner_text()==''
 
 
 def test_synthesis_and_standalone_kmaps_have_independent_panels(page):

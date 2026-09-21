@@ -417,3 +417,20 @@ def test_build_schematic_view_junctions_carry_exact_model_points():
         model_junction = by_id[j["id"]]
         assert j["net_id"] == model_junction.net_id
         assert (j["point"]["x"], j["point"]["y"]) == (model_junction.point.x, model_junction.point.y)
+
+
+@pytest.mark.parametrize('expr,options,expected,absent', [
+    ("(abc+d)'", {}, ['Why group 0s?', 'AND–OR–Invert', 'AOI: 8 transistors', 'OAI: 12 transistors', 'strictly lower'], ['Tied at']),
+    ("a'bc+b'c'd'", {}, ['Why group 1s?', 'OR–AND–Invert', 'AOI: 20 transistors', 'OAI: 16 transistors', '12 core + 4'], ['Tied at']),
+    ('a^b', {}, ['Tied at 12', 'canonical tie-break', 'AOI: 12', 'OAI: 12'], ['strictly lower']),
+    ("(abc)'", {}, ['Only one distinct realization', 'both AOI and OAI', 'AOI: 6', 'OAI: 6'], ['strictly lower', 'Tied at']),
+    ("a'bc+b'c'd'", {'dual_rail': True}, ['AOI: 16', 'OAI: 12', '12 core + 0'], ['12 core + 4']),
+    ('ab+cd', {'max_stack': 2}, ['--max-stack', 'Only one distinct realization', 'OAI: 16'], ['AOI: 24', 'strictly lower']),
+])
+def test_kmap_selection_explanation_uses_actual_candidate_costs(expr, options, expected, absent):
+    result = synthesize_from_input(expr=expr, **options)
+    text = build_synth_view(result, max_stack_applied='max_stack' in options)['reasoning']['kmap_selection_note']
+    for phrase in expected:
+        assert phrase in text
+    for phrase in absent:
+        assert phrase not in text
