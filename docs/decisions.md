@@ -985,217 +985,259 @@ cell notation and literal expansion, and provide a collapsible Boolean-law
 reference. Full step tables remain in the UI/text report to keep SVG diagrams
 manageable. Owner authorized implementation directly in the conversation.
 
-## D19 — PROPOSED, revised after Codex's review round, still not yet approved. What does a SPICE netlist export show, and how is it built?
+## D19 — PROPOSED, revised after Codex's second review round (of commit `715a210`), still not approved. What does a SPICE netlist export show, and how is it built?
 
-**Status:** drafted by Claude (2026-09-21); Codex reviewed the first draft against the actual
-`Layout` code and ngspice documentation the same day and found one genuine correctness bug (point
-1) plus five scope/precision gaps (points 2-6, folded into the numbered proposal below). This
-revision resolves all six. **Still not approved** — same process as D16/D17/D18: this revised
-entry goes back to Codex for final review, and only after that does the owner explicitly
-authorize implementation. The Layout-based connectivity approach itself (build from the
-already-verified schematic model, never a second circuit-construction path) is unchanged and was
-not in question.
+**Status:** drafted by Claude (2026-09-21); revised once after Codex's first review (commit
+`715a210`); **this is the second revision**, after Codex reviewed `715a210` and found two more
+real bugs in the port/naming/scoping model (points 1 and 3 below) plus four further precision
+gaps (points 2, 4, 5, 6). Both round-2 bugs were independently reproduced against the actual code
+before being accepted — see each point. **Still not approved** — goes back to Codex for a final
+pass; only after that comes back clean does the owner explicitly authorize implementation. The
+Layout-based connectivity approach itself remains unchanged and was never in question across
+either review round.
 
 **Trigger:** the charter's own original v1 scope (§6: "SPICE netlist export") — deferred since
 M1b alongside K-map rendering and the schematic, both of which have since shipped (D17, D18).
-Owner asked, after D18 Phase 3/the selection-explanation follow-up landed, what's left against
-that original scope; this is the one remaining in-scope-but-unbuilt item.
 
 **Scope: one new consumer, no new modeling.** Unlike D17/D18, this needs no new topology
-computation — `schematic.py`'s already-built, already-verified `Layout` (D17 Phase A, four
-correctness gates, cross-process-deterministic ids) has every fact a netlist needs: `Device.kind`
-("n"/"p"), `.gate_net`/`.source_net`/`.drain_net`, `.role`, `Layout.vdd_net_id`/`gnd_net_id`/
-`output_net_id`, `primary_nets`/`complement_nets`/`inverter_driven_vars`, all already electrically
-checked. This entry is a **presentation/export layer over that existing model** — the same
-relationship `kmap_view.py` has to `kmap.py`'s `KMap`, or the SVG renderer has to `Layout` itself
-— never a second circuit-construction path. It must build from `Layout`, never re-derive
-connectivity from `Network`/`SynthesisResult` independently.
+computation — `schematic.py`'s already-built, already-verified `Layout` (D17 Phase A) has every
+electrical fact a netlist needs: `Device.kind`/`.gate_net`/`.source_net`/`.drain_net`/`.role`,
+`Layout.vdd_net_id`/`gnd_net_id`/`output_net_id`/`var_order`/`primary_nets`/`complement_nets`/
+`inverter_driven_vars`, and `Net.label` (a net's human-facing display name, distinct from its
+fixed internal id — e.g. the output net's `id` is always literally `"OUT"`, D17 point 3, while
+its `label` carries whatever `output_name` was actually requested). This entry is a
+**presentation/export layer over that existing model**, never a second circuit-construction path
+— must build from `Layout` only, never re-derive connectivity independently.
 
-**1. Node naming must not rely on SPICE being case-sensitive — it isn't.** Codex reproduced this
-against the actual code: `(aA)'` is a valid two-variable expression under D8 (variables are
-case-sensitive single letters), and `_gate_net_id` (`schematic.py`) produces the Python-distinct
-net ids `net_a` and `net_A` — confirmed independently by running `build_textbook_schematic` on
-`(aA)'` before writing this revision: `var_order=['a','A']`,
-`nets=['GND','OUT','VDD','net_A','net_a','pdn_j0']`. SPICE node names are matched
-case-insensitively by every mainstream simulator, so a naive text-format export using these ids
-verbatim would silently short `net_a` and `net_A` together in the actual simulated circuit — two
-logically distinct signals merged into one wire, a real electrical wrong-answer, not a cosmetic
-one. **This was the original draft's point 3 ("reuse Layout's net ids verbatim") and it is wrong;
-replaced entirely:**
-   - Every net gets a **synthetic, purely-lowercase-ASCII-and-digit canonical SPICE name**,
-     assigned once, deterministically, in a fixed order (`Layout.nets` iteration order, which is
-     itself already deterministic) — e.g. `n0`, `n1`, `n2`, ... — except the two names SPICE
-     itself treats specially: **`0` for ground** (point 2) and a literal `VDD` for the supply
-     rail (safe: fixed, single, never user-influenced, never collides since it's excluded from
-     the `n<i>` pool). Because the synthetic scheme never uses a letter whose case could
-     collide with another synthetic name, it is collision-free *by construction*, not by
-     detecting and patching collisions after the fact.
-   - **Explicit mapping back to `Layout` ids is emitted as netlist comments** (`* n3 = net_a`,
-     one line per net, in the same deterministic order) so the file stays auditable against the
-     model that generated it — addresses Codex's "explicit mapping back to Layout IDs"
-     requirement directly, and matches this project's standing rule that a generated artifact
-     must stay traceable to its verified source, not just internally self-consistent.
-   - **Regression test, added to point 9's acceptance list**: build the netlist for `(aA)'`
-     (and, generalized, for every case using two variables differing only in case — the
-     parametrization should include at least one case with three: e.g. a var_order containing
-     `a`, `A`, `a0`), and assert (a) the emitted node names, lower-cased, contain no duplicates
-     (the collision-freedom property, checked directly rather than trusted), and (b) the
-     comment-mapping round-trips exactly back to the distinct `Layout.nets` ids it names.
+**1. Every SPICE identifier — nets, ports, subcircuit/model/device names — is synthetic and
+safe; nothing is exempt, including VDD and ground.** Two separate bugs in the first revision,
+both closed here:
+   - **(Codex, round 2) SPICE subcircuit scoping doesn't work the way the first revision
+     assumed.** A non-global node not listed as a formal `.SUBCKT` port is *local to that
+     subcircuit instance* — a net literally named `VDD` inside a `.SUBCKT` that doesn't declare a
+     `VDD` port is **not** the same node as an outer-scope net of the same name; each instantiation
+     gets its own fresh local `VDD` node, disconnected from the real supply. The first revision's
+     "`VDD` is referenced directly inside the subcircuit body, not a formal pin" claim was simply
+     wrong about how SPICE scoping works (the one exception, `.GLOBAL` directives, was never
+     specified and isn't used here). **Fix: both `VDD` and ground are explicit, formal `.SUBCKT`
+     ports** — no net is special-cased as implicitly visible.
+   - **(Round 1 already established, restated for consistency) Case-insensitive collisions.**
+     `Layout`'s raw net ids (`net_a` vs `net_A`) collide under SPICE's case-insensitive node
+     matching — reproduced independently on `(aA)'` before round 1 was written; still fixed the
+     same way.
+   - **(Codex, round 2) Identifier safety isn't only a net-naming problem.** `.SUBCKT` names,
+     `.model` names, and device names (`M<id>`) all need the same safe-character discipline, and
+     none of them should ever embed `Device.literal` (explicitly documented in `schematic.py` as
+     "display-only rendering... never read for correctness") — e.g. a complemented literal like
+     `b'` contains a character (`'`) that has no business inside a SPICE token.
+   - **Resolution, replacing the first revision's point 1 in full:** every SPICE-syntax
+     identifier — every net/port name, the `.SUBCKT` name, both model names, every device name —
+     is drawn from a single synthetic scheme: net/port names are `n0`, `n1`, `n2`, ... assigned
+     once in `Layout.nets`' own deterministic order (VDD and ground each just get their own
+     `n<i>` like everything else — no exemptions); device names reuse `Device.id` directly
+     (already `[A-Za-z0-9_]`-safe by construction, per the existing `M0..Mn`/`INV_{var}_P/N`
+     convention); model/subcircuit names are fixed literals (`NMOS_MODEL`, `PMOS_MODEL`, a
+     `GateName` derived only from the already-safe `gate_name`/`output_name` after stripping to
+     `[A-Za-z0-9_]`). Collision-free by construction (pure lowercase-ASCII-and-digit tokens,
+     never user-influenced casing or characters).
+   - **Traceability preserved in comments, three-way, not just net-id-to-synthetic-name**: for
+     every net, one comment line records **(a)** the synthetic name, **(b)** the `Layout` net id
+     when the net corresponds to one (some don't — point 2), and **(c)** the net's `Net.label`
+     and a plain-English **role** (primary input / external complement input / unconnected
+     declared input / output / supply / ground / internal junction). This is what makes a custom
+     output name like `Y` traceable end to end even though its `Layout` id stays the fixed `OUT`
+     — confirmed by construction: `Net.label` for the output net already carries the requested
+     `output_name` (verified directly: `build_textbook_schematic(synthesize_from_input(expr='a'),
+     'Y')`'s output net has `id='OUT'`, `label='Y'`).
+   - **Regression tests** (added to point 8): the `(aA)'` case-collision case; an identifier-safety
+     sweep over the full D8 variable alphabet (letters plus optional trailing digit) asserting
+     every emitted identifier matches `^[A-Za-z0-9_]+$`; the custom-output-name traceability case
+     (`Y`) asserting the comment for the output net shows all three of synthetic name / `OUT` /
+     `Y`.
 
-**2. Export interface: both a reusable subcircuit and a runnable example, pins fully specified.**
-Two artifacts, both generated from the same `Layout`/device records (never two independent code
-paths):
-   - **`.SUBCKT`** — the pure connectivity template (point 3 below). Pin order, fixed:
-     `.SUBCKT <GateName> <output> <input-1> [<input-1>_N if dual-rail exposes it] <input-2> ...
-     GND` — one pin per `Layout.primary_nets` entry in `var_order` order; when `Layout.style`'s
-     synthesis was built `dual_rail=True`, one additional pin per `Layout.complement_nets` entry
-     (also `var_order` order) for each variable whose complement is an **external** input rather
-     than an internally-generated inverter output (`var not in Layout.inverter_driven_vars`) —
-     non-dual-rail complement nets stay internal to the subcircuit, never exposed as pins, since
-     they're generated by an internal inverter device, not supplied by the caller. **`VDD` is not
-     a subcircuit pin** — a `.SUBCKT` conventionally takes its supply from a net already visible
-     in its defining scope rather than as a formal parameter, so `VDD` is referenced directly
-     inside the subcircuit body. **Ground is a subcircuit pin** (the last one, fixed position),
-     per Codex's instruction: the subcircuit exposes a ground pin, and the *caller* connects it
-     to node `0` — the subcircuit itself never hardcodes `0` internally, so it stays a genuinely
-     reusable component rather than one only valid at the top level.
-   - **Standalone simulation deck** — instantiates the `.SUBCKT` once, ties `VDD` to a DC source
-     (`VDD_SRC VDD 0 DC <value>`, value from point 3's educational example parameters), ties the
-     subcircuit's ground pin to node `0`, and adds one independent voltage source per exposed
-     input pin. This is the artifact point 4's ngspice CI job actually drives.
-   - **Top-level ground is node `0`** (SPICE's own reserved global ground, required by every
-     mainstream simulator) — used directly in the standalone deck; the `.SUBCKT`'s own ground pin
-     is what a caller (the standalone deck, or a student's own larger circuit) wires to `0`, per
-     the point above.
+**2. Port list: fixed pin order and count driven by `var_order`, not by which nets happen to
+exist — Codex's "port-list contradiction" reproduced and closed.** Codex gave two concrete cases;
+both reproduced independently against the actual code before accepting this point:
+   - `variables=a,b`, `ones=2,3`: `var_order=['a','b']`, but `b` never appears anywhere in the
+     synthesized circuit at all — `Layout.primary_nets=(('a','net_a'),)`,
+     `complement_nets=(('a','net_a_n'),)`, and `b` is absent from `Layout.nets` entirely. A port
+     scheme built by iterating `primary_nets` (the first revision's approach) would simply have no
+     port for `b` — an interface that silently varies in size/shape depending on what the
+     minimizer happened to need, not on what the user declared.
+   - `expr=a`, `dual_rail=True`: `var_order=['a']`, but `Layout.primary_nets=()` (empty) while
+     `complement_nets=(('a','net_a_n'),)` — the chosen circuit uses only `a`'s external complement,
+     never `a` itself. The first revision's rule ("one pin per `primary_nets` entry, plus a
+     complement pin for dual-rail-external ones") would emit a complement pin for `a` with **no
+     corresponding primary pin at all** — an inconsistent, self-contradictory interface.
+   - **Resolution, replacing the first revision's pin-order rule in point 2:** the port list is
+     built by **traversing `var_order` directly**, never by iterating `primary_nets`/
+     `complement_nets` and hoping every declared variable shows up:
+     1. For every variable in `var_order`, in order: **always emit exactly one primary port.**
+        If the variable has a `Layout.primary_nets` entry, that port connects to the mapped
+        synthetic name for that net. If it doesn't (the `b` case above), the port is still formally
+        declared — a real, connected-to-nothing `.SUBCKT` pin — and tagged in the trailing comment
+        as an **unconnected declared input** (a legitimate, documented case, not a bug).
+     2. Then, for every variable in `var_order`, in order, whose complement is an *external*
+        dual-rail input (`var` has a `Layout.complement_nets` entry **and**
+        `var not in Layout.inverter_driven_vars`): emit one additional complement port, connected
+        to the mapped synthetic name for that net. This correctly covers the `a`/dual-rail case:
+        `a` gets both its (unconnected) primary port and its (connected) complement port, a
+        consistent pair rather than an orphaned complement.
+     Full fixed pin order: `.SUBCKT <GateName> <output> <VDD> <ground> <primary ports, var_order
+     order> <external complement ports, var_order order>`.
+   - **Net inventory closure test, adjusted per Codex's instruction**: partitioned into two
+     checks rather than one blanket rule — every **connected** port/net name must map to a real
+     `Layout` net (as before); every **unconnected declared input** must be a formal port that is
+     *not* wired to any device terminal anywhere in the emitted body — checked structurally, not
+     just by trusting its comment label.
+   - **Regression tests** (added to point 8): both reproduced cases above, each asserting the
+     exact resulting port list/order/connectedness.
 
-**3. Connectivity is separated from analog assumptions — Codex's correction accepted, original
-point 6 was wrong.** Codex is right on both counts: `LEVEL=1` with no other parameters still pulls
-in the simulator's own built-in numeric defaults (`VTO`, `KP`, etc. all have simulator-defined
-values even unspecified) — that is a specific, if generic, analog claim, not "no claim" as the
-first draft said; and tying bulk to the supply rail is the correct *connectivity* convention
-regardless of whether body effect is modeled — it does not itself disable body effect, which is
-governed by the model's own `GAMMA`/`PHI` parameters and operating-point `V_SB`, not by which net
-bulk happens to be wired to. Resolved by generating **two clearly distinct artifacts from the same
-device records**, matching point 2's split exactly:
-   - The **`.SUBCKT` connectivity template carries no `.model`/sizing data at all** — its `M`
-     lines reference model names (`NMOS_MODEL`/`PMOS_MODEL`) that are **not defined anywhere in
-     the file**, and every `M` line's `W=`/`L=` are left as the literal token `TBD` (not a number
-     — a value that fails to parse as one), so the file cannot silently "run" with fabricated
-     numbers; a header comment states plainly that this file requires the caller to supply
-     `.model` cards and real `W`/`L` values (via `.include`/`.lib` and edited `M` lines) before it
-     will simulate. This directly satisfies "never advertise unresolved sizing placeholders as
-     runnable."
-   - The **educational simulation example** (the standalone deck from point 2) carries explicit,
-     fully-written-out illustrative parameters: real numeric `.model` cards (a named, generic,
-     publicly-documented Level-1 parameter set, cited in a comment as illustrative/generic and not
-     tied to a specific fab process) and one uniform illustrative `W`/`L` for every transistor,
-     both clearly labeled in a header comment as "illustrative values for simulation, not a sizing
-     recommendation." This is the artifact meant to actually run, and the only one point 4's CI
-     job simulates.
+**3. Two generated artifacts, connectivity fully separated from analog assumptions.** Unchanged
+core structure from the first revision (a non-runnable `.SUBCKT` connectivity template plus a
+separate, clearly-labeled educational simulation example, both from the same device records), but
+point 3's own "no numeric parameters beyond `LEVEL=1`" claim from the first revision was itself
+imprecise and is corrected here: **`LEVEL=1` alone is not electrically meaningful for a logic-level
+DC sweep** — SPICE's own default `VTO` (threshold voltage) is `0`, which makes a Level-1 MOSFET
+already conducting at zero gate-source bias, unable to distinguish a driven logic-0 from a
+logic-1 at the gate. The educational example (never the template) must therefore carry **real,
+explicit, non-zero threshold and transconductance parameters**, not just a bare `LEVEL=1` card:
+   - **`.SUBCKT` template**: unchanged from the first revision — no `.model` cards defined at
+     all, `M` lines reference undefined model names, every `W=`/`L=` is the non-numeric token
+     `TBD`. Deliberately cannot be simulated as-is.
+   - **Educational example**: full numeric `.model NMOS_MODEL NMOS(LEVEL=1 ...)` /
+     `.model PMOS_MODEL PMOS(LEVEL=1 ...)` cards with real `VTO`/`KP`/`LAMBDA`/`GAMMA`/`PHI`
+     values. **This document does not invent those numbers.** Per this project's standing rule
+     against asserting anything unverified, the exact figures must be a **verbatim reproduction of
+     a real, citable published source** (e.g. ngspice's own manual/example library) — implementation
+     must include the exact citation in a file comment, and if no suitable citable source is
+     available at implementation time, that has to be surfaced explicitly rather than filled in
+     with plausible-looking invented numbers. Supply: `VDD = 5V DC` (a plain, widely-recognized
+     illustrative value, not tied to any real process — safe to pin directly since it's a choice
+     of test point, not a fabricated physical parameter). Sizing: one uniform `W=10u L=1u` for
+     every transistor, clearly labeled illustrative/arbitrary in a header comment. Output
+     thresholds for the point-4 test harness: output ≤ 20% of `VDD` reads as logic-0, ≥ 80% reads
+     as logic-1, anything in between is an **ambiguous level that fails the test**.
+   - **A file comment on the educational example states explicitly which analog effects the
+     cited parameters imply are modeled vs. effectively negligible** (e.g. whatever the cited
+     source's own `GAMMA`/`LAMBDA` values imply about body effect / channel-length modulation) —
+     determined from the actual cited numbers once sourced, not asserted here without them in
+     hand. This replaces the first revision's incorrect "bulk-tied-to-supply disables body effect"
+     reasoning (Codex's round-1 correction, restated precisely here since round 2 revisited the
+     same section).
 
-**4. ngspice verification: dedicated CI job, never a local requirement, exhaustive and strict.**
-Codex is right that a Python packaging extra does not install the `ngspice` binary (it's a system
-package, not `pip`-installable in general) — the earlier "optional dev extra, self-skip like
-Playwright" framing conflated the two and is replaced:
-   - A **separate CI job** (its own workflow entry, not folded into the existing Python/Chromium
-     matrix) explicitly installs `ngspice` on the runner and runs the electrical suite. Export
-     users and local `pip install -e ".[dev]"` never need `ngspice` present — the suite
-     self-skips locally exactly like the Chromium suite already does when its own extra is
-     missing, but the *CI-required* copy of it only runs in that dedicated job.
-   - For each representative case (point 5's battery), the job generates the standalone example
-     deck, then for **every one of the 2^n input combinations** (exhaustive, matching D7's own
-     "every input vector" bar, never a sample) sets the input sources accordingly and runs an
-     ngspice DC operating-point analysis with the pinned supply voltage, pinned `.model`
-     parameters, and pinned sizing from point 3's example.
-   - **Explicit output thresholds**, not left implicit: an output below a documented fraction of
-     the supply is logic-0, above a documented (higher) fraction is logic-1, and anything in
-     between is an **ambiguous level that fails the test** rather than being rounded either way.
-   - **Non-convergence fails the test** for that input vector — never silently skipped or ignored.
-   - **Don't-care rows are checked against the chosen circuit's own reported assignment**, not
-     against "any" logically-acceptable value: for each don't-care minterm, the expected level is
-     `result.verification.dont_care_assignments[minterm]` (already computed, already the actual
-     value this specific circuit produces — a real transistor network has no "don't care" at
-     simulation time, it does something specific), not re-derived independently.
+**4. ngspice verification: exhaustive input+complement sweep, required in CI, optional only
+locally.**
+   - The harness enumerates **every one of the 2^n logical input vectors** over `var_order` (not
+     just the connected primary ports). For each vector, it drives every exposed **primary** port
+     to that vector's value where connected, and — per Codex's instruction — drives every exposed
+     **external complement** port to the logical NOT of its corresponding variable's value for
+     that vector, **including for a complement-only variable** (point 2's dual-rail `a` case: `a`'s
+     primary port is unconnected internally, but its complement port is real and must still
+     receive the correct, vector-dependent driven value; formally unconnected does not mean
+     undriven — every instantiated `.SUBCKT` port needs a source on it regardless of whether the
+     subcircuit body itself uses it).
+   - Pinned supply/model/sizing/thresholds from point 3's educational example, applied
+     consistently across the whole sweep.
+   - **Non-convergence fails the test** for that input vector. **An ambiguous output level (point
+     3's 20%/80% band) fails the test.** **Don't-care rows are checked against
+     `result.verification.dont_care_assignments[minterm]`** specifically (the chosen circuit's own
+     actual reported value), never against "any" logically acceptable one.
+   - **CI requirement, tightened per Codex's instruction**: the dedicated CI job installs
+     `ngspice` explicitly and **must fail if that installation doesn't succeed or the binary isn't
+     found** — a missing tool in CI is a job failure, never a silent skip, since a silently-skipping
+     required check defeats the point of requiring it. **Local runs are the only place a
+     missing-`ngspice` skip is allowed** — `pip install -e ".[dev]"` and ordinary local test runs
+     never need `ngspice` present, matching how the Chromium suite already self-skips locally.
 
-**5. Expanded acceptance coverage** (supersedes/extends the original draft's list 1-8; still to
-exist, reviewed, before implementation):
-1. **Structural round-trip**: every `Layout.device` appears exactly once, with its own id and
-   exactly its own drain/gate/source/bulk *synthetic* nets (point 1) in the documented column
-   order — checked by parsing the emitted text back into structured device records and comparing
-   against `Layout`, never eyeballed.
-2. **Net inventory closure**: every node name referenced appears in the point-1 mapping; no
-   invented/orphan names; the comment-mapping is itself exactly bijective with `Layout.nets`.
-3. **Case-insensitive naming collisions** (point 1's regression case): `(aA)'` and a 3-variable
-   case-differing set (`a`/`A`/`a0`) — lower-cased emitted names contain zero duplicates.
-4. **Device count matches the report**: exactly `SynthesisResult.total_transistors`, across
-   NAND3/NOR4/AOI31/AOI21 (shared inverter)/AND (dual-simultaneous-shared-inverter case)/
-   dual-rail/wide (40T) cases — the same battery D17's own review used.
-5. **Device/model polarity**: every device whose `Layout.Device.kind == "p"` references the PMOS
-   model name and every `"n"` device references the NMOS model name, no exceptions, in both the
-   template and the example artifact.
-6. **Bulk convention**: every PMOS device's bulk is `VDD`, every NMOS device's bulk is the
-   subcircuit's ground pin (or `0` in the standalone deck) — no exceptions.
-7. **VDD/ground/output identity**: `VDD` is the literal supply name; the output pin/node matches
-   `Layout.output_net_id`'s mapped synthetic name; ground follows point 2's pin/node-0 rule.
-8. **Dual-rail external complement ports**: for a dual-rail result, every variable whose
-   complement is actually used as a gate net gets its own exposed pin (point 2), named and ordered
-   correctly, and is *not* also driven by an internal inverter device.
-9. **Shared inverters**: an AOI21-style case with one shared inverter driving multiple gates
-   emits exactly one inverter's worth of devices, wired to every consuming gate — the same
-   single-inverter-multiple-fanout fact D12/D17 already established, now also checked at the
-   netlist level.
-10. **Unused declared variables**: a `var_order` entry the synthesized function does not actually
-    depend on still gets a correctly-named, correctly-ordered pin (no crash, no silently dropped
-    pin, no renumbering that shifts other pins).
-11. **Custom output names**: `output_name` other than `F` flows through to the mapped output pin
-    name/comment correctly.
-12. **Wired vs. textbook `Layout.style` equivalence**: for the same `SynthesisResult`, exporting
-    from both the "wired" and "textbook" schematic layouts (D17 Phase A vs. Phase B) yields
-    *electrically* equivalent netlists (same device roles/kinds and same net-equivalence classes
-    under the point-1 mapping) even if geometry/internal ids differ — proves the exporter depends
-    only on electrical facts, never on which layout algorithm produced the `Layout`.
-13. **Determinism**: identical `Layout` input produces byte-identical netlist text across runs and
-    `PYTHONHASHSEED` values.
-14. **Mutation tests**: wrong bulk assignment, swapped drain/source, a missing device, two
-    distinct `Layout` nets incorrectly mapped to the same synthetic name (the exact class of bug
-    point 1 exists to prevent) — each independently caught by tests 1, 3, or 6.
-15. **(CI-only, point 4)**: the exhaustive ngspice DC-sweep suite itself, including the
-    don't-care-vs-`dont_care_assignments` check and the ambiguous-level/non-convergence failure
-    modes.
+**5. Compatibility claims, qualified to what's tested — and to the right artifact.** The netlist
+targets portable SPICE3-style syntax intended to be readable by common simulators (ngspice,
+LTspice, HSPICE), but **only ngspice compatibility is actually verified**, and — Codex's
+correction — that claim applies **only to the educational example**, the one artifact that's
+actually simulated (point 4). The `.SUBCKT` template is deliberately non-runnable (point 3's `TBD`
+tokens, undefined model references) and no compatibility claim of any kind applies to it.
+Documentation/file comments must say exactly this: "the educational example is tested with
+ngspice; it and the connectivity template are written in portable SPICE3-style syntax intended to
+work with other simulators, which are untested."
 
-**6. Compatibility claims, qualified.** The netlist targets a portable SPICE3-style syntax
-*intended* to be readable by common simulators (ngspice, LTspice, HSPICE) — but **only ngspice
-compatibility is actually verified** (point 4's CI job). Documentation and any in-file comments
-must say exactly that: "tested with ngspice; written in portable SPICE3-style syntax intended to
-work with other simulators, which are untested" — never an unqualified "works in LTspice/HSPICE"
-claim this project hasn't earned.
-
-**7. What stays excluded** (unchanged from D17 point 6): real transistor sizing as a *design
-output* (point 3's illustrative examples are explicitly not that), body-effect modeling beyond
-the bulk-tie connectivity convention, analog parasitics (wire R/C, junction capacitance), physical
+**6. What stays excluded** (unchanged from D17 point 6): real transistor sizing as a *design
+output* (point 3's illustrative example is explicitly not that), body-effect modeling beyond
+whatever the cited educational parameters happen to imply, analog parasitics, physical
 layout/DRC, arbitrary non-series-parallel circuits, multi-output netlists.
 
-**8. CLI/UI surface.** Mirrors D17/D18's established pattern: a `--netlist` flag or output mode on
-`synth` (CLI, likely emitting both artifacts or one selectable via a further flag), and "Download
-SPICE netlist" button(s) beside the existing "Download SVG" button in the web UI's synthesis
-report (server-side generation from `Layout`, downloaded as `.cir` file(s), no client-side
-reconstruction). Exact flag names/UI copy left to implementation.
+**7. CLI/UI surface.** Mirrors D17/D18's established pattern: a `--netlist` flag/output mode on
+`synth` (CLI), and "Download SPICE netlist" button(s) beside "Download SVG" in the web UI's
+synthesis report (server-side generation from `Layout`, no client-side reconstruction). Deferred
+to Phase 2 — see point 9. Exact flag names/UI copy left to implementation.
 
-**9. Phasing.** The scope grew materially in this revision (two generated artifacts instead of
-one, a dedicated CI job with a new system-level dependency, an exhaustive electrical-simulation
-acceptance suite) — closer to D17/D18's weight than the original draft's "single round" estimate.
-Whether this still fits one PR/review round or wants its own two-phase split (connectivity
-model+template first, example deck+ngspice CI second, reviewed separately) is left for Codex's
-final pass and the owner's call, not decided here.
+**8. Acceptance tests** (supersedes the first revision's list in full):
+1. **Structural round-trip**: the point-2 port-list algorithm, applied to `Layout`, produces
+   exactly the documented ports in the documented order; every `Layout.device` appears exactly
+   once with its own synthetic drain/gate/source/bulk nets in the documented column order —
+   checked by parsing emitted text back into structured records and comparing against `Layout`,
+   never eyeballed.
+2. **Net inventory closure (partitioned)**: every connected port/net maps to a real `Layout` net;
+   every unconnected declared input is a formal port wired to no device terminal anywhere in the
+   body; the comment-mapping is exactly bijective with the nets it documents.
+3. **Case-insensitive naming collisions**: `(aA)'` and a 3-variable case-differing set
+   (`a`/`A`/`a0`) — lower-cased emitted names contain zero duplicates.
+4. **Identifier safety sweep**: every emitted `.SUBCKT`/model/device/net/port identifier matches
+   `^[A-Za-z0-9_]+$`, across the full D8 variable-name alphabet; no `Device.literal` content ever
+   appears as a token (only in comments).
+5. **The two port-list-contradiction regressions**, reproduced exactly: `variables=a,b ones=2,3`
+   (unconnected `b` primary port present, correctly tagged) and `expr=a dual_rail=True` (`a`'s
+   primary port present-but-unconnected, its complement port present-and-connected).
+6. **Custom output name traceability**: `output_name='Y'` — the output net's comment shows its
+   synthetic name, `Layout` id `OUT`, and label `Y` together.
+7. **Device count matches the report**: exactly `SynthesisResult.total_transistors`, across
+   NAND3/NOR4/AOI31/AOI21 (shared inverter)/AND (dual-simultaneous-shared-inverter)/dual-rail/wide
+   (40T) cases.
+8. **Device/model polarity**: every `kind=="p"` device references the PMOS model name, every
+   `"n"` device the NMOS model name, in both artifacts.
+9. **Bulk convention**: every PMOS device's bulk is the mapped `VDD` port/net, every NMOS
+   device's bulk is the mapped ground port/net — no exceptions, and (post point-1) never the
+   literal strings `VDD`/`GND`/`0` inside the `.SUBCKT` body.
+10. **Shared inverters**: one shared inverter feeding multiple gates emits exactly one inverter's
+    worth of devices, wired to every consumer.
+11. **Wired vs. textbook `Layout.style` equivalence**: exporting the same `SynthesisResult` from
+    both schematic layouts yields electrically equivalent netlists (same roles/kinds, same
+    net-equivalence classes under the point-1 mapping) even if geometry/internal ids differ.
+12. **Determinism**: identical `Layout` input produces byte-identical netlist text across runs and
+    `PYTHONHASHSEED` values.
+13. **Mutation tests**: wrong bulk assignment, swapped drain/source, a missing device, two
+    distinct `Layout` nets mapped to the same synthetic name, a shuffled port order, an
+    unconnected port incorrectly wired to a device, a complement port driven to the *same* value
+    as its variable instead of its logical NOT (point 4) — each independently caught by the tests
+    above.
+14. **(CI-only, dedicated job)**: the exhaustive ngspice sweep itself (point 4) — every input
+    vector, correct complement-driving including complement-only variables, don't-care check
+    against `dont_care_assignments`, ambiguous-level and non-convergence failure modes, and the
+    job fails outright if `ngspice` isn't available rather than skipping.
 
-**Claude's read on Codex's review, for the owner:** no technical disagreement with any of the six
-points — point 1 was reproduced and confirmed independently before writing this revision (exact
-repro above), and points 2-6 are each either a correctness fix (3) or a precision/honesty
-improvement (2, 4, 5, 6) consistent with this project's existing bar. The one thing worth the
-owner's attention explicitly: this revision is meaningfully bigger in scope than the original
-draft (point 9) — worth confirming that's still wanted before this goes to implementation, not a
-reason to push back on any individual point.
+**9. Phasing — adopts Codex's recommendation directly** (the first revision left this
+undecided; round 2 gave a concrete split, taken as-is):
+   - **Phase 1**: export records, naming/ports (points 1-2), the `.SUBCKT` template, structural
+     and mutation tests (point 8, tests 1-13), the educational example (point 3), and the
+     required dedicated ngspice CI job (point 4/8 test 14) — the fully self-verifying exporter,
+     reviewed and merged with no UI attached yet.
+   - **Phase 2**: CLI/UI integration (point 7) — downloads, filenames, export parity with the
+     existing schematic/K-map download pattern, stale-result clearing, explanatory text.
+   - Each phase its own PR, independently reviewed before the next starts — same discipline as
+     D18's three phases.
 
-**Date:** 2026-09-21 (revised after Codex's first review round). Still not approved —
+**Claude's read on Codex's round-2 review, for the owner:** no technical disagreement with any of
+the six points. Two are genuine bugs in my own first revision, both independently reproduced
+against the actual code before being accepted here (point 1's VDD/ground scoping claim was
+simply wrong about how SPICE subcircuits work; point 2's port list was contradictory in two
+concrete, reproduced cases) — I should have tested both before writing the first revision rather
+than after Codex found them. The rest (3, 4, 5) are precision/rigor improvements in the same vein
+as round 1's. One thing I'm flagging rather than deciding unilaterally: point 3 asks the doc to
+pin exact numeric `.model` parameters, and I've deliberately declined to invent specific figures
+here (VTO/KP/LAMBDA/GAMMA/PHI) since I have no way to verify a real published source's exact
+numbers right now — I've pinned the *rule* (verbatim reproduction of a cited source, never
+invented) instead of the digits themselves. Worth Codex/the owner confirming that's the right
+call rather than expecting this document to contain specific numbers.
+
+**Date:** 2026-09-21 (revised after Codex's second review round). Still not approved —
 implementation must not begin until Codex's final pass on this revision comes back clean and the
-owner explicitly authorizes it, per this project's standing decision-entry-first discipline.
+owner explicitly authorizes it.
