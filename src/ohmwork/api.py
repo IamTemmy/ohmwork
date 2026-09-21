@@ -92,7 +92,8 @@ def render_tt(
 ) -> str:
     """The full text ``ohmwork tt`` prints: the table (in whichever format)
     followed by ``F = ...`` (except data-only CSV). Raises ``ParseError`` (bad expression) or
-    ``ValueError`` (bad terse/cols combination, or an unknown column)."""
+    ``ValueError`` (bad terse/cols combination, an unknown column, or ``csv`` combined with
+    ``md``/``latex``)."""
     result = derive_from_input(expression, terse=terse, cols=cols)
     return format_tt_report(result, md=md, latex=latex, csv=csv)
 

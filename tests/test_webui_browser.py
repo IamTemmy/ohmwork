@@ -1922,6 +1922,15 @@ def test_derivation_csv_download_and_stale_clearing(page, width):
     assert page.locator("#tt-download-csv").is_disabled()
     page.click("#panel-tt button.submit")
     page.wait_for_selector("#tt-result:not(.empty)")
+    # New problem must also clear a live CSV download, not just an edit or a stale response.
+    assert page.evaluate("lastTtCsv !== null")
+    assert not page.locator("#tt-download-csv").is_disabled()
+    page.click("#tt-new-problem")
+    assert page.evaluate("lastTtCsv === null")
+    assert page.locator("#tt-download-csv").is_disabled()
+    page.fill("#tt-expr", "xy+xy'")
+    page.click("#panel-tt button.submit")
+    page.wait_for_selector("#tt-result:not(.empty)")
     # A genuine delayed response must not restore a download after an edit.
     def delayed(route):
         reply = route.fetch()

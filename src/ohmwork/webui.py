@@ -15,7 +15,6 @@ import sys
 import webbrowser
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
-from ohmwork.render import format_csv
 from ohmwork.api import derive_from_input, format_tt_report, synthesize_from_input, kmap_from_input
 from ohmwork.kmap import build_synthesis_kmap
 from ohmwork.expr import render
@@ -1710,7 +1709,8 @@ def _handle_tt(environ, start_response):
         return _json_response(start_response, "200 OK", {"ok": False, "error": str(e)})
     output = format_tt_report(derivation, md=bool(body.get("md")), latex=bool(body.get("latex")))
     view = build_tt_view(derivation)
-    return _json_response(start_response, "200 OK", {"ok": True, "output": output, "result": view, "csv": format_csv(derivation.table)})
+    csv_output = format_tt_report(derivation, csv=True)
+    return _json_response(start_response, "200 OK", {"ok": True, "output": output, "result": view, "csv": csv_output})
 
 
 def _handle_synth(environ, start_response):
