@@ -985,16 +985,21 @@ cell notation and literal expansion, and provide a collapsible Boolean-law
 reference. Full step tables remain in the UI/text report to keep SVG diagrams
 manageable. Owner authorized implementation directly in the conversation.
 
-## D19 — PROPOSED, revised after Codex's third review round (of commit `13e5459`), still not approved. What does a SPICE netlist export show, and how is it built?
+## D19 — Approved architecture; Phase 1 authorized. What does a SPICE netlist export show, and how is it built?
 
-**Status:** drafted by Claude (2026-09-21); revised after Codex's first review (`715a210`) and
+**Current status (2026-09-21):** final technical review of revision `8d227a8` approved the
+architecture; the owner explicitly authorized Phase 1 ("okay proceed with phase 1").
+Phase 2 still requires its own authorization after independent Phase 1 review.
+The following review history is retained for traceability.
+
+**Review history:** drafted by Claude (2026-09-21); revised after Codex's first review (`715a210`) and
 second review (`13e5459`). **This is the third revision.** Codex's third pass confirmed the
 architecture and the supply/port fixes from round 2 are sound, and found **one more blocking
 naming bug** (device names, point 1 below) plus four targeted precision/consistency corrections
 (points 2-5) — no redesign, same architecture throughout all three rounds. The device-naming bug
 was independently reproduced against the actual code before being accepted, same discipline as
-every prior bug in this entry. **Still not approved** — goes back to Codex for a final pass; only
-after that comes back clean does the owner explicitly authorize implementation.
+every prior bug in this entry. At that revision, final review and owner authorization were
+still pending; they have since been completed as recorded above.
 
 **Trigger:** the charter's own original v1 scope (§6: "SPICE netlist export") — deferred since
 M1b alongside K-map rendering and the schematic, both of which have since shipped (D17, D18).
@@ -1144,8 +1149,7 @@ parameters" framing is what this corrects).
      zero (e.g. `LAMBDA=0` to disable channel-length modulation as a stated simplification) is
      legitimate; what's required is that every value present is a deliberate, documented choice,
      never an unstated simulator default. Threshold voltages specifically must be explicit and
-     correctly signed (above), since those are what let the sweep (point 4) distinguish a driven 0
-     from a 1 at all. Supply: `VDD = 5V DC` (a plain, widely-recognized illustrative test point,
+     correctly signed (above). Supply: `VDD = 5V DC` (a plain, widely-recognized illustrative test point,
      not a fabricated physical parameter — safe to pin directly). Sizing: one uniform `W=10u L=1u`
      for every transistor, clearly labeled illustrative/arbitrary. Output thresholds for the
      point-4 harness: output ≤ 20% of `VDD` reads as logic-0, ≥ 80% reads as logic-1, anything in
@@ -1227,7 +1231,8 @@ to Phase 2 — see point 9. Exact flag names/UI copy left to implementation.
 5. **Synthetic-name allocation completeness**: since no identifier is ever derived from a
    variable name or `Device.id` (point 1), this is no longer a "safety" concern but a coverage
    one — across the full D8 variable-name alphabet (letters plus optional trailing digit,
-   including large variable counts), the `n<i>`/`m<i>` allocation stays deterministic, complete
+   including large net/device inventories within the supported 1–4 variable inputs), the
+   `n<i>`/`m<i>` allocation stays deterministic, complete
    (every `Layout` net/device and every unconnected declared input gets exactly one name), and
    collision-free; no `Device.literal` content ever appears as a token, only in comments.
 6. **The two port-list-contradiction regressions**, reproduced exactly: `variables=a,b ones=2,3`
@@ -1286,6 +1291,6 @@ needing to be pinned in this document. Across all three rounds, the pattern has 
 concrete, checkable claim — mine or Codex's — gets independently reproduced against the real code
 before being written into or accepted into this entry, not taken on trust either direction.
 
-**Date:** 2026-09-21 (revised after Codex's third review round). Still not approved —
-implementation must not begin until Codex's final pass on this revision comes back clean and the
-owner explicitly authorizes it.
+**Date:** 2026-09-21. Phase 1 authorized following final review of `8d227a8`.
+Implementation details, exact model citation, assumptions, and reproduction instructions:
+[SPICE Phase 1](spice.md).

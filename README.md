@@ -3,7 +3,7 @@
 Digital logic work at the speed of typing, showing its work at every step.
 
 See [docs/CHARTER.md](docs/CHARTER.md) for the mission and scope, and
-[docs/decisions.md](docs/decisions.md) for the definitional decisions (D1–D16) that govern
+[docs/decisions.md](docs/decisions.md) for the definitional decisions (D1–D19) that govern
 the implementation.
 
 ## Setup
@@ -46,6 +46,13 @@ ohmwork kmap --vars "a,b" --table "1X00" --form pos --output-name Y
 ```
 
 This is the standalone view. Synthesis integration is the next D18 phase.
+
+## SPICE export (Python API, D19 Phase 1)
+
+A Layout-based exporter now produces a non-runnable connectivity template and a
+separate runnable educational DC example. See [docs/spice.md](docs/spice.md) for
+usage, exact model sources, assumptions, and ngspice verification. CLI/UI download
+integration is reserved for Phase 2.
 
 ## Usage
 
