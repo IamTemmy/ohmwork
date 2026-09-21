@@ -222,6 +222,17 @@ _PAGE = r"""<!doctype html>
     background: #5a82ff22; border-color: #5a82ff60;
   }
   button.copy-btn-primary:hover { background: #5a82ff38; }
+  .tt-export-actions {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .75rem; width: 100%; max-width: 38rem; align-items: stretch;
+  }
+  .tt-export-actions > button.copy-btn {
+    box-sizing: border-box; width: 100%; min-height: 44px;
+    padding: .55rem 1rem; font-size: .95rem; line-height: 1.4; font-weight: 600;
+  }
+  @media (max-width: 600px) {
+    .tt-export-actions { grid-template-columns: minmax(0, 1fr); grid-auto-rows: 1fr; }
+  }
   pre.copy-fallback {
     white-space: pre-wrap; background: #8881; padding: .75rem; border-radius: 6px;
     margin-top: .5rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -269,7 +280,7 @@ _PAGE = r"""<!doctype html>
       </table>
     </div>
 
-    <div class="row copy-row">
+    <div class="row copy-row tt-export-actions">
       <button type="button" class="copy-btn copy-btn-primary" id="tt-copy-rich">Copy table for Word/Docs</button>
       <button type="button" class="copy-btn" id="tt-download-csv" disabled>Download CSV</button>
     </div>
