@@ -462,6 +462,7 @@ def test_synth_kmap_uses_same_result_without_cover_selection(server_url,monkeypa
     assert response["kmap"]["view"]==json.loads(json.dumps(build_kmap_view(model)))
     assert response["output"]==format_synth_report(result,result.verification)
     assert not response["kmap"]["view"]["alternatives"]
+    assert response["kmap"]["output"].count(payload.get("output_name","F")+"' =")==1
     if "dc" in payload:
         assert response["kmap"]["view"]["grouped_expression"]=="bcd"
         assert response["kmap"]["view"]["groups"][0]["pattern"]=="-111"

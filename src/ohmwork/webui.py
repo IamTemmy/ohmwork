@@ -377,7 +377,8 @@ _PAGE = r"""<!doctype html>
         <button type="button" class="btn-secondary" id="synth-km-download">Download K-map SVG</button>
         <button type="button" class="btn-secondary" id="synth-km-copy">Copy K-map explanation</button>
       </div>
-      <p id="synth-km-selection" aria-live="polite"></p>
+      <p>Select a group or term to isolate it. Select again, or press Escape, to show all.</p>
+      <p id="synth-km-selection" class="km-selection-status" aria-live="polite"></p>
       <div class="km-group-list" id="synth-km-groups"></div>
       <p id="synth-km-assignments"></p>
     </section>

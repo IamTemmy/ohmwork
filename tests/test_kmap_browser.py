@@ -317,6 +317,12 @@ def test_group_card_sections_align_with_content_sized_rows(page,width):
           return {card:rect(el),parts:[...el.children].map(rect)};
         })""")
     before=measurements()
+    # Hover changes the live announcement, never the document geometry.
+    for card in page.locator('.km-group-card').all():
+        card.hover()
+        assert measurements()==before
+    page.locator('#km-show-all').hover()
+    assert measurements()==before
     rows={}
     for item in before:
         rows.setdefault(round(item['card']['top']),[]).append(item)
@@ -337,8 +343,8 @@ def test_group_card_sections_align_with_content_sized_rows(page,width):
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
 
 
-@pytest.mark.parametrize('expr', ["(abc)'","(a+b+c+d)'","(abc+d)'","((a+b)(c+d))'","(a'b+c)'","ab"])
-def test_synthesis_kmap_bridge_steps_and_export(page,server_url,tmp_path,expr):
+@pytest.mark.parametrize('case,expr', [('nand3',"(abc)'"),('nor4',"(a+b+c+d)'"),('aoi31',"(abc+d)'"),('oai22',"((a+b)(c+d))'"),('shared-aoi21',"(a'b+c)'"),('and2','ab')])
+def test_synthesis_kmap_bridge_steps_and_export(page,server_url,tmp_path,case,expr):
     from test_webui_browser import _submit_via_expression
     _submit_via_expression(page,expr)
     data=page.request.post(server_url+'/api/synth',data={'expr':expr}).json()['kmap']
@@ -356,7 +362,7 @@ def test_synthesis_kmap_bridge_steps_and_export(page,server_url,tmp_path,expr):
     page.click('#synth-km-copy')
     page.wait_for_function('!!window.copied')
     assert page.evaluate('window.copied')==data['output']
-    page.locator('#synth-km-stage').screenshot(path='test-artifacts/kmaps/synthesis-'+str(len(expr))+'-'+data['view']['origin']+'.png')
+    page.locator('#synth-km-stage').screenshot(path=f'test-artifacts/kmaps/synthesis-{case}.png')
     page.fill('#synth-expr','a')
     assert page.locator('#synth-km-stage svg').count()==0
     assert page.locator('#synth-km-groups').inner_text()==''

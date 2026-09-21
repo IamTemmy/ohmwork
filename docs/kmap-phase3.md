@@ -44,3 +44,17 @@ Use a port other than 5757 for manual review, leaving the user's live instance a
 
 This PR implements Phase 3 under the owner's authorization. Independent Claude
 review and merge remain separate from implementation.
+
+## Review corrections
+
+- Validate the displayed F-to-F' complement against the exact chosen PDN AST for
+  both AOI and OAI before returning a synthesis map. Mutation tests deliberately
+  break the complement operation and require rejection in each direction.
+- Give all six synthesis browser fixtures unique semantic screenshot names.
+- Keep the full PDN equation once in copied synthesis explanations; retain the
+  zero-group explanation in standalone POS reports.
+- Keep visible group instructions static. Dynamic hover/focus announcements remain
+  in an accessible live region outside document flow, since changing their length
+  above the cards can move the pointer target during a real click. Card alignment
+  tests now assert unchanged page coordinates through every card hover and exit,
+  at 1280/800/360px. No forced clicks, retries or relaxed geometry assertions.

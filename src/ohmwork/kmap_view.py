@@ -100,7 +100,7 @@ def format_kmap_report(model: KMap) -> str:
     xs=[f'm{c.minterm}={c.assigned_value}'+(' (grouped)' if c.group_ids else ' (ungrouped)')
         for c in sorted(model.cells,key=lambda c:c.minterm) if c.value=='X']
     if xs: lines.append('Selected X assignments: '+', '.join(xs))
-    if model.form=='POS':
+    if model.form=='POS' and model.synthesis_f_prime is None:
         lines.append(f"Zero-groups give {model.output_name}' = {render(model.grouped_expression)}; complementing gives the POS above.")
     lines.append(f'Verified across all {len(model.cells)} input combinations.')
     if model.alternatives:

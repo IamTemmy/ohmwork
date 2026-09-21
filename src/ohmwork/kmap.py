@@ -269,6 +269,10 @@ def build_synthesis_kmap(result: SynthesisResult, output_name: str = 'F') -> KMa
     if model.origin != 'synthesis-' + chosen.label or model.synthesis_f_prime != chosen.f_prime:
         raise RuntimeError('K-map synthesis provenance failed')
     _finish(model, variables, ones, dc, form, output_name, sop)
+    # The displayed F-to-F' equation must reconstruct the chosen AST in both
+    # directions, including AOI's POS-for-F presentation.
+    if de_morgan_complement(model.expression) != chosen.f_prime:
+        raise RuntimeError('displayed expression cannot reconstruct the chosen PDN exactly')
     assigned = {c.minterm:bool(c.assigned_value) for c in model.cells if c.value == 'X'}
     if assigned != result.verification.dont_care_assignments:
         raise RuntimeError('K-map assignments differ from the verified circuit')
