@@ -7,6 +7,7 @@ CSS = r"""
   .km-error { color:#d14343; margin:.8rem 0; }
   .km-summary { margin-top:1.5rem; border-left:3px solid #5686ef; padding:.2rem 1rem; }
   .km-summary h2 { font-size:1.4rem; margin:.2rem 0; overflow-wrap:anywhere; }
+  .km-selection-status { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
   .km-meta { font-size:.85rem; opacity:.75; }
   .km-stage { overflow-x:auto; border:1px solid #8884; border-radius:12px; margin:1rem 0; background:light-dark(#fcfdff,#161a23); }
   .km-stage svg { display:block; margin:auto; }
@@ -82,7 +83,8 @@ HTML = r"""
     <p id="km-direction" class="hint"></p>
     <div class="km-stage" id="km-stage" tabindex="0" aria-label="K-map diagram; scroll horizontally if needed"></div>
     <div class="km-actions"><button type="button" class="copy-btn" id="km-show-all">Show all groups</button><button type="button" class="copy-btn" id="km-download">Download SVG</button><button type="button" class="copy-btn" id="km-copy">Copy explanation</button></div>
-    <p id="km-selection" class="km-meta" aria-live="polite"></p>
+    <p class="km-meta">Select a group or term to isolate it. Select again, or press Escape, to show all.</p>
+    <p id="km-selection" class="km-selection-status" aria-live="polite"></p>
     <div id="km-groups" class="km-group-list"></div>
     <p id="km-assignments" class="km-meta"></p>
     <details id="km-alternatives"><summary>Other equally minimal covers</summary><ul id="km-alternative-list"></ul></details>

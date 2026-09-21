@@ -317,6 +317,12 @@ def test_group_card_sections_align_with_content_sized_rows(page,width):
           return {card:rect(el),parts:[...el.children].map(rect)};
         })""")
     before=measurements()
+    # Hover changes the live announcement, never the document geometry.
+    for card in page.locator('.km-group-card').all():
+        card.hover()
+        assert measurements()==before
+    page.locator('#km-show-all').hover()
+    assert measurements()==before
     rows={}
     for item in before:
         rows.setdefault(round(item['card']['top']),[]).append(item)
@@ -335,3 +341,62 @@ def test_group_card_sections_align_with_content_sized_rows(page,width):
     assert measurements()==before
     assert page.locator('.km-proof-panel').evaluate('el=>el.getBoundingClientRect().top+scrollY')>=max(i['card']['bottom'] for i in before)
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+
+
+@pytest.mark.parametrize('case,expr', [('nand3',"(abc)'"),('nor4',"(a+b+c+d)'"),('aoi31',"(abc+d)'"),('oai22',"((a+b)(c+d))'"),('shared-aoi21',"(a'b+c)'"),('and2','ab')])
+def test_synthesis_kmap_bridge_steps_and_export(page,server_url,tmp_path,case,expr):
+    from test_webui_browser import _submit_via_expression
+    _submit_via_expression(page,expr)
+    data=page.request.post(server_url+'/api/synth',data={'expr':expr}).json()['kmap']
+    bridge(snapshot(page),data['view'])
+    assert page.locator('#synth-km-connection').inner_text()==data['connection']
+    assert page.locator('#synth-km-pdn').inner_text()==data['pdn']
+    page.locator('#synth-km-groups [data-proof-toggle=G1]').click()
+    assert page.locator('#synth-km-groups .km-proof-panel').is_visible()
+    assert page.locator('#synth-km-groups tbody tr').count()==len(data['view']['groups'][0]['work']['steps'])
+    before=page.locator('#synth-km-stage svg').evaluate('el=>new XMLSerializer().serializeToString(el)')
+    with page.expect_download() as info: page.click('#synth-km-download')
+    path=tmp_path/'map.svg';info.value.save_as(path)
+    assert path.read_text()==before
+    page.evaluate("()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async t=>{window.copied=t}}})")
+    page.click('#synth-km-copy')
+    page.wait_for_function('!!window.copied')
+    assert page.evaluate('window.copied')==data['output']
+    page.locator('#synth-km-stage').screenshot(path=f'test-artifacts/kmaps/synthesis-{case}.png')
+    page.fill('#synth-expr','a')
+    assert page.locator('#synth-km-stage svg').count()==0
+    assert page.locator('#synth-km-groups').inner_text()==''
+    assert page.locator('#synth-km-connection').inner_text()==''
+
+
+def test_synthesis_and_standalone_kmaps_have_independent_panels(page):
+    from test_webui_browser import _submit_via_expression
+    submit(page,{'expr':'a+b'})
+    page.locator('#km-groups [data-proof-toggle=G1]').click()
+    original=page.locator('#km-groups .km-proof-panel').evaluate('el=>el.outerHTML')
+    _submit_via_expression(page,"((a+b)(c+d))'")
+    page.locator('#synth-km-groups [data-proof-toggle=G2]').click()
+    assert page.locator('#synth-km-groups .km-proof-panel').get_attribute('data-proof-group')=='G2'
+    assert page.locator('#km-groups .km-proof-panel').evaluate('el=>el.outerHTML')==original
+    ids=page.locator('[id]').evaluate_all('els=>els.map(e=>e.id)')
+    assert len(ids)==len(set(ids))
+    page.set_viewport_size({'width':360,'height':820})
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    page.click('#synth-new-problem')
+    assert page.locator('#synth-km-stage svg').count()==0
+    assert page.locator('#synth-km-groups').inner_text()==''
+    assert page.locator('#km-groups .km-proof-panel').evaluate('el=>el.outerHTML')==original
+
+
+def test_synthesis_kmap_discards_response_after_edit(page,server_url):
+    data=page.request.post(server_url+'/api/synth',data={'expr':"(abc)'"}).json()
+    page.click('.tab[data-tab=synth]')
+    page.check('input[name=synth-mode][value=expr]')
+    page.fill('#synth-expr',"(abc)'")
+    page.evaluate("()=>{window.fetch=()=>new Promise(resolve=>window.finishSynth=resolve)}")
+    page.click('#panel-synth button.submit')
+    page.fill('#synth-expr','a+b')
+    page.evaluate('data=>window.finishSynth({json:async()=>data})',data)
+    page.wait_for_timeout(100)
+    assert page.locator('#synth-km-stage svg').count()==0
+    assert page.locator('#synth-km-groups').inner_text()==''

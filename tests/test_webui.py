@@ -432,3 +432,46 @@ def test_api_tt_web_variable_cap_exact_boundary(server_url):
     rejected_result = post_json(server_url + "/api/tt", {"expression": nine_vars})
     assert rejected_result["ok"] is False
     assert "8" in rejected_result["error"]
+
+
+@pytest.mark.parametrize("payload", [
+    {"expr":"(abc)'"},
+    {"expr":"((a+b)(c+d))'","output_name":"Y"},
+    {"expr":"(a'b+c)'"},
+    {"expr":"ab","dual_rail":True},
+    {"variables":"a,b,c,d","ones":"0,1,2,5,6,9,10,11","dc":"3,4,8,12,13,14,15","output_name":"M"},
+])
+def test_synth_kmap_uses_same_result_without_cover_selection(server_url,monkeypatch,payload):
+    import ohmwork.webui as ui
+    import ohmwork.kmap as km
+    from ohmwork.kmap_view import build_kmap_view
+    from ohmwork.report import format_synth_report
+    captured=[]
+    original=ui.synthesize_from_input
+    def capture(**kwargs):
+        result=original(**kwargs);captured.append(result);return result
+    def forbidden(*args,**kwargs):
+        raise AssertionError("integration must not minimize again")
+    monkeypatch.setattr(ui,"synthesize_from_input",capture)
+    monkeypatch.setattr(km,"minimal_covers",forbidden)
+    monkeypatch.setattr(km,"minimize",forbidden)
+    response=post_json(server_url+"/api/synth",payload)
+    assert response["ok"] and len(captured)==1
+    result=captured[0]
+    model=km.build_synthesis_kmap(result,payload.get("output_name","F"))
+    assert response["kmap"]["view"]==json.loads(json.dumps(build_kmap_view(model)))
+    assert response["output"]==format_synth_report(result,result.verification)
+    assert not response["kmap"]["view"]["alternatives"]
+    assert response["kmap"]["output"].count(payload.get("output_name","F")+"' =")==1
+    if "dc" in payload:
+        assert response["kmap"]["view"]["grouped_expression"]=="bcd"
+        assert response["kmap"]["view"]["groups"][0]["pattern"]=="-111"
+
+
+def test_synth_kmap_failure_returns_no_partial_result(server_url,monkeypatch):
+    import ohmwork.webui as ui
+    def reject(*args,**kwargs):
+        raise RuntimeError("K-map provenance rejected")
+    monkeypatch.setattr(ui,"build_synthesis_kmap",reject)
+    response=post_json(server_url+"/api/synth",{"expr":"(abc)'"})
+    assert response=={"ok":False,"error":"K-map provenance rejected"}

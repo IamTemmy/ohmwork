@@ -274,3 +274,16 @@ def test_hypercube_checker_rejects_fake_power_of_two_group():
     assert len(m.groups)==4
     fake=replace(m.groups[0],minterms=(0,3,12,15),pattern='----')
     with pytest.raises(RuntimeError): validate_kmap(replace(m,groups=(fake,)))
+
+
+@pytest.mark.parametrize('expr', ["(abc+d)'","((a+b)(c+d))'"])
+def test_displayed_complement_reconstruction_is_runtime_gated(monkeypatch,expr):
+    import ohmwork.kmap as km
+    result=synthesize_from_input(expr=expr)
+    model=build_synthesis_kmap(result)
+    original=km.de_morgan_complement
+    def broken_complement(expression):
+        return Const(False) if expression==model.expression else original(expression)
+    monkeypatch.setattr(km,'de_morgan_complement',broken_complement)
+    with pytest.raises((ValueError,RuntimeError),match='reconstruct'):
+        build_synthesis_kmap(result)
