@@ -76,3 +76,31 @@ jobs:
             test-artifacts/schematics/
             test-artifacts/kmaps/
           if-no-files-found: ignore
+
+  spice-test:
+    # Required Phase-1 gate: a missing system binary must fail, never skip.
+    runs-on: ubuntu-latest
+    env:
+      OHMWORK_REQUIRE_NGSPICE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ngspice system binary
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ngspice
+          command -v ngspice
+          ngspice --version
+      - name: Install ohmwork
+        run: pip install -e ".[dev]"
+      - name: Verify export structure and every logical input vector
+        run: pytest tests/test_spice.py tests/test_spice_ngspice.py -q
+      - name: Save SPICE decks, simulator logs, and measured voltages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spice-electrical-review
+          path: test-artifacts/spice/
+          if-no-files-found: error
