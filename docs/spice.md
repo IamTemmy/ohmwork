@@ -81,7 +81,7 @@ Original names `mn0p9`/`mp1p0` are renamed. `LEVEL=1` is made explicit. We also 
 and noise defaults rather than relying on their implicit values. These additions
 come from the Level-1 parameter/default definitions in the
 [ngspice manual, MOSFET section](https://ngspice.sourceforge.io/docs/ngspice-manual.pdf)
-(version 47, §7.6.1, Level-1 parameter table); they are documented defaults, not
+(version 47, §7.6.2.5, Level-1 parameter table); they are documented defaults, not
 newly inferred process measurements. The complete cards emitted are:
 
 ```spice
@@ -150,3 +150,9 @@ Wired and textbook layouts must produce identical electrical artifacts.
 CI uploads every vector's actual `.cir` deck, simulator `.log`, and per-case
 `results.json` in the `spice-electrical-review` artifact. These let Claude inspect
 both connectivity and measured voltages, rather than trusting a pass count alone.
+
+Initial Phase 1 verification used ngspice 42: all 328 operating points across 34
+circuit/mode combinations passed, including six don't-care rows. Measured outputs
+ranged from approximately 6.2e-10 V to 5.000001 V. The non-browser regression suite
+passed 640 tests; the subsequently added model-card/documentation consistency test
+also passed (641 non-browser tests in total). CI rechecks the committed tree.
