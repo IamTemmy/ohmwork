@@ -985,16 +985,16 @@ cell notation and literal expansion, and provide a collapsible Boolean-law
 reference. Full step tables remain in the UI/text report to keep SVG diagrams
 manageable. Owner authorized implementation directly in the conversation.
 
-## D19 — PROPOSED, revised after Codex's second review round (of commit `715a210`), still not approved. What does a SPICE netlist export show, and how is it built?
+## D19 — PROPOSED, revised after Codex's third review round (of commit `13e5459`), still not approved. What does a SPICE netlist export show, and how is it built?
 
-**Status:** drafted by Claude (2026-09-21); revised once after Codex's first review (commit
-`715a210`); **this is the second revision**, after Codex reviewed `715a210` and found two more
-real bugs in the port/naming/scoping model (points 1 and 3 below) plus four further precision
-gaps (points 2, 4, 5, 6). Both round-2 bugs were independently reproduced against the actual code
-before being accepted — see each point. **Still not approved** — goes back to Codex for a final
-pass; only after that comes back clean does the owner explicitly authorize implementation. The
-Layout-based connectivity approach itself remains unchanged and was never in question across
-either review round.
+**Status:** drafted by Claude (2026-09-21); revised after Codex's first review (`715a210`) and
+second review (`13e5459`). **This is the third revision.** Codex's third pass confirmed the
+architecture and the supply/port fixes from round 2 are sound, and found **one more blocking
+naming bug** (device names, point 1 below) plus four targeted precision/consistency corrections
+(points 2-5) — no redesign, same architecture throughout all three rounds. The device-naming bug
+was independently reproduced against the actual code before being accepted, same discipline as
+every prior bug in this entry. **Still not approved** — goes back to Codex for a final pass; only
+after that comes back clean does the owner explicitly authorize implementation.
 
 **Trigger:** the charter's own original v1 scope (§6: "SPICE netlist export") — deferred since
 M1b alongside K-map rendering and the schematic, both of which have since shipped (D17, D18).
@@ -1026,32 +1026,61 @@ both closed here:
      matching — reproduced independently on `(aA)'` before round 1 was written; still fixed the
      same way.
    - **(Codex, round 2) Identifier safety isn't only a net-naming problem.** `.SUBCKT` names,
-     `.model` names, and device names (`M<id>`) all need the same safe-character discipline, and
-     none of them should ever embed `Device.literal` (explicitly documented in `schematic.py` as
+     `.model` names, and device names all need the same safe-character discipline, and none of
+     them should ever embed `Device.literal` (explicitly documented in `schematic.py` as
      "display-only rendering... never read for correctness") — e.g. a complemented literal like
      `b'` contains a character (`'`) that has no business inside a SPICE token.
-   - **Resolution, replacing the first revision's point 1 in full:** every SPICE-syntax
-     identifier — every net/port name, the `.SUBCKT` name, both model names, every device name —
-     is drawn from a single synthetic scheme: net/port names are `n0`, `n1`, `n2`, ... assigned
-     once in `Layout.nets`' own deterministic order (VDD and ground each just get their own
-     `n<i>` like everything else — no exemptions); device names reuse `Device.id` directly
-     (already `[A-Za-z0-9_]`-safe by construction, per the existing `M0..Mn`/`INV_{var}_P/N`
-     convention); model/subcircuit names are fixed literals (`NMOS_MODEL`, `PMOS_MODEL`, a
-     `GateName` derived only from the already-safe `gate_name`/`output_name` after stripping to
-     `[A-Za-z0-9_]`). Collision-free by construction (pure lowercase-ASCII-and-digit tokens,
-     never user-influenced casing or characters).
-   - **Traceability preserved in comments, three-way, not just net-id-to-synthetic-name**: for
-     every net, one comment line records **(a)** the synthetic name, **(b)** the `Layout` net id
-     when the net corresponds to one (some don't — point 2), and **(c)** the net's `Net.label`
-     and a plain-English **role** (primary input / external complement input / unconnected
-     declared input / output / supply / ground / internal junction). This is what makes a custom
-     output name like `Y` traceable end to end even though its `Layout` id stays the fixed `OUT`
-     — confirmed by construction: `Net.label` for the output net already carries the requested
+   - **(Codex, round 3) Reusing `Device.id` verbatim — round 2's own fix — is itself a blocking
+     bug, and case-insensitive collisions aren't limited to nets.** Reproduced independently
+     before accepting this: `synthesize_from_input(expr='aA')` (plain `aA`, not `(aA)'` — this
+     specific shape needs internally-generated inverters for both variables) produces
+     `Layout.devices` with ids `INV_A_N`, `INV_A_P`, `INV_a_N`, `INV_a_P`, alongside `M0`-`M3`.
+     Lower-cased, `INV_A_N`/`INV_a_N` collide, as do `INV_A_P`/`INV_a_P` — the exact same class of
+     case-insensitive collision round 1 already fixed for nets, just missed for devices. Worse:
+     these ids start with `I`, but a SPICE element line's *leading character* determines its type
+     (`M` = MOSFET, `I` = independent current source) — emitting `INV_a_P drain gate source bulk
+     model` would either fail to parse as a MOSFET or be silently misread as declaring a current
+     source, not a transistor. Round 2's "device names reuse `Device.id` directly, already safe"
+     claim was wrong on both counts.
+   - **Resolution, replacing round 2's point 1 in full:** every SPICE-syntax identifier is drawn
+     from one of three small, fixed, deterministic synthetic schemes, never from `Layout`/`Device`
+     data verbatim:
+     - **Nets/ports**: `n0`, `n1`, `n2`, ... — first assigned, in order, to every entry in
+       `Layout.nets` (its own deterministic order; VDD and ground get `n<i>` like everything else,
+       no exemptions); **then**, continuing the same sequence, one more `n<i>` for each
+       **unconnected declared-input port** (point 2), allocated in `var_order` order — so these
+       never collide with a real electrical net's synthetic name, and their allocation order is
+       itself deterministic.
+     - **Devices**: `m0`, `m1`, `m2`, ... assigned once, in `Layout.devices`' own deterministic
+       order — never `Device.id`. Lower-case `m` (SPICE element-type detection is case-insensitive,
+       so this is exactly as valid as `M0` while staying consistent with the file's general
+       lowercase convention).
+     - **Models/subcircuit**: fixed literal constants, the same for every export —
+       `ohmwork_gate` (subcircuit name), `nmos_model`, `pmos_model`. Sufficient for v1, which
+       exports exactly one gate per file (multi-output/multi-gate netlists are excluded, point 6)
+       — no per-gate derivation or stripping logic needed, and therefore no separate safety
+       analysis for a derived name.
+     Collision-free by construction within each scheme (pure lowercase-ASCII-and-digit tokens,
+     never user-influenced casing or characters), and the three schemes can never collide with
+     each other since they use disjoint prefixes (`n`/`m`/fixed words) and SPICE keeps node names
+     and element-instance names in separate namespaces regardless.
+   - **`Device.id` (`M0`, `INV_a_P`, ...) is preserved only in mapping comments**, never as a
+     SPICE token — same rule point 1 already established for net ids.
+   - **Traceability preserved in comments, three-way for nets, one-way for devices**: for every
+     net, one comment line records **(a)** the synthetic name, **(b)** the `Layout` net id when
+     the net corresponds to one (some don't — point 2), and **(c)** the net's `Net.label` and a
+     plain-English **role** (primary input / external complement input / unconnected declared
+     input / output / supply / ground / internal junction). This is what makes a custom output
+     name like `Y` traceable end to end even though its `Layout` id stays the fixed `OUT` —
+     confirmed by construction: `Net.label` for the output net already carries the requested
      `output_name` (verified directly: `build_textbook_schematic(synthesize_from_input(expr='a'),
-     'Y')`'s output net has `id='OUT'`, `label='Y'`).
-   - **Regression tests** (added to point 8): the `(aA)'` case-collision case; an identifier-safety
-     sweep over the full D8 variable alphabet (letters plus optional trailing digit) asserting
-     every emitted identifier matches `^[A-Za-z0-9_]+$`; the custom-output-name traceability case
+     'Y')`'s output net has `id='OUT'`, `label='Y'`). For every device, one comment line records
+     its synthetic name (`m<i>`) and its original `Device.id` (`M0`, `INV_a_P`, ...).
+   - **Regression tests** (added to point 8): the `(aA)'` net-collision case; **`aA` (undecorated
+     — the shape that actually needs internally-generated inverters), asserting device names are
+     case-insensitively unique and every one begins with `m`** — Codex's instruction that a bare
+     safe-character regex is insufficient is followed exactly: this is a dedicated assertion, not
+     folded into the general identifier-safety sweep; the custom-output-name traceability case
      (`Y`) asserting the comment for the output net shows all three of synthetic name / `OUT` /
      `Y`.
 
@@ -1083,8 +1112,8 @@ both reproduced independently against the actual code before accepting this poin
         to the mapped synthetic name for that net. This correctly covers the `a`/dual-rail case:
         `a` gets both its (unconnected) primary port and its (connected) complement port, a
         consistent pair rather than an orphaned complement.
-     Full fixed pin order: `.SUBCKT <GateName> <output> <VDD> <ground> <primary ports, var_order
-     order> <external complement ports, var_order order>`.
+     Full fixed pin order: `.SUBCKT ohmwork_gate <output> <VDD> <ground> <primary ports,
+     var_order order> <external complement ports, var_order order>`.
    - **Net inventory closure test, adjusted per Codex's instruction**: partitioned into two
      checks rather than one blanket rule — every **connected** port/net name must map to a real
      `Layout` net (as before); every **unconnected declared input** must be a formal port that is
@@ -1094,37 +1123,40 @@ both reproduced independently against the actual code before accepting this poin
      exact resulting port list/order/connectedness.
 
 **3. Two generated artifacts, connectivity fully separated from analog assumptions.** Unchanged
-core structure from the first revision (a non-runnable `.SUBCKT` connectivity template plus a
-separate, clearly-labeled educational simulation example, both from the same device records), but
-point 3's own "no numeric parameters beyond `LEVEL=1`" claim from the first revision was itself
-imprecise and is corrected here: **`LEVEL=1` alone is not electrically meaningful for a logic-level
-DC sweep** — SPICE's own default `VTO` (threshold voltage) is `0`, which makes a Level-1 MOSFET
-already conducting at zero gate-source bias, unable to distinguish a driven logic-0 from a
-logic-1 at the gate. The educational example (never the template) must therefore carry **real,
-explicit, non-zero threshold and transconductance parameters**, not just a bare `LEVEL=1` card:
-   - **`.SUBCKT` template**: unchanged from the first revision — no `.model` cards defined at
-     all, `M` lines reference undefined model names, every `W=`/`L=` is the non-numeric token
-     `TBD`. Deliberately cannot be simulated as-is.
-   - **Educational example**: full numeric `.model NMOS_MODEL NMOS(LEVEL=1 ...)` /
-     `.model PMOS_MODEL PMOS(LEVEL=1 ...)` cards with real `VTO`/`KP`/`LAMBDA`/`GAMMA`/`PHI`
-     values. **This document does not invent those numbers.** Per this project's standing rule
-     against asserting anything unverified, the exact figures must be a **verbatim reproduction of
-     a real, citable published source** (e.g. ngspice's own manual/example library) — implementation
-     must include the exact citation in a file comment, and if no suitable citable source is
-     available at implementation time, that has to be surfaced explicitly rather than filled in
-     with plausible-looking invented numbers. Supply: `VDD = 5V DC` (a plain, widely-recognized
-     illustrative value, not tied to any real process — safe to pin directly since it's a choice
-     of test point, not a fabricated physical parameter). Sizing: one uniform `W=10u L=1u` for
-     every transistor, clearly labeled illustrative/arbitrary in a header comment. Output
-     thresholds for the point-4 test harness: output ≤ 20% of `VDD` reads as logic-0, ≥ 80% reads
-     as logic-1, anything in between is an **ambiguous level that fails the test**.
-   - **A file comment on the educational example states explicitly which analog effects the
-     cited parameters imply are modeled vs. effectively negligible** (e.g. whatever the cited
-     source's own `GAMMA`/`LAMBDA` values imply about body effect / channel-length modulation) —
-     determined from the actual cited numbers once sourced, not asserted here without them in
-     hand. This replaces the first revision's incorrect "bulk-tied-to-supply disables body effect"
-     reasoning (Codex's round-1 correction, restated precisely here since round 2 revisited the
-     same section).
+core structure (a non-runnable `.SUBCKT` connectivity template plus a separate, clearly-labeled
+educational simulation example, both from the same device records). **Round 2's own explanation of
+*why* a bare `LEVEL=1` card is insufficient was itself imprecise and is corrected here (Codex,
+round 3):** it is not that `VTO=0` "causes conduction at zero gate-source bias" — that overstates
+a specific electrical failure mode this document isn't positioned to assert precisely. The actual
+problem, stated exactly as Codex specified: **bare `LEVEL=1` relies on simulator defaults rather
+than an explicitly documented educational model. The example therefore specifies its model
+parameters, including signed NMOS/PMOS threshold voltages** (NMOS `VTO` positive, PMOS `VTO`
+negative, per SPICE's own sign convention — round 2 never specified sign; round 1's "no numeric
+parameters" framing is what this corrects).
+   - **`.SUBCKT` template**: unchanged — no `.model` cards defined at all, `M` lines reference
+     undefined model names, every `W=`/`L=` is the non-numeric token `TBD`. Deliberately cannot be
+     simulated as-is.
+   - **Educational example**: full numeric `.model nmos_model NMOS(LEVEL=1 ...)` /
+     `.model pmos_model PMOS(LEVEL=1 ...)` cards (lowercase fixed model names, point 1) specifying
+     **explicit numerical educational parameters** — a deliberate term, not "fabrication-validated"
+     ones; this project makes no claim these values are validated against a real fabrication
+     process. **Not every parameter needs a nonzero value** — a deliberately, explicitly chosen
+     zero (e.g. `LAMBDA=0` to disable channel-length modulation as a stated simplification) is
+     legitimate; what's required is that every value present is a deliberate, documented choice,
+     never an unstated simulator default. Threshold voltages specifically must be explicit and
+     correctly signed (above), since those are what let the sweep (point 4) distinguish a driven 0
+     from a 1 at all. Supply: `VDD = 5V DC` (a plain, widely-recognized illustrative test point,
+     not a fabricated physical parameter — safe to pin directly). Sizing: one uniform `W=10u L=1u`
+     for every transistor, clearly labeled illustrative/arbitrary. Output thresholds for the
+     point-4 harness: output ≤ 20% of `VDD` reads as logic-0, ≥ 80% reads as logic-1, anything in
+     between is an **ambiguous level that fails the test**.
+   - **Parameter sourcing may be completed during Phase 1 implementation, not in this document**
+     (Codex, round 3, explicitly accepting deferral) — **on the condition that Phase 1's own
+     review requires, as part of that PR, the complete numeric `.model` cards, their exact
+     citation, a stated list of assumptions (which effects are modeled vs. deliberately zeroed),
+     and successful simulation results demonstrating the example actually produces correct logic
+     levels across the acceptance battery.** This is a required Phase 1 review-gate item, not an
+     optional nice-to-have — see point 9.
 
 **4. ngspice verification: exhaustive input+complement sweep, required in CI, optional only
 locally.**
@@ -1139,10 +1171,15 @@ locally.**
      subcircuit body itself uses it).
    - Pinned supply/model/sizing/thresholds from point 3's educational example, applied
      consistently across the whole sweep.
-   - **Non-convergence fails the test** for that input vector. **An ambiguous output level (point
-     3's 20%/80% band) fails the test.** **Don't-care rows are checked against
-     `result.verification.dont_care_assignments[minterm]`** specifically (the chosen circuit's own
-     actual reported value), never against "any" logically acceptable one.
+   - **Complete failure handling, every category explicit** (Codex, round 3 — tightened from
+     round 2's non-convergence/ambiguous-level pair): the harness **rejects** — fails the test, in
+     every case, for that input vector — a **missing output value** (ngspice reports nothing for
+     the output node), a **non-finite output value** (`NaN`/`Inf`, e.g. from a solver edge case or
+     an output-parsing failure), **non-convergence**, and an **ambiguous output level** (point 3's
+     20%/80% band). None of these are ever silently skipped, defaulted, or rounded to a guess.
+     **Don't-care rows are checked against `result.verification.dont_care_assignments[minterm]`**
+     specifically (the chosen circuit's own actual reported value), never against "any" logically
+     acceptable one.
    - **CI requirement, tightened per Codex's instruction**: the dedicated CI job installs
      `ngspice` explicitly and **must fail if that installation doesn't succeed or the binary isn't
      found** — a missing tool in CI is a job failure, never a silent skip, since a silently-skipping
@@ -1179,65 +1216,76 @@ to Phase 2 — see point 9. Exact flag names/UI copy left to implementation.
 2. **Net inventory closure (partitioned)**: every connected port/net maps to a real `Layout` net;
    every unconnected declared input is a formal port wired to no device terminal anywhere in the
    body; the comment-mapping is exactly bijective with the nets it documents.
-3. **Case-insensitive naming collisions**: `(aA)'` and a 3-variable case-differing set
-   (`a`/`A`/`a0`) — lower-cased emitted names contain zero duplicates.
-4. **Identifier safety sweep**: every emitted `.SUBCKT`/model/device/net/port identifier matches
-   `^[A-Za-z0-9_]+$`, across the full D8 variable-name alphabet; no `Device.literal` content ever
-   appears as a token (only in comments).
-5. **The two port-list-contradiction regressions**, reproduced exactly: `variables=a,b ones=2,3`
+3. **Case-insensitive net-naming collisions**: `(aA)'` and a 3-variable case-differing set
+   (`a`/`A`/`a0`) — lower-cased emitted net/port names contain zero duplicates.
+4. **Device naming, checked separately and explicitly — a safe-character regex alone is
+   insufficient** (Codex, round 3): `aA` (undecorated — the shape that actually needs
+   internally-generated inverters, producing `Layout` device ids `INV_A_N`/`INV_A_P`/`INV_a_N`/
+   `INV_a_P` alongside `M0`-`M3`) — assert (a) every emitted device name is unique even when
+   lower-cased, and (b) every emitted device name begins with `m`, the required MOSFET-instance
+   leading character. Both assertions are structural/positional, not just a regex match.
+5. **Synthetic-name allocation completeness**: since no identifier is ever derived from a
+   variable name or `Device.id` (point 1), this is no longer a "safety" concern but a coverage
+   one — across the full D8 variable-name alphabet (letters plus optional trailing digit,
+   including large variable counts), the `n<i>`/`m<i>` allocation stays deterministic, complete
+   (every `Layout` net/device and every unconnected declared input gets exactly one name), and
+   collision-free; no `Device.literal` content ever appears as a token, only in comments.
+6. **The two port-list-contradiction regressions**, reproduced exactly: `variables=a,b ones=2,3`
    (unconnected `b` primary port present, correctly tagged) and `expr=a dual_rail=True` (`a`'s
    primary port present-but-unconnected, its complement port present-and-connected).
-6. **Custom output name traceability**: `output_name='Y'` — the output net's comment shows its
+7. **Custom output name traceability**: `output_name='Y'` — the output net's comment shows its
    synthetic name, `Layout` id `OUT`, and label `Y` together.
-7. **Device count matches the report**: exactly `SynthesisResult.total_transistors`, across
+8. **Device count matches the report**: exactly `SynthesisResult.total_transistors`, across
    NAND3/NOR4/AOI31/AOI21 (shared inverter)/AND (dual-simultaneous-shared-inverter)/dual-rail/wide
    (40T) cases.
-8. **Device/model polarity**: every `kind=="p"` device references the PMOS model name, every
-   `"n"` device the NMOS model name, in both artifacts.
-9. **Bulk convention**: every PMOS device's bulk is the mapped `VDD` port/net, every NMOS
-   device's bulk is the mapped ground port/net — no exceptions, and (post point-1) never the
-   literal strings `VDD`/`GND`/`0` inside the `.SUBCKT` body.
-10. **Shared inverters**: one shared inverter feeding multiple gates emits exactly one inverter's
+9. **Device/model polarity**: every `kind=="p"` device references `pmos_model`, every `"n"`
+   device references `nmos_model`, in both artifacts.
+10. **Bulk convention**: every PMOS device's bulk is the mapped `VDD` port/net, every NMOS
+    device's bulk is the mapped ground port/net — no exceptions, and (per point 1) never the
+    literal strings `VDD`/`GND`/`0` inside the `.SUBCKT` body.
+11. **Shared inverters**: one shared inverter feeding multiple gates emits exactly one inverter's
     worth of devices, wired to every consumer.
-11. **Wired vs. textbook `Layout.style` equivalence**: exporting the same `SynthesisResult` from
+12. **Wired vs. textbook `Layout.style` equivalence**: exporting the same `SynthesisResult` from
     both schematic layouts yields electrically equivalent netlists (same roles/kinds, same
     net-equivalence classes under the point-1 mapping) even if geometry/internal ids differ.
-12. **Determinism**: identical `Layout` input produces byte-identical netlist text across runs and
+13. **Determinism**: identical `Layout` input produces byte-identical netlist text across runs and
     `PYTHONHASHSEED` values.
-13. **Mutation tests**: wrong bulk assignment, swapped drain/source, a missing device, two
-    distinct `Layout` nets mapped to the same synthetic name, a shuffled port order, an
+14. **Mutation tests**: wrong bulk assignment, swapped drain/source, a missing device, two
+    distinct `Layout` nets or devices mapped to the same synthetic name, a shuffled port order, an
     unconnected port incorrectly wired to a device, a complement port driven to the *same* value
     as its variable instead of its logical NOT (point 4) — each independently caught by the tests
     above.
-14. **(CI-only, dedicated job)**: the exhaustive ngspice sweep itself (point 4) — every input
+15. **(CI-only, dedicated job)**: the exhaustive ngspice sweep itself (point 4) — every input
     vector, correct complement-driving including complement-only variables, don't-care check
-    against `dont_care_assignments`, ambiguous-level and non-convergence failure modes, and the
-    job fails outright if `ngspice` isn't available rather than skipping.
+    against `dont_care_assignments`, and all four failure modes (missing output, non-finite
+    output, non-convergence, ambiguous level); the job fails outright if `ngspice` isn't available
+    rather than skipping.
 
 **9. Phasing — adopts Codex's recommendation directly** (the first revision left this
-undecided; round 2 gave a concrete split, taken as-is):
+undecided; round 2 gave a concrete split, taken as-is; unchanged in round 3):
    - **Phase 1**: export records, naming/ports (points 1-2), the `.SUBCKT` template, structural
-     and mutation tests (point 8, tests 1-13), the educational example (point 3), and the
-     required dedicated ngspice CI job (point 4/8 test 14) — the fully self-verifying exporter,
-     reviewed and merged with no UI attached yet.
+     and mutation tests (point 8, tests 1-14), the educational example (point 3, **including the
+     Phase-1 review-gate requirement**: complete model cards, citation, stated assumptions, and
+     successful simulation results across the acceptance battery), and the required dedicated
+     ngspice CI job (point 4/8 test 15) — the fully self-verifying exporter, reviewed and merged
+     with no UI attached yet.
    - **Phase 2**: CLI/UI integration (point 7) — downloads, filenames, export parity with the
      existing schematic/K-map download pattern, stale-result clearing, explanatory text.
    - Each phase its own PR, independently reviewed before the next starts — same discipline as
      D18's three phases.
 
-**Claude's read on Codex's round-2 review, for the owner:** no technical disagreement with any of
-the six points. Two are genuine bugs in my own first revision, both independently reproduced
-against the actual code before being accepted here (point 1's VDD/ground scoping claim was
-simply wrong about how SPICE subcircuits work; point 2's port list was contradictory in two
-concrete, reproduced cases) — I should have tested both before writing the first revision rather
-than after Codex found them. The rest (3, 4, 5) are precision/rigor improvements in the same vein
-as round 1's. One thing I'm flagging rather than deciding unilaterally: point 3 asks the doc to
-pin exact numeric `.model` parameters, and I've deliberately declined to invent specific figures
-here (VTO/KP/LAMBDA/GAMMA/PHI) since I have no way to verify a real published source's exact
-numbers right now — I've pinned the *rule* (verbatim reproduction of a cited source, never
-invented) instead of the digits themselves. Worth Codex/the owner confirming that's the right
-call rather than expecting this document to contain specific numbers.
+**Claude's read on Codex's round-3 review, for the owner:** no technical disagreement with any of
+the five points. The device-naming bug (point 1) was independently reproduced against the actual
+code before being accepted — `aA` really does produce case-colliding, wrongly-`I`-prefixed device
+ids under round 2's own "reuse `Device.id`" rule, which I should have tested at the same time I
+tested the net-naming collision rather than assuming device ids were safe by analogy. Points 2-5
+are consistency/precision corrections I agree with outright, including Codex's correction of my
+own imprecise `VTO=0` explanation (replaced verbatim with the wording Codex specified) and the
+explicit acceptance that parameter sourcing defers to Phase 1's own review gate rather than
+needing to be pinned in this document. Across all three rounds, the pattern has held: every
+concrete, checkable claim — mine or Codex's — gets independently reproduced against the real code
+before being written into or accepted into this entry, not taken on trust either direction.
 
-**Date:** 2026-09-21 (revised after Codex's second review round). Still not approved —
+**Date:** 2026-09-21 (revised after Codex's third review round). Still not approved —
 implementation must not begin until Codex's final pass on this revision comes back clean and the
 owner explicitly authorizes it.
