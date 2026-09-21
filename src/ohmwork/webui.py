@@ -369,8 +369,13 @@ _PAGE = r"""<!doctype html>
       </div>
     </div>
 
-    <section class="section" id="spice-export-help" aria-label="About SPICE downloads" hidden>
-      <h3>About SPICE downloads</h3>
+    <button type="button" class="km-proof-toggle" id="spice-help-toggle"
+      aria-expanded="false" aria-controls="spice-export-help" hidden>About SPICE downloads</button>
+    <section class="section km-work" id="spice-export-help" aria-labelledby="spice-help-title" hidden>
+      <div class="km-proof-heading">
+        <h3 id="spice-help-title">About SPICE downloads</h3>
+        <button type="button" id="spice-help-close">Close explanation</button>
+      </div>
       <p id="spice-template-note"><strong>Connectivity template:</strong> not runnable as-is. Supply transistor models and replace W=TBD / L=TBD before simulation. Both power rails are subcircuit pins.</p>
       <p id="spice-example-note"><strong>Educational example:</strong> runnable with ngspice, using an illustrative 5 V supply, uniform W=10u / L=1u, and cited example models. All logical inputs start at 0; external complements are driven to 1. This is one DC operating point, not a truth-table sweep or a fabrication-ready design.</p>
       <p>Both files describe this exact circuit. Model sources, assumptions, pin order, and node mappings are included in the files. Other simulators are untested.</p>
@@ -1241,6 +1246,23 @@ for (const kind of ["template", "example"]) {
   });
 }
 
+function closeSpiceHelp(returnFocus = false) {
+  $("spice-export-help").hidden = true;
+  $("spice-help-toggle").setAttribute("aria-expanded", "false");
+  if (returnFocus) $("spice-help-toggle").focus();
+}
+$("spice-help-toggle").addEventListener("click", () => {
+  if (!$("spice-export-help").hidden) { closeSpiceHelp(true); return; }
+  $("spice-export-help").hidden = false;
+  $("spice-help-toggle").setAttribute("aria-expanded", "true");
+});
+$("spice-help-close").addEventListener("click", () => closeSpiceHelp(true));
+for (const id of ["spice-help-toggle", "spice-export-help"]) {
+  $(id).addEventListener("keydown", e => {
+    if (e.key === "Escape") { e.preventDefault(); closeSpiceHelp(true); }
+  });
+}
+
 // --- Synth result rendering ------------------------------------------------------
 
 let lastSolutionText = "";
@@ -1252,7 +1274,8 @@ function renderSynthResult(view, rawOutput, schematic, kmap, spice) {
   lastSpiceExports = spice;
   $("download-spice-template").disabled = !spice?.template;
   $("download-spice-example").disabled = !spice?.example;
-  $("spice-export-help").hidden = !spice;
+  closeSpiceHelp();
+  $("spice-help-toggle").hidden = !spice;
   clearChildren($("synth-km-stage"));
   clearChildren($("synth-km-groups"));
   synthKmapReport = kmap.output;
@@ -1456,7 +1479,8 @@ function clearSynthResultDisplay() {
   lastSpiceExports = null;
   $("download-spice-template").disabled = true;
   $("download-spice-example").disabled = true;
-  $("spice-export-help").hidden = true;
+  closeSpiceHelp();
+  $("spice-help-toggle").hidden = true;
   synthKmapDiagram = null;
   synthKmapReport = "";
   ["synth-km-stage","synth-km-groups","synth-km-selection-reason","synth-km-connection","synth-km-equation",
