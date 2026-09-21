@@ -1811,7 +1811,20 @@ def test_spice_download_bytes_labels_and_clearing(page, width):
     toggle.click()
     assert panel.is_visible()
     assert toggle.get_attribute("aria-expanded") == "true"
-    page.click("#spice-help-close")
+    assert panel.get_attribute("aria-labelledby") == "spice-help-toggle"
+    assert panel.locator("h3").count() == 0
+    close = panel.get_by_role("button", name="Close", exact=True)
+    assert close.inner_text() == "×"
+    assert panel.evaluate("el => getComputedStyle(el).borderTopStyle") == "solid"
+    box = panel.bounding_box()
+    close_box = close.bounding_box()
+    text_box = page.locator("#spice-template-note").bounding_box()
+    assert close_box["width"] >= 44 and close_box["height"] >= 44
+    assert box["x"] <= close_box["x"]
+    assert close_box["x"] + close_box["width"] <= box["x"] + box["width"]
+    assert box["y"] <= close_box["y"]
+    assert close_box["y"] + close_box["height"] <= text_box["y"]
+    close.click()
     assert not panel.is_visible()
     assert toggle.get_attribute("aria-expanded") == "false"
     assert toggle.evaluate("el => el === document.activeElement")

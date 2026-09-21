@@ -97,6 +97,22 @@ _PAGE = r"""<!doctype html>
     border-radius: 6px; border: 1px solid #8884; background: transparent; color: inherit; font-family: inherit;
   }
   button.btn-secondary:hover { opacity: 1; background: #8882; }
+  #spice-export-help {
+    position: relative; box-sizing: border-box;
+    border: 1px solid #8886; border-radius: 8px; background: #8881;
+    padding: 3.5rem 1rem 1rem;
+  }
+  #spice-export-help p:first-of-type { margin-top: 0; }
+  #spice-export-help p:last-child { margin-bottom: 0; }
+  #spice-help-close {
+    position: absolute; top: .4rem; right: .4rem;
+    width: 44px; height: 44px; padding: 0;
+    display: grid; place-items: center;
+    border: 0; border-radius: 6px; background: transparent; color: inherit;
+    font: inherit; font-size: 1.5rem; line-height: 1; cursor: pointer;
+  }
+  #spice-help-close:hover { background: #8882; }
+  #spice-help-close:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
   /* Derivation result (M1.3) */
   #tt-error {
     white-space: pre-wrap; background: #8881; color: #c0392b; padding: 1rem;
@@ -371,11 +387,8 @@ _PAGE = r"""<!doctype html>
 
     <button type="button" class="km-proof-toggle" id="spice-help-toggle"
       aria-expanded="false" aria-controls="spice-export-help" hidden>About SPICE downloads</button>
-    <section class="section km-work" id="spice-export-help" aria-labelledby="spice-help-title" hidden>
-      <div class="km-proof-heading">
-        <h3 id="spice-help-title">About SPICE downloads</h3>
-        <button type="button" id="spice-help-close">Close explanation</button>
-      </div>
+    <section class="section km-work" id="spice-export-help" aria-labelledby="spice-help-toggle" hidden>
+      <button type="button" id="spice-help-close" aria-label="Close"><span aria-hidden="true">×</span></button>
       <p id="spice-template-note"><strong>Connectivity template:</strong> not runnable as-is. Supply transistor models and replace W=TBD / L=TBD before simulation. Both power rails are subcircuit pins.</p>
       <p id="spice-example-note"><strong>Educational example:</strong> runnable with ngspice, using an illustrative 5 V supply, uniform W=10u / L=1u, and cited example models. All logical inputs start at 0; external complements are driven to 1. This is one DC operating point, not a truth-table sweep or a fabrication-ready design.</p>
       <p>Both files describe this exact circuit. Model sources, assumptions, pin order, and node mappings are included in the files. Other simulators are untested.</p>
