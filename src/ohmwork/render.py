@@ -1,7 +1,10 @@
-"""Rendering a DerivationTable for terminal, Markdown, and LaTeX output
+"""Rendering a DerivationTable for terminal, Markdown, LaTeX, and CSV output
 (part of the M1a deliverable in docs/CHARTER.md §8)."""
 
 from __future__ import annotations
+
+import csv
+import io
 
 from ohmwork.derivation import DerivationTable
 
@@ -67,3 +70,12 @@ def format_latex(table: DerivationTable) -> str:
         lines.append(" & ".join(_row_values(table, i)) + r" \\")
     lines.append(r"\end{array}")
     return "\n".join(lines)
+
+
+def format_csv(table: DerivationTable) -> str:
+    """Data-only CSV: column labels, then binary rows; no prose footer."""
+    out = io.StringIO(newline="")
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow([col.label for col in table.columns])
+    writer.writerows(_row_values(table, i) for i in range(len(table.rows)))
+    return out.getvalue()

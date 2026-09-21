@@ -6,6 +6,20 @@ See [docs/CHARTER.md](docs/CHARTER.md) for the mission and scope, and
 [docs/decisions.md](docs/decisions.md) for the definitional decisions (D1–D19) that govern
 the implementation.
 
+## v1 status and limits
+
+The v1 feature set includes derivation tables, standalone and synthesis-integrated
+K-maps, verified transistor schematics, SPICE exports, and CSV derivation-table
+export. Implementation is complete within the limits below; release approval and
+version tagging are separate from feature availability.
+
+K-maps and synthesis support 1–4 variables. Derivation/minimization supports five
+variables; the web derivation table permits up to eight, with potentially higher
+computation time. Synthesis searches the D16 single-stage AOI/OAI candidate space,
+not every possible CMOS circuit. Multi-stage NAND/NOR decomposition, analog design
+sizing, and five-variable K-map/synthesis support remain future work. Constant
+functions are supported by standalone K-maps but rejected by CMOS synthesis.
+
 ## Setup
 
 Ohmwork uses a project-specific virtual environment — not a conda environment. Run these
@@ -45,7 +59,8 @@ ohmwork kmap --vars "a,b,c,d" --ones "0,2,8,10"
 ohmwork kmap --vars "a,b" --table "1X00" --form pos --output-name Y
 ```
 
-This is the standalone view. Synthesis integration is the next D18 phase.
+The synthesis report embeds the same verified K-map view, explaining the chosen
+circuit and why its AOI/OAI construction was selected.
 
 ## SPICE export
 
@@ -76,11 +91,14 @@ order the terms are evaluated — followed by the simplified result. See
 derivation table contains.
 
 - `--md` / `--latex` — Markdown or LaTeX output instead of the terminal table.
+- `--csv` — data-only CSV: headers followed by 0/1 rows, with no explanation footer.
+  Works with `--terse` or `--cols`. For example: `ohmwork tt "xy + xy'" --csv > table.csv`.
+  The Derivation tab also offers **Download CSV** for the displayed table.
 - `--terse` — collapse the table to just the top-level product terms and the output.
 - `--cols "x,y,xy"` — show exactly these columns (each a valid expression), plus the output.
 
 `synth` synthesizes a verified static CMOS gate from a truth table (D1: single-stage
-AOI/OAI and their generalizations, plus NAND/NOR — see
+AOI/OAI constructions, including single-stage NAND/NOR gates — see
 [docs/decisions.md](docs/decisions.md) D16 for exactly what that means and D1–D7 for the
 transistor-cost, inverter, and verification rules it follows). Give it a truth table either
 as an expression to derive one from, or explicitly:
@@ -97,7 +115,7 @@ and structural-validity verification (D7). `--dual-rail` assumes complemented in
 free (D2); `--max-stack N` enforces D3's engineering stack-height constraint instead of the
 default advisory-only textbook mode.
 
-`ui` (M1.1) starts a small local web page for `tt`/`synth` — form fields instead of flags,
+`ui` (M1.1) starts a small local web page for derivation tables, K-maps, and synthesis — form fields instead of flags,
 for routine use:
 
 ```bash

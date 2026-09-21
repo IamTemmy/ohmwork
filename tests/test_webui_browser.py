@@ -1896,3 +1896,41 @@ def test_spice_inflight_result_cannot_restore_stale_downloads(page):
     assert page.evaluate("lastSpiceExports === null")
     assert page.locator("#download-spice-example").is_disabled()
     assert not page.locator("#synth-result").is_visible()
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_derivation_csv_download_and_stale_clearing(page, width):
+    import csv
+    import io
+    from ohmwork.api import render_tt
+    page.set_viewport_size({"width": width, "height": 900})
+    page.fill("#tt-expr", "xy+xy'")
+    with page.expect_response("**/api/tt") as response:
+        page.click("#panel-tt button.submit")
+    payload = response.value.json()
+    page.wait_for_selector("#tt-result:not(.empty)")
+    with page.expect_download() as download:
+        page.click("#tt-download-csv")
+    assert download.value.suggested_filename == "ohmwork-derivation.csv"
+    data = Path(download.value.path()).read_bytes()
+    assert data == payload["csv"].encode() == render_tt("xy+xy'", csv=True).encode()
+    rows = list(csv.reader(io.StringIO(data.decode())))
+    assert rows[0] == page.locator("#tt-table-head th").all_text_contents()
+    assert rows[1:] == [[str(int(v)) for v in row] for row in payload["result"]["rows"]]
+    page.fill("#tt-expr", "a")
+    assert page.evaluate("lastTtCsv === null")
+    assert page.locator("#tt-download-csv").is_disabled()
+    page.click("#panel-tt button.submit")
+    page.wait_for_selector("#tt-result:not(.empty)")
+    # A genuine delayed response must not restore a download after an edit.
+    def delayed(route):
+        reply = route.fetch()
+        assert page.evaluate("lastTtCsv === null")
+        page.fill("#tt-expr", "ab")
+        route.fulfill(response=reply)
+    page.route("**/api/tt", delayed)
+    with page.expect_response("**/api/tt"):
+        page.click("#panel-tt button.submit")
+    page.wait_for_load_state("networkidle")
+    assert page.evaluate("lastTtCsv === null")
+    assert page.locator("#tt-download-csv").is_disabled()

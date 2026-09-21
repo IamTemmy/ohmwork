@@ -720,15 +720,13 @@ output into a standalone render to confirm export fidelity):
 
 ---
 
-## D18 — Reviewed for Phase 1 implementation. What does a K-map view show, and how is it built?
+## D18 — Implemented and shipped. What does a K-map view show, and how is it built?
 
-**Status:** reviewed by Codex against the engine on 2026-09-20; Phase 1 implementation
-authorized by the owner in the accompanying conversation. Claude independently reviews the
-Phase 1 PR before merge and before Phase 2 starts. The reason for this staged review remains: a K-map grouping is a diagram that encodes
-an algebraic claim (which minterms this term covers, why these cells share a group) and can be
-technically wrong while looking attractive — exactly the risk class the decision-entry-first
-rule exists to catch, not a lesser one because it's "just" a grid instead of a transistor
-schematic.
+**Current status (2026-09-21):** all three phases shipped: verified grouping/model,
+standalone CLI/UI rendering and worked explanations, and synthesis integration
+(PR #11, with selection explanations in PR #12). The staged independent reviews
+are complete. The original specification and review clarifications below are
+retained as design history.
 
 **Trigger:** the charter's own original, never-built vision (§ intro: "the K-map with groupings
 drawn" is listed alongside the schematic as part of what `synth` produces given a truth table);
@@ -985,18 +983,13 @@ cell notation and literal expansion, and provide a collapsible Boolean-law
 reference. Full step tables remain in the UI/text report to keep SVG diagrams
 manageable. Owner authorized implementation directly in the conversation.
 
-## D19 — Approved architecture; Phase 1 shipped; Phase 2 authorized. What does a SPICE netlist export show, and how is it built?
+## D19 — Implemented and shipped. What does a SPICE netlist export show, and how is it built?
 
-**Current status (2026-09-21):** final technical review of revision `8d227a8` approved the
-architecture; the owner explicitly authorized Phase 1 ("okay proceed with phase 1"). Phase 1
-shipped as [PR #13](https://github.com/IamTemmy/ohmwork/pull/13) (`4efad85`, merged `79cd23e`) —
-Claude's independent review (own reproduction of the cited model source against the real ngspice
-commit, a from-scratch local ngspice install and full 328-operating-point rerun, hand-inspection
-of the generated decks for both port-list-contradiction regressions) found zero defects. The
-owner has now explicitly authorized Phase 2 ("authorize phase 2") — CLI/UI integration per point 9
-below (downloads, filenames, export parity with the existing schematic/K-map download pattern,
-stale-result clearing, explanatory text), independently reviewed the same way before merge.
-The following review history is retained for traceability.
+**Current status (2026-09-21):** both phases shipped and independently reviewed:
+Phase 1 exporter/model and ngspice verification in PR #13; Phase 2 CLI/UI
+integration in PR #14. PRs #15–#16 added the accessible SPICE help disclosure and
+card presentation. Model assumptions and compatibility limits remain unchanged.
+The following specification and review history are retained for traceability.
 
 **Review history:** drafted by Claude (2026-09-21); revised after Codex's first review (`715a210`) and
 second review (`13e5459`). **This is the third revision.** Codex's third pass confirmed the
@@ -1301,3 +1294,20 @@ before being written into or accepted into this entry, not taken on trust either
 independently reviewed clean as PR #13 (`4efad85`); Phase 2 (CLI/UI integration) authorized the
 same day. Phase 1 implementation details, exact model citation, assumptions, and reproduction
 instructions: [SPICE Phase 1](spice.md).
+
+
+### v1 closeout reconciliation — 2026-09-21
+
+The owner authorized implementing the charter's remaining CSV export and reconciling
+shipping status after the final product sweep. CSV uses the existing DerivationTable:
+one header row followed by binary 0/1 rows in the existing variable/column order.
+CLI `tt --csv` is mutually exclusive with Markdown/LaTeX and respects `--terse`/`--cols`.
+The web Download CSV button exports the displayed derivation, generated server-side
+with the same formatter. Files use UTF-8, comma delimiters, standard CSV quoting,
+and LF record endings, without a BOM, prose footer, or extra blank record.
+
+This fulfills an existing scope item, without changing minimization or synthesis.
+D16's bounded search space, the 1–4-variable K-map/synthesis limits, and the explicit
+multi-stage decomposition deferral remain in force. The CSV/documentation
+PR is the final implementation closeout item. Independent review and release approval
+are tracked on that PR, rather than asserted here before review takes place.

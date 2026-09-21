@@ -1,11 +1,11 @@
 # Ohmwork — Project Charter
 
-**Status:** M1 shipped and independently signed off — M1a (2026-09-13), M1b (2026-09-14
-after two rounds of review-caught fixes), M1.1's local web UI (2026-09-15). Decisions now
-span D1–D16 (see `docs/decisions.md`); D15/D16 were added after this draft, during
-implementation, per §9's "every one that arises later." K-map rendering, SPICE export, and
-anything past M1 remain deliberately out of scope (§6, §10) until real coursework use
-justifies them — that's the current phase.
+**Status (2026-09-21):** the v1 feature set is implemented, including CSV export.
+Final release approval is recorded through independent PR review; this status does
+not itself create a release or version tag.
+D17 schematics, D18 K-maps (including synthesis integration), and D19 SPICE export
+have shipped. Decisions D1–D19 remain authoritative. Earlier M1 exclusions below
+record the historical milestone scope, not the current shipping status.
 **Owner:** Temiloluwa Adesola (@IamTemmy)
 **Collaborators:** Claude (via Claude Code), ChatGPT
 **Name:** Ohmwork
@@ -67,10 +67,17 @@ Claim 2 is the harder one to copy and the reason a student would trust it over a
 - Output in terminal, Markdown, LaTeX, and CSV
 - Truth table input (including don't-cares)
 - Exact minimization for up to 5 variables
-- Minimum-transistor **static CMOS** synthesis, single-output
-- Transistor count, gate name, K-map render, factored form
+- Minimum-transistor **static CMOS** synthesis, single-output, within the D16
+  single-stage AOI/OAI search space (1–4 variables)
+- Transistor count, gate name, K-map render (1–4 variables), factored form
 - SPICE netlist export
 - Exhaustive verification of every emitted design
+
+CSV exports contain table headers and binary data rows only; narrative explanations
+remain in the other report formats. The original D1 aspiration of multi-stage
+NAND/NOR decomposition remains explicitly deferred by D1's 2026-09-14 update and
+D16. Five-variable exact minimization does not promise five-variable synthesis or
+a five-variable K-map.
 
 ### Explicit non-goals for v1
 - Pass-transistor, transmission-gate, dynamic/domino, or ratioed logic
@@ -169,6 +176,6 @@ The project should be reconsidered, not quietly continued, if any of these hold:
 
 ---
 
-*§7's decisions are settled (D1–D16, see `docs/decisions.md`) and M1 has shipped — this
+*§7's decisions are settled (D1–D19, see `docs/decisions.md`) and M1 has shipped — this
 charter is no longer a draft awaiting sign-off, though §9's process still applies to
 anything that arises later. Scope and mission (§1–§6, §10) remain the standing reference.*

@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from ohmwork.derivation import DerivationTable, all_assignments, build_table, evaluate, variables_in_order
 from ohmwork.expr import Expr, render as render_expr
 from ohmwork.parser import parse
-from ohmwork.render import format_latex, format_markdown, format_terminal
+from ohmwork.render import format_csv, format_latex, format_markdown, format_terminal
 from ohmwork.report import format_synth_report
 from ohmwork.simplify import simplify
 from ohmwork.synth import SynthesisResult, synthesize
@@ -59,15 +59,19 @@ def derive_from_input(
     return DerivationResult(table=table, simplified=simplified)
 
 
-def format_tt_report(result: DerivationResult, *, md: bool = False, latex: bool = False) -> str:
+def format_tt_report(result: DerivationResult, *, md: bool = False, latex: bool = False, csv: bool = False) -> str:
     """The full text ``ohmwork tt`` prints, given an already-computed
     ``DerivationResult``: the table (in whichever format) followed by
     ``F = ...``. Shared by ``render_tt`` (the CLI) and the web UI's
     ``/api/tt`` handler, so a derivation computed once by
     ``derive_from_input`` can be rendered as both this text and
     ``presenter.build_tt_view``'s structured JSON without deriving it
-    twice."""
+    twice. CSV returns only table records, with no equation footer."""
     table = result.table
+    if csv:
+        if md or latex:
+            raise ValueError("CSV cannot be combined with Markdown or LaTeX")
+        return format_csv(table)
     if latex:
         body = format_latex(table)
     elif md:
@@ -82,14 +86,15 @@ def render_tt(
     *,
     md: bool = False,
     latex: bool = False,
+    csv: bool = False,
     terse: bool = False,
     cols: list[str] | None = None,
 ) -> str:
     """The full text ``ohmwork tt`` prints: the table (in whichever format)
-    followed by ``F = ...``. Raises ``ParseError`` (bad expression) or
+    followed by ``F = ...`` (except data-only CSV). Raises ``ParseError`` (bad expression) or
     ``ValueError`` (bad terse/cols combination, or an unknown column)."""
     result = derive_from_input(expression, terse=terse, cols=cols)
-    return format_tt_report(result, md=md, latex=latex)
+    return format_tt_report(result, md=md, latex=latex, csv=csv)
 
 
 def resolve_truth_table(

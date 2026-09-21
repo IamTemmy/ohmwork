@@ -44,6 +44,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     output_format.add_argument("--md", action="store_true", help="Markdown table output")
     output_format.add_argument("--latex", action="store_true", help="LaTeX array output")
 
+    output_format.add_argument("--csv", action="store_true", help="Data-only CSV table output")
+
     column_selection = tt.add_mutually_exclusive_group()
     column_selection.add_argument(
         "--terse",
@@ -124,12 +126,12 @@ def run_tt(args: argparse.Namespace, *, stdout, stderr) -> int:
             return 1
 
     try:
-        output = render_tt(args.expression, md=args.md, latex=args.latex, terse=args.terse, cols=cols)
+        output = render_tt(args.expression, md=args.md, latex=args.latex, csv=args.csv, terse=args.terse, cols=cols)
     except (ParseError, ValueError) as e:
         print(f"error: {e}", file=stderr)
         return 1
 
-    print(output, file=stdout)
+    print(output, file=stdout, end="" if args.csv else "\n")
     return 0
 
 

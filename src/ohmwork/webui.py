@@ -15,6 +15,7 @@ import sys
 import webbrowser
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
+from ohmwork.render import format_csv
 from ohmwork.api import derive_from_input, format_tt_report, synthesize_from_input, kmap_from_input
 from ohmwork.kmap import build_synthesis_kmap
 from ohmwork.expr import render
@@ -271,6 +272,7 @@ _PAGE = r"""<!doctype html>
 
     <div class="row copy-row">
       <button type="button" class="copy-btn copy-btn-primary" id="tt-copy-rich">Copy table for Word/Docs</button>
+      <button type="button" class="copy-btn" id="tt-download-csv" disabled>Download CSV</button>
     </div>
 
     <details class="section" id="tt-advanced-exports">
@@ -596,6 +598,7 @@ let lastTtFormattedOutput = "";
 // already-computed derivation result) plus the already-rendered #tt-table
 // DOM, never by re-deriving or hitting /api/tt again.
 let lastTtView = null;
+let lastTtCsv = null;
 
 function buildTtPayload() {
   const colsMode = checkedValue("tt-cols");
@@ -661,6 +664,8 @@ function clearTtOutputDisplay() {
   clearChildren($("tt-table-head"));
   clearChildren($("tt-table-body"));
   lastTtView = null;
+  lastTtCsv = null;
+  $("tt-download-csv").disabled = true;
   // The complete result is going stale here (edit, New Problem, or a
   // newer submission) -- unlike resetTtExportState above, both copy
   // buttons' fallbacks are cleared, since both are now equally stale.
@@ -678,7 +683,9 @@ document.querySelectorAll("input[name=tt-cols]").forEach(r => r.addEventListener
 // hide the table the way editing the expression or columns does. It only
 // resets the export state above.
 
-function renderTtResult(view, rawOutput) {
+function renderTtResult(view, rawOutput, csv) {
+  lastTtCsv = csv;
+  $("tt-download-csv").disabled = !csv;
   $("tt-function-line").textContent = view.simplified_function;
 
   const headRow = $("tt-table-head");
@@ -709,9 +716,19 @@ function renderTtResult(view, rawOutput) {
   lastTtView = view;
 }
 
+$("tt-download-csv").addEventListener("click", () => {
+  if (!lastTtCsv) return;
+  const url = URL.createObjectURL(new Blob([lastTtCsv], {type:"text/csv;charset=utf-8"}));
+  const link = document.createElement("a");
+  link.href = url; link.download = "ohmwork-derivation.csv";
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
 $("panel-tt").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const myToken = ++ttRequestToken;
+  clearTtOutputDisplay();
+  const myToken = ttRequestToken;
   const result = await postJSON("/api/tt", buildTtPayload());
   if (myToken !== ttRequestToken) return; // superseded while this request was in flight
   const errEl = $("tt-error");
@@ -725,7 +742,7 @@ $("panel-tt").addEventListener("submit", async (e) => {
   errEl.classList.add("empty");
   errEl.textContent = "";
   resEl.classList.remove("empty");
-  renderTtResult(result.result, result.output);
+  renderTtResult(result.result, result.output, result.csv);
 });
 
 // --- "Copy formatted output" ------------------------------------------------------
@@ -1693,7 +1710,7 @@ def _handle_tt(environ, start_response):
         return _json_response(start_response, "200 OK", {"ok": False, "error": str(e)})
     output = format_tt_report(derivation, md=bool(body.get("md")), latex=bool(body.get("latex")))
     view = build_tt_view(derivation)
-    return _json_response(start_response, "200 OK", {"ok": True, "output": output, "result": view})
+    return _json_response(start_response, "200 OK", {"ok": True, "output": output, "result": view, "csv": format_csv(derivation.table)})
 
 
 def _handle_synth(environ, start_response):
