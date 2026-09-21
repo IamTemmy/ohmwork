@@ -153,20 +153,44 @@ def _kmap_selection_reasoning(result: SynthesisResult, groups: list[CandidateGro
     chosen = result.chosen
     direction = "0s" if chosen.label == "AOI" else "1s"
     expansion = "AND–OR–Invert" if chosen.label == "AOI" else "OR–AND–Invert"
-    costs = []
-    for label in ("AOI", "OAI"):
-        candidates = [c for c in result.other_candidates if c.label == label]
-        if candidates:
-            costs.append(f"{label}: {min(c.total_cost for c in candidates)} transistors")
+    chosen_group = next(g for g in groups if g.is_chosen)
+    if len(groups) == 1:
+        if len(chosen_group.labels) > 1:
+            reason = (
+                f"AOI and OAI both produce the same {chosen.total_cost}-transistor circuit. "
+                "Neither construction saves transistors here."
+            )
+        else:
+            reason = (
+                f"Only one distinct circuit is available: {chosen.label}, "
+                f"with {chosen.total_cost} transistors."
+            )
+    else:
+        costs = []
+        for label in ("AOI", "OAI"):
+            candidates = [c for c in result.other_candidates if c.label == label]
+            if candidates:
+                costs.append(f"{label}: {min(c.total_cost for c in candidates)} transistors")
+        reason = "Best total in each available construction: " + "; ".join(costs) + ". "
+        tied = any(not g.is_chosen and g.total_cost == chosen.total_cost for g in groups)
+        reason += (
+            f"Distinct circuits tie at {chosen.total_cost} transistors; the grouping direction "
+            "follows the deterministic tie-break, with no saving over those tied circuits."
+            if tied else
+            "This grouping follows the lowest-cost circuit found."
+        )
+    scope = (
+        "Only candidates meeting the current --max-stack constraint are included. "
+        if max_stack_applied else ""
+    )
     return (
         f"Why group {direction}? This map follows the selected {chosen.label} "
-        f"({expansion}) construction. "
-        + _selection_reasoning(groups, max_stack_applied=max_stack_applied)
-        + " Best total in each available construction: " + "; ".join(costs) + ". "
+        f"({expansion}) construction. {scope}{reason} "
         f"The chosen total is {chosen.core_cost} core + {chosen.inverter_cost} "
         "input-inverter transistors (shared inverters counted once; supplied complements cost none). "
-        "The comparison is within Ohmwork's supported search, not every possible circuit."
+        "These results cover Ohmwork's supported search, not every possible circuit."
     )
+
 
 
 def _flat_topology_kind(network: Network) -> str | None:

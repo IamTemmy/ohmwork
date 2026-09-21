@@ -420,16 +420,20 @@ def test_build_schematic_view_junctions_carry_exact_model_points():
 
 
 @pytest.mark.parametrize('expr,options,expected,absent', [
-    ("(abc+d)'", {}, ['Why group 0s?', 'AND–OR–Invert', 'AOI: 8 transistors', 'OAI: 12 transistors', 'strictly lower'], ['Tied at']),
-    ("a'bc+b'c'd'", {}, ['Why group 1s?', 'OR–AND–Invert', 'AOI: 20 transistors', 'OAI: 16 transistors', '12 core + 4'], ['Tied at']),
-    ('a^b', {}, ['Tied at 12', 'canonical tie-break', 'AOI: 12', 'OAI: 12'], ['strictly lower']),
-    ("(abc)'", {}, ['Only one distinct realization', 'both AOI and OAI', 'AOI: 6', 'OAI: 6'], ['strictly lower', 'Tied at']),
+    ("(abc+d)'", {}, ['Why group 0s?', 'AND–OR–Invert', 'AOI: 8 transistors', 'OAI: 12 transistors', 'lowest-cost circuit'], ['tie-break']),
+    ("a'bc+b'c'd'", {}, ['Why group 1s?', 'OR–AND–Invert', 'AOI: 20 transistors', 'OAI: 16 transistors', '12 core + 4'], ['tie-break']),
+    ('a^b', {}, ['Distinct circuits tie at 12', 'deterministic tie-break', 'AOI: 12', 'OAI: 12', 'no saving'], ['lowest-cost circuit']),
+    ("(abc)'", {}, ['AOI and OAI both produce the same 6-transistor circuit', 'Neither construction saves'], ['Best total', 'comparison', 'tie-break']),
     ("a'bc+b'c'd'", {'dual_rail': True}, ['AOI: 16', 'OAI: 12', '12 core + 0'], ['12 core + 4']),
-    ('ab+cd', {'max_stack': 2}, ['--max-stack', 'Only one distinct realization', 'OAI: 16'], ['AOI: 24', 'strictly lower']),
+    ('ab+cd', {'max_stack': 2}, ['--max-stack constraint', 'Only one distinct circuit', 'OAI, with 16 transistors'], ['AOI: 24', 'Best total', 'comparison']),
 ])
 def test_kmap_selection_explanation_uses_actual_candidate_costs(expr, options, expected, absent):
     result = synthesize_from_input(expr=expr, **options)
-    text = build_synth_view(result, max_stack_applied='max_stack' in options)['reasoning']['kmap_selection_note']
+    reasoning = build_synth_view(result, max_stack_applied='max_stack' in options)['reasoning']
+    text = reasoning['kmap_selection_note']
+    # The K-map explains its direction without copying the Reasoning paragraph.
+    # Its own text must still stand alone when copied separately.
+    assert reasoning['selection_note'] not in text
     for phrase in expected:
         assert phrase in text
     for phrase in absent:
