@@ -985,11 +985,17 @@ cell notation and literal expansion, and provide a collapsible Boolean-law
 reference. Full step tables remain in the UI/text report to keep SVG diagrams
 manageable. Owner authorized implementation directly in the conversation.
 
-## D19 — Approved architecture; Phase 1 authorized. What does a SPICE netlist export show, and how is it built?
+## D19 — Approved architecture; Phase 1 shipped; Phase 2 authorized. What does a SPICE netlist export show, and how is it built?
 
 **Current status (2026-09-21):** final technical review of revision `8d227a8` approved the
-architecture; the owner explicitly authorized Phase 1 ("okay proceed with phase 1").
-Phase 2 still requires its own authorization after independent Phase 1 review.
+architecture; the owner explicitly authorized Phase 1 ("okay proceed with phase 1"). Phase 1
+shipped as [PR #13](https://github.com/IamTemmy/ohmwork/pull/13) (`4efad85`, merged `79cd23e`) —
+Claude's independent review (own reproduction of the cited model source against the real ngspice
+commit, a from-scratch local ngspice install and full 328-operating-point rerun, hand-inspection
+of the generated decks for both port-list-contradiction regressions) found zero defects. The
+owner has now explicitly authorized Phase 2 ("authorize phase 2") — CLI/UI integration per point 9
+below (downloads, filenames, export parity with the existing schematic/K-map download pattern,
+stale-result clearing, explanatory text), independently reviewed the same way before merge.
 The following review history is retained for traceability.
 
 **Review history:** drafted by Claude (2026-09-21); revised after Codex's first review (`715a210`) and
@@ -1291,6 +1297,7 @@ needing to be pinned in this document. Across all three rounds, the pattern has 
 concrete, checkable claim — mine or Codex's — gets independently reproduced against the real code
 before being written into or accepted into this entry, not taken on trust either direction.
 
-**Date:** 2026-09-21. Phase 1 authorized following final review of `8d227a8`.
-Implementation details, exact model citation, assumptions, and reproduction instructions:
-[SPICE Phase 1](spice.md).
+**Date:** 2026-09-21. Phase 1 authorized following final review of `8d227a8`, shipped and
+independently reviewed clean as PR #13 (`4efad85`); Phase 2 (CLI/UI integration) authorized the
+same day. Phase 1 implementation details, exact model citation, assumptions, and reproduction
+instructions: [SPICE Phase 1](spice.md).
