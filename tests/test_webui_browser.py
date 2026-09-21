@@ -1803,7 +1803,33 @@ def test_spice_download_bytes_labels_and_clearing(page, width):
     payload = response.value.json()
     page.wait_for_selector("#synth-result:not(.empty)")
     layout = build_textbook_schematic(synthesize_from_input(expr="(abc+d)'"), "Y")
-    assert page.locator("#spice-export-help").is_visible()
+    toggle = page.locator("#spice-help-toggle")
+    panel = page.locator("#spice-export-help")
+    assert not panel.is_visible()
+    assert toggle.get_attribute("aria-controls") == "spice-export-help"
+    assert toggle.get_attribute("aria-expanded") == "false"
+    toggle.click()
+    assert panel.is_visible()
+    assert toggle.get_attribute("aria-expanded") == "true"
+    page.click("#spice-help-close")
+    assert not panel.is_visible()
+    assert toggle.get_attribute("aria-expanded") == "false"
+    assert toggle.evaluate("el => el === document.activeElement")
+    toggle.press("Enter")
+    assert panel.is_visible()
+    page.locator("#spice-help-close").press("Escape")
+    assert not panel.is_visible()
+    assert toggle.evaluate("el => el === document.activeElement")
+    toggle.press("Space")
+    assert panel.is_visible()
+    toggle.click()
+    assert not panel.is_visible()
+    toggle.click()
+    toggle.press("Escape")
+    assert not panel.is_visible()
+    toggle.click()
+    assert panel.is_visible()
+    assert panel.evaluate("el => el.getBoundingClientRect().right <= window.innerWidth")
     assert "not runnable as-is" in page.locator("#spice-template-note").inner_text()
     assert "All logical inputs start at 0" in page.locator("#spice-example-note").inner_text()
     for kind, render in [("template", render_spice_template), ("example", render_spice_example)]:
@@ -1822,9 +1848,19 @@ def test_spice_download_bytes_labels_and_clearing(page, width):
     assert page.locator("#download-spice-template").is_disabled()
     assert page.locator("#download-spice-example").is_disabled()
     assert not page.locator("#spice-export-help").is_visible()
+    assert not toggle.is_visible()
+    assert toggle.get_attribute("aria-expanded") == "false"
+    assert page.locator("#synth-expr").evaluate("el => el === document.activeElement")
     page.click("#panel-synth button.submit")
     page.wait_for_selector("#synth-result:not(.empty)")
+    assert toggle.is_visible()
+    assert not panel.is_visible()
+    assert toggle.get_attribute("aria-expanded") == "false"
+    toggle.click()
     page.click("#synth-new-problem")
+    assert not toggle.is_visible()
+    assert not panel.is_visible()
+    assert toggle.get_attribute("aria-expanded") == "false"
     assert page.evaluate("lastSpiceExports === null")
     assert page.locator("#download-spice-example").is_disabled()
 
