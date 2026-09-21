@@ -1,8 +1,28 @@
-# SPICE export — D19 Phase 1
+# SPICE export — D19
 
-This phase adds a Python export layer over the verified schematic `Layout`.
-It does not change synthesis, grouping, transistor accounting, the CLI, or the UI.
-Phase 2 will add the user-facing downloads after independent review.
+The export layer consumes the verified schematic `Layout`; synthesis, naming,
+model parameters, and transistor accounting are unchanged by CLI/UI integration.
+
+## CLI and browser downloads (Phase 2)
+
+`ohmwork synth --expr "(abc+d)'" --netlist template > gate.sp` prints only the
+connectivity template. Bare `--netlist` does the same. Select `--netlist example`
+for the runnable educational deck. Existing truth-table inputs, don't-cares,
+`--dual-rail`, and `--max-stack` apply identically to ordinary synthesis.
+`--output-name Y` sets the export label; on `synth` it requires `--netlist`.
+Ordinary synthesis output remains unchanged. Errors go to stderr with a nonzero
+exit code and no partial file on stdout.
+
+The synthesis UI offers **Download SPICE template** and **Download SPICE example**
+beside Download SVG. Visible descriptions explain the distinction, example
+assumptions, and default stimulus. Filenames are `ohmwork-Y-template.sp` and
+`ohmwork-Y-educational.cir` for output Y. The server generates both from the exact
+Layout used for the displayed schematic; JavaScript downloads the returned text
+without reconstructing circuit connectivity. CLI/API/download bytes match.
+
+Input edits, mode changes, New problem, and a fresh submission clear stored
+export text and disable downloads. A superseded response cannot restore old
+exports. Export validation failure returns no partial successful result.
 
 ## Reproduce an export
 

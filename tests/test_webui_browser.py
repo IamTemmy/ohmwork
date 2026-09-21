@@ -1787,3 +1787,63 @@ def test_schematic_adapts_to_dark_mode(page):
     assert light_color != dark_color  # currentColor actually follows the color-scheme flip
     # still structurally intact in dark mode, not just recolored
     assert page.locator("#schematic-svg .ow-device").count() == 6
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_spice_download_bytes_labels_and_clearing(page, width):
+    from ohmwork.api import synthesize_from_input
+    from ohmwork.schematic import build_textbook_schematic
+    from ohmwork.spice import render_spice_example, render_spice_template
+    page.set_viewport_size({"width": width, "height": 900})
+    _switch_tab(page, "synth")
+    page.fill("#synth-expr", "(abc+d)'")
+    page.fill("#synth-output-name", "Y")
+    with page.expect_response("**/api/synth") as response:
+        page.click("#panel-synth button.submit")
+    payload = response.value.json()
+    page.wait_for_selector("#synth-result:not(.empty)")
+    layout = build_textbook_schematic(synthesize_from_input(expr="(abc+d)'"), "Y")
+    assert page.locator("#spice-export-help").is_visible()
+    assert "not runnable as-is" in page.locator("#spice-template-note").inner_text()
+    assert "All logical inputs start at 0" in page.locator("#spice-example-note").inner_text()
+    for kind, render in [("template", render_spice_template), ("example", render_spice_example)]:
+        with page.expect_download() as download:
+            page.click("#download-spice-" + kind)
+        file = download.value
+        assert file.suggested_filename == payload["spice"][kind]["filename"]
+        assert Path(file.path()).read_bytes() == render(layout).encode() == payload["spice"][kind]["text"].encode()
+    artifacts = Path("test-artifacts/schematics")
+    artifacts.mkdir(parents=True, exist_ok=True)
+    page.locator("#spice-export-help").scroll_into_view_if_needed()
+    page.screenshot(path=str(artifacts / f"spice-downloads-{width}.png"))
+    # Actual data is removed, not merely hidden by the result container.
+    page.fill("#synth-expr", "ab")
+    assert page.evaluate("lastSpiceExports === null")
+    assert page.locator("#download-spice-template").is_disabled()
+    assert page.locator("#download-spice-example").is_disabled()
+    assert not page.locator("#spice-export-help").is_visible()
+    page.click("#panel-synth button.submit")
+    page.wait_for_selector("#synth-result:not(.empty)")
+    page.click("#synth-new-problem")
+    assert page.evaluate("lastSpiceExports === null")
+    assert page.locator("#download-spice-example").is_disabled()
+
+
+def test_spice_inflight_result_cannot_restore_stale_downloads(page):
+    _switch_tab(page, "synth")
+    page.fill("#synth-expr", "a")
+    page.click("#panel-synth button.submit")
+    page.wait_for_selector("#synth-result:not(.empty)")
+    # Deliver a genuine response only after an input edit invalidates it.
+    def respond_late(route):
+        reply = route.fetch()
+        assert page.evaluate("lastSpiceExports === null")
+        page.fill("#synth-expr", "ab")
+        route.fulfill(response=reply)
+    page.route("**/api/synth", respond_late)
+    with page.expect_response("**/api/synth"):
+        page.click("#panel-synth button.submit")
+    page.wait_for_load_state("networkidle")
+    assert page.evaluate("lastSpiceExports === null")
+    assert page.locator("#download-spice-example").is_disabled()
+    assert not page.locator("#synth-result").is_visible()

@@ -197,3 +197,24 @@ def test_ui_defaults_to_port_5757_and_opening_a_browser(monkeypatch):
     code, out, err = run(["ui"])
     assert code == 0
     assert captured == {"port": 5757, "open_browser": True}
+
+
+def test_netlist_default_is_template():
+    code, output, error = run(["synth", "--expr", "(abc)'", "--netlist"])
+    assert code == 0 and not error
+    assert output.startswith("* Ohmwork connectivity template")
+    assert "W=TBD L=TBD" in output and ".model" not in output
+
+
+def test_output_name_without_netlist_is_rejected():
+    code, output, error = run(["synth", "--expr", "a", "--output-name", "Y"])
+    assert code == 1 and output == ""
+    assert "requires --netlist" in error
+
+
+def test_netlist_invalid_input_never_prints_partial_file():
+    for args in [["--expr", "("], ["--expr", "a", "--output-name", "a"],
+                 ["--expr", "a", "--output-name", "../x"],
+                 ["--expr", "(abc)'", "--max-stack", "1"]]:
+        code, output, error = run(["synth", *args, "--netlist", "example"])
+        assert code == 1 and output == "" and error.startswith("error:")

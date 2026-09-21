@@ -478,3 +478,41 @@ def test_synth_kmap_failure_returns_no_partial_result(server_url,monkeypatch):
     monkeypatch.setattr(ui,"build_synthesis_kmap",reject)
     response=post_json(server_url+"/api/synth",{"expr":"(abc)'"})
     assert response=={"ok":False,"error":"K-map provenance rejected"}
+
+
+@pytest.mark.parametrize("payload,cli_args", [
+    ({"expr": "(abc+d)'", "output_name": "Y"}, ["--expr", "(abc+d)'", "--output-name", "Y"]),
+    ({"expr": "a", "dual_rail": True}, ["--expr", "a", "--dual-rail"]),
+    ({"variables": "a,b", "ones": "2,3"}, ["--vars", "a,b", "--ones", "2,3"]),
+    ({"variables": "a,b,c", "ones": "1,3", "dc": "0,2,5"}, ["--vars", "a,b,c", "--ones", "1,3", "--dc", "0,2,5"]),
+])
+def test_spice_api_cli_and_layout_exports_match(server_url, payload, cli_args):
+    import contextlib
+    import io
+    from ohmwork.cli import main
+    from ohmwork.api import synthesize_from_input
+    from ohmwork.schematic import build_textbook_schematic
+    from ohmwork.spice import render_spice_template, render_spice_example
+    reply = post_json(server_url + "/api/synth", payload)
+    assert reply["ok"]
+    name = payload.get("output_name", "F")
+    layout = build_textbook_schematic(synthesize_from_input(**{
+        k: v for k, v in payload.items() if k != "output_name"}), name)
+    for kind, renderer, suffix in [("template", render_spice_template, "template.sp"),
+                                    ("example", render_spice_example, "educational.cir")]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = main(["synth", *cli_args, "--netlist", kind])
+        assert code == 0 and stderr.getvalue() == ""
+        export = reply["spice"][kind]
+        assert export["text"] == renderer(layout) == stdout.getvalue()
+        assert export["filename"] == f"ohmwork-{name}-{suffix}"
+
+
+def test_spice_export_failure_returns_no_partial_result(server_url, monkeypatch):
+    import ohmwork.webui as webui
+    def fail(_layout):
+        raise RuntimeError("export validation failed")
+    monkeypatch.setattr(webui, "build_spice_exports", fail)
+    response = post_json(server_url + "/api/synth", {"expr": "a"})
+    assert response == {"ok": False, "error": "export validation failed"}

@@ -47,12 +47,22 @@ ohmwork kmap --vars "a,b" --table "1X00" --form pos --output-name Y
 
 This is the standalone view. Synthesis integration is the next D18 phase.
 
-## SPICE export (Python API, D19 Phase 1)
+## SPICE export
 
-A Layout-based exporter now produces a non-runnable connectivity template and a
-separate runnable educational DC example. See [docs/spice.md](docs/spice.md) for
-usage, exact model sources, assumptions, and ngspice verification. CLI/UI download
-integration is reserved for Phase 2.
+In the synthesis report, use **Download SPICE template** for a connectivity
+file requiring models and sizes, or **Download SPICE example** for a runnable
+educational DC example. Both describe the displayed schematic exactly.
+
+```sh
+ohmwork synth --expr "(abc+d)'" --netlist template --output-name Y > gate.sp
+ohmwork synth --expr "(abc+d)'" --netlist example --output-name Y > gate.cir
+ngspice -n -b gate.cir
+```
+
+Bare `--netlist` selects the template. The example sets logical inputs to zero
+and external complements to one, using illustrative 5 V / W=10u / L=1u values.
+It is not a fabrication design. See [docs/spice.md](docs/spice.md) for model
+sources, assumptions, Python usage, and verification.
 
 ## Usage
 
