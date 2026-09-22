@@ -1311,3 +1311,173 @@ D16's bounded search space, the 1–4-variable K-map/synthesis limits, and the e
 multi-stage decomposition deferral remain in force. The CSV/documentation
 PR is the final implementation closeout item. Independent review and release approval
 are tracked on that PR, rather than asserted here before review takes place.
+
+## D20 — PROPOSED: v1.1 five-variable synthesis and linked K-maps
+
+**Date:** 2026-09-22. **Status:** owner authorized starting v1.1 after coursework
+exposed the five-variable limit. This proposal requires independent review before
+production implementation. v1 remains closed at `05df193`; this is an extension,
+not a retrospective change to its acceptance criteria.
+
+**Motivating case:** `F = (abc+de)'`. The expected static complementary CMOS
+realization has a three-device NMOS series branch in parallel with a two-device
+series branch; the dual PUN is a parallel triple in series with a parallel pair.
+It uses 5 NMOS + 5 PMOS = 10 transistors, with no input inverters. All five inputs
+are essential. Its lower-bound claim is scoped to our complementary static CMOS
+model, not every transistor logic family.
+
+### 1. Scope and invariants
+
+Extend synthesis and standalone/synthesis-integrated K-maps from 1–4 to 1–5
+declared variables, across Python API, CLI, expression input, minterm/don't-care
+input, bit strings, and editable UI truth tables. Five variables means 32 input
+vectors, not five product terms. Six or more remain unsupported by these two
+features. Derivation/CSV retain their existing independent limits.
+
+This explicitly supersedes only the four-variable ceiling in D16/D18 and the
+corresponding charter scope for v1.1. D1/D16's candidate search, D2/D12 inverter
+accounting, D3 stack constraints, D4 don't-cares, D5 ordering, D6 minimality claims,
+and D7 verification remain in force. No multi-stage search or heuristically
+truncated cover list is introduced. Preserve all tied minimum-term, then
+minimum-literal covers before ranking complete circuit cost. Reuse simplify.py;
+do not build a separate five-variable minimizer.
+
+The synthesis K-map must still explain the exact chosen candidate (D18), including
+its actual don't-care assignments. A standalone SOP and a synthesis POS are allowed
+to differ; neither may relabel the other as though they were the same derivation.
+Keep existing constant-function synthesis behavior; standalone constant K-maps
+continue to work. Retain the current conventions for unused declared inputs,
+case-sensitive variable identities, output names, and external dual-rail inputs.
+
+### 2. Five-variable map convention
+
+For `var_order = (a,b,c,d,e)`, use two 4×4 planes: `a=0` and `a=1`.
+Rows represent `(b,c)`, columns `(d,e)`, both in `00,01,11,10` Gray order.
+For arbitrary declared names, substitute those names in this exact order.
+Minterm index remains binary: `16*a + 8*b + 4*c + 2*d + e`.
+Use deterministic plane-major, then row-major visual cell order. Preserve the
+existing layout and cell ordering for all one- through four-variable maps.
+
+Within either plane, ordinary edge/corner wrapping applies. Between planes, a
+cell is adjacent to the cell at the identical row and column in the other plane.
+The seam between two displayed maps is NOT a new left/right adjacency. A group
+that eliminates the plane variable must contain identical projected cell sets
+in both planes. A group retaining that variable occupies exactly one plane.
+Legal groups remain complete Boolean cubes, with 1, 2, 4, 8, 16, or 32 cells;
+power-of-two size or visual proximity alone is not sufficient.
+
+Extend the immutable model additively with explicit plane identity on cells and
+rectangle pieces, and explicit plane metadata. Never overload `row` or minterm
+indices to imply a hidden plane. Keep `Group.minterms` and `Group.id` global.
+Any one-plane defaults must preserve existing callers and validations. Independently
+validate all `(plane,row,column) <-> minterm` mappings and piece coverage.
+
+### 3. Visuals, explanations, and exports
+
+Show both plane headings and complete axis labels. Use a shared group ID, color,
+and line style across planes; explain “same position in the other map is adjacent.”
+Mark cross-plane groups in the legend and proof explanation. Hover, focus, and
+selection must highlight every piece/cell of the selected group in both planes.
+Do not rely on color alone, or on a connecting stroke that passes through unrelated
+cells. The proof must show why the plane variable disappears when both values
+are present, with minterm expansions and existing verified Boolean-law steps.
+
+Prefer side-by-side planes on a wide display and a labeled vertical arrangement
+on a narrow display. If a readable grid cannot fit, use local horizontal scrolling
+instead of shrinking its text or overflowing the whole page. The exported SVG
+must contain both planes, labels, group membership, and legend independently of
+hover state. CLI/copy explanations must name each plane and describe cross-plane
+membership without relying on the SVG. Preserve group-card alignment and the
+shared explanation panel below the cards.
+
+Five-variable parity can require 16 groups and a large circuit. Group badge/legend
+layout must handle this density, including repeated palette colors. All visible
+piece dimensions must stay positive; group insets cannot grow without a bound.
+Schematic layout, displayed transistor count, shared inverters, SVG download, and
+both SPICE artifacts must remain faithful to the same verified circuit. Five-input
+SPICE verification drives all 32 vectors and every external complement input.
+
+### 4. Performance and verification gates
+
+Five variables give 32 truth-table rows and 243 possible Boolean cubes, but the
+number of tied covers can still make exact cover enumeration expensive. Benchmark
+both production QM/Petrick and the independent K-map cover oracle, including
+fixed seeded dense and don't-care cases. Record fixtures, environment, wall time,
+candidate counts, and slowest case in the implementation PR. A small collection
+of fast examples is not a worst-case performance guarantee.
+
+Do not disable the independent validator to make the new maps run faster. If the
+battery reveals unacceptable runtime/memory or requires a search budget, resolve
+that explicitly in review before shipping: report incomplete search honestly,
+never label a partial result minimum or change a previous result silently.
+New over-limit UI errors should plainly state the supported variable count rather
+than exposing charter paragraphs; preserve unrelated established CLI error text.
+
+### 5. Acceptance battery
+
+1. **Professor's case:** `(abc+de)'` selects AOI, 10 total, no inverters, PDN stack
+   3/PUN stack 2. Verify its topology and all 32 vectors independently; its POS
+   map reconstructs the selected `F' = abc+de` exactly. With `a` as plane variable,
+   the `de` zero-group spans both planes and `abc` occupies only `a=1`.
+2. **Other circuit shapes:** NAND5, NOR5, `((a+b)(c+d)e)'`, `a'b+c'd+e`, nested
+   asymmetric expressions, and five-input parity. Exercise both rail modes and
+   feasible/infeasible stack constraints; count shared inverters once.
+3. **Indexing:** every cell/minterm round trip for 1–5 variables, arbitrary
+   declared order, case-differing names, and unused declared variables. Exactly
+   32 unique cells for five variables; plane selection is the first declared bit.
+4. **Every cube:** independently enumerate all 243 five-bit patterns and verify
+   their complete cell sets and visible pieces. Include singletons, a whole
+   plane, both planes, within-plane edge/corner wrapping, and wrapping combined
+   with cross-plane membership. No synthetic seam adjacency.
+5. **Overlap and density:** overlapping groups within/across planes, 16 singleton
+   parity groups, stable IDs, no negative/zero piece dimensions, readable badges
+   and legends. Selecting a group never highlights another group merely because
+   the palette color repeats.
+6. **Both polarities and constants:** standalone SOP/POS, constant 0/1, all-X,
+   and mixed don't-cares. Preserve X display, report chosen assignments, exclude
+   forbidden care cells, and verify algebra steps against actual group members.
+7. **Cover correctness:** tied-cover fixtures and fixed seeded five-variable
+   truth tables checked by independent cube/cover enumeration. Compare complete
+   tied inventories and deterministic ordering, not only the selected expression.
+8. **Synthesis provenance:** AOI/OAI, ties, custom output name, shared inverters,
+   and don't-cares. Integrated groups must reconstruct the chosen circuit, not a
+   new standalone optimum. Compare every displayed assignment with verification.
+9. **Mutation rejection:** wrong plane bit, duplicate/missing cell, malformed
+   cross-plane group, wrong piece plane, incorrect eliminated variable, missing
+   piece, and incorrect wrap/cross-plane flags must fail validation.
+10. **Schematic/SPICE:** wire-model versus textbook electrical identity, counts,
+    output/supply/bulk/pin identity, unused inputs, complement-only ports, and
+    case-safe naming. Required ngspice CI exercises five-variable fixtures at all
+    32 vectors, with the existing finite-value/convergence/voltage gates.
+11. **UI and export:** live Chromium at 1280 and 390px in both themes, keyboard
+    selection and explanation close/focus behavior, both planes retained in SVG,
+    copied explanation parity, 32-row input editing, and stale-result clearing on
+    edits/New Problem/in-flight response. Check text clipping and page overflow.
+12. **Compatibility and limits:** existing 1–4 results/golden CLI outputs remain
+    stable except explicitly updated limit messages. Six-variable input is rejected
+    consistently; truth-table-only/CSV behavior is unchanged. Check determinism
+    across processes/hash seeds and record the performance battery above.
+
+### 6. Sequencing and handoff
+
+Codex implements; Claude independently reviews each phase before the next starts:
+
+- **Decision review (this change):** settle plane convention, invariants, test
+  coverage, and phasing. No shipped capability or test pass is claimed by this doc.
+- **Phase 1:** shared five-variable model, synthesis support, plane-aware independent
+  validation and explanations, performance study, structural and ngspice tests.
+  Keep public UI/CLI limits coherent with available rendering: do not enable a
+  public five-variable flow that will fail halfway through. Phase 1 is an internal
+  capability milestone until Phase 2 supplies its presentation.
+- **Phase 2:** two-plane visual/CLI presentation; enable five-variable API/CLI/UI
+  flows together; downloads, accessibility, interaction, live browser tests, and
+  README/CHARTER scope reconciliation. Owner dogfoods the professor's case before
+  v1.1 closeout. No new scope beyond five variables is implied.
+
+**Read-only feasibility observation (2026-09-22):** directly exercising existing
+`_build_candidates`/`_select` below the public four-variable guard at `05df193`
+returned AOI/10 for `(abc+de)'`, AOI/10 for NAND5 and NOR5, OAI/10 for
+`((a+b)(c+d)e)'`, OAI/16 for `a'b+c'd+e`, and OAI/170 for five-input parity.
+Each had two candidates and took approximately 1–3 ms on this environment.
+This was a bounded scratch experiment, not production enablement, an exhaustive
+performance study, or end-to-end five-variable validation.
