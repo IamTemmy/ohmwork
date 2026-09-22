@@ -88,4 +88,31 @@ and standalone rendering, parity/repeated colors, cross-plane wrapping, Xs and
 input modes, CLI/SPICE output, explicit exhaustion errors and the review fixes.
 The existing 70-fixture performance and 776-operating-point ngspice gates remain.
 
-CI results and any layout corrections will be recorded below after the run.
+### Measured results and visual review
+
+Initial implementation commit `62a4698` passed all seven jobs in
+[run 35795438429](https://github.com/IamTemmy/ohmwork/actions/runs/35795438429):
+
+- Python 3.10/3.11/3.12/3.13: all green; Python 3.12 reports 921 passed,
+  51 skipped (optional browser/ngspice paths are exercised by their own jobs).
+- Chromium: 11 new five-variable tests passed in 13.56 seconds; all 141 existing
+  browser tests passed in 133.86 seconds.
+- SPICE: required ngspice job green; local rerun also passed all 67 tests,
+  including all 776 operating points across the existing and five-variable cases.
+- Performance: 70 fixtures; slowest measured fixture 0.117747 seconds,
+  peak RSS 18,904 KiB; maximum per-invocation observed work 18,349,
+  peak counted items 2,699. These are measurements, not universal bounds.
+- Local non-browser/non-SPICE suite: 902 passed in 47.70 seconds.
+
+Downloaded and inspected the actual CI PNGs and exported SVG renders: wide
+light-theme synthesis, narrow dark-theme standalone export, wide standalone
+page, and narrow synthesis page. The exports retain both planes, labels,
+cross-plane grouping and all visible memberships without app JavaScript.
+
+Visual review identified unused card columns after the page widens. A follow-up
+sets five-variable card columns from the actual group count (at most three on
+desktop, two at intermediate widths, one on mobile). The existing 1–4-variable
+card layout remains unchanged. Browser assertions now require the professor's
+two cards to fill their row at equal widths on desktop and stack on mobile.
+The PR checks are rerun on this correction; the PR description records the
+final reviewed commit and run so reviewers can reproduce that exact state.

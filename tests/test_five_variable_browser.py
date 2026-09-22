@@ -60,6 +60,14 @@ def test_professor_two_planes_interaction_and_export(page,server_url,width,theme
         assert response['result'] and len(response['schematic']['devices'])==10
     selector=stage+' svg'
     data=check_planes(page,selector,width)
+    card_boxes=page.locator(cards+' > .km-group-section').evaluate_all('(els)=>els.map(el=>{const b=el.getBoundingClientRect();return {x:b.x,y:b.y,right:b.right,width:b.width};})')
+    frame=page.locator(cards).bounding_box()
+    assert abs(card_boxes[0]['width']-card_boxes[1]['width'])<1
+    if width==1280:
+        assert card_boxes[0]['y']==card_boxes[1]['y']
+        assert abs(card_boxes[1]['right']-(frame['x']+frame['width']))<1
+    else:
+        assert card_boxes[0]['x']==card_boxes[1]['x'] and card_boxes[0]['y']<card_boxes[1]['y']
     assert {g['id']:sorted(g['members']) for g in data['groups']}=={g['id']:g['minterms'] for g in view['groups']}
     cross=next(g for g in view['groups'] if g['crosses_planes'])['id']
     button=page.locator(cards+f' .km-group-card[data-group-id="{cross}"]')
