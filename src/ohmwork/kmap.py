@@ -16,6 +16,7 @@ from functools import lru_cache
 from itertools import product
 import re
 
+from ohmwork.search_budget import SearchBudget
 from ohmwork.derivation import evaluate
 from ohmwork.expr import And, Const, Expr, Not, Or, Var, mk_and, mk_or, render
 from ohmwork.simplify import minimal_covers, minimize, prime_implicant_patterns
@@ -29,6 +30,7 @@ class Rectangle:
     column: int
     rows: int
     columns: int
+    plane: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +54,10 @@ class Group:
     wraps_columns: bool
 
     @property
+    def crosses_planes(self) -> bool:
+        return len({p.plane for p in self.pieces}) > 1
+
+    @property
     def essential(self) -> bool:
         return bool(self.essential_witnesses)
 
@@ -64,6 +70,7 @@ class Cell:
     value: str  # original F: '0', '1', 'X' (never overwrite an X)
     assigned_value: int  # the selected expression's F value, including on Xs
     group_ids: tuple[str, ...]
+    plane: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +92,8 @@ class KMap:
     alternatives: tuple[Expr, ...]  # standalone tied F expressions; empty for synthesis
     selected_alternative: int | None
     synthesis_f_prime: Expr | None
+    plane_variable: str | None = None
+    plane_labels: tuple[str, ...] = ('',)
 
     @property
     def grouping_value(self) -> int:
@@ -101,8 +110,8 @@ class KMap:
 
 def _input(var_order, minterms, dont_cares, form, output_name):
     variables = tuple(var_order)
-    if not 1 <= len(variables) <= 4:
-        raise ValueError('kmap supports 1-4 variables')
+    if not 1 <= len(variables) <= 5:
+        raise ValueError('kmap supports 1-5 variables')
     if any(not isinstance(v, str) for v in variables):
         raise ValueError('variables must be D8 variable names')
     if tuple(parse_var_list(','.join(variables))) != variables:
@@ -169,14 +178,22 @@ def _term(facts: tuple[VariableFact, ...], form: str) -> Expr:
     return mk_and(literals) if form == 'SOP' else mk_or(literals)
 
 
-def _narrate(facts: tuple[VariableFact, ...], term: Expr, form: str) -> str:
+def _narrate(facts: tuple[VariableFact, ...], term: Expr, form: str, plane_variable: str | None = None) -> str:
     clauses = [f'{f.variable} changes between 0 and 1, so it is eliminated' if f.fixed_value is None
                else f'{f.variable} stays {f.fixed_value}' for f in facts]
     noun = 'product' if form == 'SOP' else 'sum'
     rule = ('For a 1-group, fixed 0 gives a complemented literal and fixed 1 an uncomplemented literal.'
             if form == 'SOP' else
             'For a 0-group, fixed 0 gives an uncomplemented literal and fixed 1 a complemented literal.')
-    return '; '.join(clauses) + f'. {rule} The {noun} term is {render(term)}.'
+    text = '; '.join(clauses) + f'. {rule} The {noun} term is {render(term)}.'
+    if plane_variable is not None:
+        plane_fact = next(f for f in facts if f.variable == plane_variable)
+        if plane_fact.fixed_value is None:
+            text += (f' This group spans matching positions in both {plane_variable}=0 and '
+                     f'{plane_variable}=1 planes, eliminating {plane_variable}.')
+        else:
+            text += f' This group occupies only the {plane_variable}={plane_fact.fixed_value} plane.'
+    return text
 
 
 def _runs(indices):
@@ -190,10 +207,13 @@ def _runs(indices):
 
 
 def _assemble(variables, ones, dc, form, output_name, sop, origin, alternatives=(), chosen=None):
-    split = len(variables)//2
-    row_labels, column_labels = _gray(split), _gray(len(variables)-split)
-    positions = {int(r+c, 2):(ri, ci) for ri,r in enumerate(row_labels)
-                 for ci,c in enumerate(column_labels)}
+    plane_bits = int(len(variables) == 5)
+    axis_variables = variables[plane_bits:]
+    split = len(axis_variables)//2
+    plane_labels = ('0', '1') if plane_bits else ('',)
+    row_labels, column_labels = _gray(split), _gray(len(axis_variables)-split)
+    positions = {int(p+r+c, 2):(pi, ri, ci) for pi,p in enumerate(plane_labels)
+                 for ri,r in enumerate(row_labels) for ci,c in enumerate(column_labels)}
     target = ones if form == 'SOP' else frozenset(range(2**len(variables))) - ones - dc
     primes = prime_implicant_patterns(list(variables), set(target), set(dc))
     groups = []
@@ -202,23 +222,27 @@ def _assemble(variables, ones, dc, form, output_name, sop, origin, alternatives=
         facts = tuple(VariableFact(v, None if bit == '-' else int(bit))
                       for v, bit in zip(variables, pattern))
         term = _term(facts, form)
-        rs = {positions[m][0] for m in members}; cs = {positions[m][1] for m in members}
-        pieces = tuple(Rectangle(r, c, h, w) for r,h in _runs(rs) for c,w in _runs(cs))
+        planes = sorted({positions[m][0] for m in members})
+        rs = {positions[m][1] for m in members}; cs = {positions[m][2] for m in members}
+        pieces = tuple(Rectangle(r, c, h, w, plane) for plane in planes
+                       for r,h in _runs(rs) for c,w in _runs(cs))
         witnesses = tuple(m for m in members if m in target and
                           sum(m in _members(p) for p in primes) == 1)
         groups.append(Group(f'G{index+1}', pattern, members, tuple(m for m in members if m in dc),
-                            term, facts, _narrate(facts, term, form), witnesses, pieces,
+                            term, facts, _narrate(facts, term, form, variables[0] if plane_bits else None), witnesses, pieces,
                             len(_runs(rs)) > 1, len(_runs(cs)) > 1))
     expression = sop if form == 'SOP' else de_morgan_complement(sop)
-    cells = tuple(Cell(ri, ci, int(r+c, 2),
-                       'X' if int(r+c, 2) in dc else str(int(int(r+c, 2) in ones)),
-                       int(evaluate(expression, dict(zip(variables, map(bool, map(int, r+c)))))),
-                       tuple(g.id for g in groups if int(r+c, 2) in g.minterms))
-                  for ri,r in enumerate(row_labels) for ci,c in enumerate(column_labels))
+    cells = tuple(Cell(ri, ci, int(p+r+c, 2),
+                       'X' if int(p+r+c, 2) in dc else str(int(int(p+r+c, 2) in ones)),
+                       int(evaluate(expression, dict(zip(variables, map(bool, map(int, p+r+c)))))),
+                       tuple(g.id for g in groups if int(p+r+c, 2) in g.minterms), pi)
+                  for pi,p in enumerate(plane_labels) for ri,r in enumerate(row_labels)
+                  for ci,c in enumerate(column_labels))
     return KMap(variables, tuple(sorted(ones)), tuple(sorted(dc)), output_name, form,
-                variables[:split], variables[split:], row_labels, column_labels,
+                axis_variables[:split], axis_variables[split:], row_labels, column_labels,
                 cells, tuple(groups), sop, expression, origin, alternatives,
-                alternatives.index(expression) if alternatives else None, chosen)
+                alternatives.index(expression) if alternatives else None, chosen,
+                variables[0] if plane_bits else None, plane_labels)
 
 
 def _finish(model, variables, ones, dc, form, output_name, sop):
@@ -234,10 +258,18 @@ def build_kmap(
     var_order: Sequence[str], minterms: Iterable[int], dont_cares: Iterable[int] = frozenset(),
     *, form: str = 'SOP', output_name: str = 'F',
 ) -> KMap:
-    """Select a standalone cover using existing term/literal/D5 policy."""
+    """Public one- through four-variable map until D20 Phase 2."""
+    if not 1 <= len(var_order) <= 4:
+        raise ValueError('kmap supports 1-4 variables')
+    return _build_kmap(var_order, minterms, dont_cares, form=form, output_name=output_name)
+
+
+def _build_kmap(var_order, minterms, dont_cares=frozenset(), *, form='SOP', output_name='F'):
+    """Internal D20 model, using existing term/literal/D5 policy."""
     variables, ones, dc = _input(var_order, minterms, dont_cares, form, output_name)
     target = ones if form == 'SOP' else frozenset(range(2**len(variables))) - ones - dc
-    covers = minimal_covers(list(variables), set(target), set(dc))
+    covers = minimal_covers(list(variables), set(target), set(dc),
+                            _budget=SearchBudget() if len(variables) == 5 else None)
     if covers is None:
         covers = [minimize(list(variables), set(target), set(dc))]
     # POS ordering follows the target SOP of F', exactly the existing D5 choice.
@@ -250,6 +282,13 @@ def build_kmap(
 
 
 def build_synthesis_kmap(result: SynthesisResult, output_name: str = 'F') -> KMap:
+    """Public synthesis map until D20's two-plane presentation ships."""
+    if not 1 <= len(result.var_order) <= 4:
+        raise ValueError('kmap supports 1-4 variables')
+    return _build_synthesis_kmap(result, output_name)
+
+
+def _build_synthesis_kmap(result: SynthesisResult, output_name: str = 'F') -> KMap:
     """Explain the exact chosen candidate; never run cover selection again."""
     if result.minterms is None or result.dont_cares is None:
         raise ValueError('synthesis result lacks original minterms/dont_cares')
@@ -290,15 +329,22 @@ def _legal_primes(n, target, dc):
     return {p:ms for p,ms in legal.items() if not any(ms < other for other in legal.values())}
 
 
-def _optimal_covers(primes, target):
-    """Independent exact-cover oracle for <=16 cells, lexicographic cost."""
+def _optimal_covers(primes, target, *, _budget=None):
+    """Independent exact-cover oracle, with bounded five-variable storage."""
+    budget = (_budget or SearchBudget()) if any(len(p) == 5 for p in primes) else None
+    retained = 0
     @lru_cache(None)
     def search(remaining):
+        nonlocal retained
+        if budget:
+            budget.check(items=retained + search.cache_info().currsize)
         if not remaining:
             return (0,0), frozenset({frozenset()})
         m = min(remaining)
         best = None; covers = set()
-        for p, members in primes.items():
+        for p, members in sorted(primes.items()):
+            if budget:
+                budget.check()
             if m not in members:
                 continue
             cost, tails = search(remaining - members)
@@ -306,7 +352,13 @@ def _optimal_covers(primes, target):
             if best is None or score < best:
                 best, covers = score, set()
             if score == best:
-                covers.update(t | {p} for t in tails)
+                for t in sorted(tails, key=lambda t: tuple(sorted(t))):
+                    covers.add(t | {p})
+                    if budget:
+                        budget.check(items=retained + len(covers) + search.cache_info().currsize)
+        retained += len(covers)
+        if budget:
+            budget.check(work=0, items=retained + search.cache_info().currsize)
         return best, frozenset(covers)
     return search(frozenset(target))
 
@@ -326,14 +378,20 @@ def validate_kmap(model: KMap) -> None:
                                      model.form, model.output_name)
     except ValueError as exc:
         raise RuntimeError('invalid K-map input: ' + str(exc)) from exc
-    n = len(variables); split = n//2; full = frozenset(range(2**n))
+    n = len(variables); plane_bits = int(n == 5)
+    axis_variables = variables[plane_bits:]
+    split = len(axis_variables)//2; full = frozenset(range(2**n))
     check(model.minterms == tuple(sorted(ones)) and model.dont_cares == tuple(sorted(dc)), 'source sets')
     axes = {0:('',), 1:('0','1'), 2:('00','01','11','10')}
-    rows, cols = axes[split], axes[n-split]
+    rows, cols = axes[split], axes[n-plane_bits-split]
+    planes = ('0','1') if plane_bits else ('',)
+    check((model.plane_variable, model.plane_labels) ==
+          (variables[0] if plane_bits else None, planes), 'plane metadata')
     check((model.row_variables,model.column_variables,model.row_labels,model.column_labels) ==
-          (variables[:split],variables[split:],rows,cols), 'axis mapping')
-    expected_cells = [(ri,ci,int(r+c,2)) for ri,r in enumerate(rows) for ci,c in enumerate(cols)]
-    check([(c.row,c.column,c.minterm) for c in model.cells] == expected_cells, 'cell mapping')
+          (axis_variables[:split],axis_variables[split:],rows,cols), 'axis mapping')
+    expected_cells = [(pi,ri,ci,int(p+r+c,2)) for pi,p in enumerate(planes) for ri,r in enumerate(rows) for ci,c in enumerate(cols)]
+    check(all(type(c.plane) is int for c in model.cells), 'cell plane type')
+    check([(c.plane,c.row,c.column,c.minterm) for c in model.cells] == expected_cells, 'cell mapping')
     target = ones if model.form == 'SOP' else full - ones - dc
     primes = _legal_primes(n, target, dc)
     check(model.origin in ('standalone','synthesis-AOI','synthesis-OAI'), 'origin')
@@ -355,31 +413,31 @@ def validate_kmap(model: KMap) -> None:
         # as well as evaluation, so reordered/wrong group explanations cannot hide.
         term = _term(facts, model.form)
         expected_terms.append(term); expected_sop_terms.append(_term(facts, 'SOP'))
-        check(g.term == term and g.explanation == _narrate(facts, term, model.form), 'term or explanation')
+        check(g.term == term and g.explanation == _narrate(facts, term, model.form, model.plane_variable), 'term or explanation')
         check(g.used_dont_cares == tuple(sorted(members & dc)), 'used dont-cares')
         witnesses = tuple(sorted(m for m in members & target if sum(m in ms for ms in primes.values()) == 1))
         check(g.essential_witnesses == witnesses, 'essential witnesses')
-        positions = {(c.row,c.column) for c in model.cells if c.minterm in members}
+        positions = {(c.plane,c.row,c.column) for c in model.cells if c.minterm in members}
         drawn = []
         for p in g.pieces:
-            check(all(type(v) is int for v in (p.row,p.column,p.rows,p.columns)), 'piece integer geometry')
-            check(0 <= p.row < len(rows) and 0 <= p.column < len(cols) and p.rows > 0 and p.columns > 0
+            check(all(type(v) is int for v in (p.plane,p.row,p.column,p.rows,p.columns)), 'piece integer geometry')
+            check(0 <= p.plane < len(planes) and 0 <= p.row < len(rows) and 0 <= p.column < len(cols) and p.rows > 0 and p.columns > 0
                   and p.row+p.rows <= len(rows) and p.column+p.columns <= len(cols), 'piece bounds')
-            drawn.extend((r,c) for r in range(p.row,p.row+p.rows) for c in range(p.column,p.column+p.columns))
+            drawn.extend((p.plane,r,c) for r in range(p.row,p.row+p.rows) for c in range(p.column,p.column+p.columns))
         check(len(drawn)==len(set(drawn)) and set(drawn)==positions, 'piece cell coverage')
         # Maximal visible components, so splitting an ordinary rectangle is rejected.
         pending = set(positions); components = []
         while pending:
             seed = min(pending); pending.remove(seed); component={seed}; queue=[seed]
             while queue:
-                r,c=queue.pop()
-                for point in ((r-1,c),(r+1,c),(r,c-1),(r,c+1)):
+                plane,r,c=queue.pop()
+                for point in ((plane,r-1,c),(plane,r+1,c),(plane,r,c-1),(plane,r,c+1)):
                     if point in pending:
                         pending.remove(point); component.add(point); queue.append(point)
-            rs=[p[0] for p in component]; cs=[p[1] for p in component]
-            components.append(Rectangle(min(rs),min(cs),max(rs)-min(rs)+1,max(cs)-min(cs)+1))
-        check(g.pieces == tuple(sorted(components,key=lambda p:(p.row,p.column))), 'piece fragmentation/order')
-        rs={p[0] for p in positions}; cs={p[1] for p in positions}
+            rs=[p[1] for p in component]; cs=[p[2] for p in component]
+            components.append(Rectangle(min(rs),min(cs),max(rs)-min(rs)+1,max(cs)-min(cs)+1,seed[0]))
+        check(g.pieces == tuple(sorted(components,key=lambda p:(p.plane,p.row,p.column))), 'piece fragmentation/order')
+        rs={p[1] for p in positions}; cs={p[2] for p in positions}
         wr=len(rs)<len(rows) and 0 in rs and len(rows)-1 in rs
         wc=len(cs)<len(cols) and 0 in cs and len(cols)-1 in cs
         check((g.wraps_rows,g.wraps_columns)==(wr,wc), 'wrap flags')

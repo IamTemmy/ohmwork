@@ -140,7 +140,11 @@ def _covers_for(var_order: list[str], target_minterms: set[int], dont_cares: set
     """Every literal-minimal SOP for a target minterm set, or the single
     constant Expr if the function is constantly 0 or 1 (minimal_covers has
     no "covers" to offer in that case)."""
-    covers = minimal_covers(var_order, target_minterms, dont_cares)
+    if len(var_order) == 5:
+        from ohmwork.search_budget import SearchBudget
+        covers = minimal_covers(var_order, target_minterms, dont_cares, _budget=SearchBudget())
+    else:
+        covers = minimal_covers(var_order, target_minterms, dont_cares)
     if covers is None:
         return [minimize(var_order, target_minterms, dont_cares)]
     return covers
@@ -333,6 +337,14 @@ def synthesize(
             f"synth supports {MIN_VARS}-{MAX_VARS} variables in M1 (charter §8 scopes M1b to "
             f"3-4 variables and explicitly excludes 5+); got {len(var_order)} ({', '.join(var_order)})"
         )
+
+    return _synthesize(var_order, minterms, dont_cares, dual_rail=dual_rail, max_stack=max_stack)
+
+
+def _synthesize(var_order, minterms, dont_cares=frozenset(), *, dual_rail=False, max_stack=None):
+    """D20 internal five-variable capability; public enablement is Phase 2."""
+    if not 1 <= len(var_order) <= 5:
+        raise ValueError('synth supports 1-5 variables')
 
     candidates = _build_candidates(var_order, minterms, dont_cares, dual_rail=dual_rail)
 

@@ -1312,12 +1312,14 @@ multi-stage decomposition deferral remain in force. The CSV/documentation
 PR is the final implementation closeout item. Independent review and release approval
 are tracked on that PR, rather than asserted here before review takes place.
 
-## D20 — PROPOSED: v1.1 five-variable synthesis and linked K-maps
+## D20 — v1.1 five-variable synthesis and linked K-maps
 
 **Date:** 2026-09-22. **Status:** owner authorized starting v1.1 after coursework
-exposed the five-variable limit. This proposal requires independent review before
-production implementation. v1 remains closed at `05df193`; this is an extension,
-not a retrospective change to its acceptance criteria.
+exposed the five-variable limit. After the independent proposal review, the owner
+explicitly authorized the build. Phase 1 is implemented on its review branch;
+Claude's independent implementation review is pending. Phase 2 remains gated on
+that review. v1 remains closed at `05df193`; this is an extension, not a
+retrospective change to its acceptance criteria.
 
 **Motivating case:** `F = (abc+de)'`. The expected static complementary CMOS
 realization has a three-device NMOS series branch in parallel with a two-device
@@ -1369,8 +1371,11 @@ power-of-two size or visual proximity alone is not sufficient.
 Extend the immutable model additively with explicit plane identity on cells and
 rectangle pieces, and explicit plane metadata. Never overload `row` or minterm
 indices to imply a hidden plane. Keep `Group.minterms` and `Group.id` global.
-Any one-plane defaults must preserve existing callers and validations. Independently
-validate all `(plane,row,column) <-> minterm` mappings and piece coverage.
+`KMap.plane_variable` is `None` for 1–4 variables, and the first variable for five;
+`plane_labels` is `('',)` or `('0','1')` respectively. `Cell.plane` and
+`Rectangle.plane` default to integer zero. `Group.crosses_planes` is derived from
+its pieces; it cannot drift as separately stored state. Independently validate
+all `(plane,row,column) <-> minterm` mappings and piece coverage.
 
 ### 3. Visuals, explanations, and exports
 
@@ -1410,6 +1415,21 @@ Do not disable the independent validator to make the new maps run faster. If the
 battery reveals unacceptable runtime/memory or requires a search budget, resolve
 that explicitly in review before shipping: report incomplete search honestly,
 never label a partial result minimum or change a previous result silently.
+Phase 1 pins deterministic per-search limits of 2,000,000 counted search
+operations and 20,000 stored frontier/cache items. Exhaustion raises a dedicated
+`SearchLimitExceeded` error; no partial result escapes. These apply to the new
+five-variable synthesis/K-map paths, not derivation's independent simplifier.
+The measured CI battery has a 10-second subprocess deadline per fixture and a
+128 MiB peak-RSS gate. Passing 70 fixtures is not a worst-case guarantee. Runtime
+work budgets and benchmark deadlines are distinct; they do not promise a fixed
+production wall-clock latency. Phase 2 must preserve failure propagation.
+
+Exact Petrick optimizations may reorder/deduplicate clauses, absorb products by
+surviving subsets, and use a witnessed complete cover as a safe cardinality upper
+bound. They must preserve the entire minimum-term/minimum-literal tie family;
+a greedy witness is never returned as the answer. The independent oracle remains
+separate and checks that family.
+
 New over-limit UI errors should plainly state the supported variable count rather
 than exposing charter paragraphs; preserve unrelated established CLI error text.
 
@@ -1436,6 +1456,9 @@ than exposing charter paragraphs; preserve unrelated established CLI error text.
 6. **Both polarities and constants:** standalone SOP/POS, constant 0/1, all-X,
    and mixed don't-cares. Preserve X display, report chosen assignments, exclude
    forbidden care cells, and verify algebra steps against actual group members.
+   Explicit asymmetric cross-plane fixture: SOP ones={16}, DC={0}; group -0000
+   includes X in one plane and a required 1 in the other. Include the POS dual
+   and the negative case with the X replaced by a forbidden care-cell.
 7. **Cover correctness:** tied-cover fixtures and fixed seeded five-variable
    truth tables checked by independent cube/cover enumeration. Compare complete
    tied inventories and deterministic ordering, not only the selected expression.
@@ -1455,7 +1478,10 @@ than exposing charter paragraphs; preserve unrelated established CLI error text.
     edits/New Problem/in-flight response. Check text clipping and page overflow.
 12. **Compatibility and limits:** existing 1–4 results/golden CLI outputs remain
     stable except explicitly updated limit messages. Six-variable input is rejected
-    consistently; truth-table-only/CSV behavior is unchanged. Check determinism
+    consistently before truth-table enumeration; truth-table-only/CSV behavior
+    is unchanged. Mutate a power-of-two member set into a non-cube and reject it.
+    Test work/storage exhaustion and prove neither builder returns a partial
+    answer. Check determinism
     across processes/hash seeds and record the performance battery above.
 
 ### 6. Sequencing and handoff
@@ -1468,7 +1494,10 @@ Codex implements; Claude independently reviews each phase before the next starts
   validation and explanations, performance study, structural and ngspice tests.
   Keep public UI/CLI limits coherent with available rendering: do not enable a
   public five-variable flow that will fail halfway through. Phase 1 is an internal
-  capability milestone until Phase 2 supplies its presentation.
+  capability milestone until Phase 2 supplies its presentation. Private
+  `_synthesize`, `_build_kmap`, and `_build_synthesis_kmap` expose the internal
+  capability for tests; public builders retain their four-variable caps.
+  Presentation entry points reject two-plane models until Phase 2.
 - **Phase 2:** two-plane visual/CLI presentation; enable five-variable API/CLI/UI
   flows together; downloads, accessibility, interaction, live browser tests, and
   README/CHARTER scope reconciliation. Owner dogfoods the professor's case before
