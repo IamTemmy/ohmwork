@@ -48,7 +48,7 @@ STACK_ADVISORY_THRESHOLD = 4
 # 1-2 variables are strictly simpler than the tested ceiling, so they're
 # allowed too; only the upper bound is a hard scope line.
 MIN_VARS = 1
-MAX_VARS = 4
+MAX_VARS = 5
 
 
 def de_morgan_complement(expr: Expr) -> Expr:
@@ -318,9 +318,9 @@ def synthesize(
     *complete* transistor cost (PDN + PUN + shared inverters, D2/D12),
     D5-tie-broken.
 
-    Charter §8 scopes M1b to 3-4 variables ("Deliberately excluded from M1
-    entirely: ... 5+ variables"); ``ValueError`` if ``var_order`` is outside
-    [1, 4].
+    D20 supports 1–5 declared variables; raises ValueError outside that range.
+    Five-variable exact-search exhaustion raises SearchLimitExceeded; it is an
+    expected resource limit, not an internal verification failure.
 
     Verifies the chosen design (D7) before returning it — per charter §4,
     "every emitted network is exhaustively simulated... before it is
@@ -334,15 +334,14 @@ def synthesize(
     a multi-stage decomposition it hasn't built, per D6."""
     if not (MIN_VARS <= len(var_order) <= MAX_VARS):
         raise ValueError(
-            f"synth supports {MIN_VARS}-{MAX_VARS} variables in M1 (charter §8 scopes M1b to "
-            f"3-4 variables and explicitly excludes 5+); got {len(var_order)} ({', '.join(var_order)})"
+            f"synth supports {MIN_VARS}-{MAX_VARS} variables; got {len(var_order)} ({', '.join(var_order)})"
         )
 
     return _synthesize(var_order, minterms, dont_cares, dual_rail=dual_rail, max_stack=max_stack)
 
 
 def _synthesize(var_order, minterms, dont_cares=frozenset(), *, dual_rail=False, max_stack=None):
-    """D20 internal five-variable capability; public enablement is Phase 2."""
+    """Shared synthesis implementation for up to five declared variables."""
     if not 1 <= len(var_order) <= 5:
         raise ValueError('synth supports 1-5 variables')
 

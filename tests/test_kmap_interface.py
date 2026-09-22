@@ -40,7 +40,7 @@ def test_api_valid_input_modes(payload):
     assert json.loads(request(payload)[1])['ok']
 
 
-@pytest.mark.parametrize('payload', [[],{'expr':12},{'expr':'abcde'},
+@pytest.mark.parametrize('payload', [[],{'expr':12},{'expr':'abcdeg'},
     {'variables':'a,b','ones':'0','dc':'0'},{'expr':'ab','output_name':'a'},
     {'expr':'ab','form':'wrong'}])
 def test_bad_requests_have_no_result(payload):
@@ -65,7 +65,7 @@ def test_kmap_uses_existing_transport_guards(headers,status):
 
 def test_variable_cap_precedes_assignment_enumeration():
     with patch('ohmwork.api.all_assignments',side_effect=AssertionError('must cap first')):
-        with pytest.raises(ValueError,match='1-4'): kmap_from_input(expr='abcde')
+        with pytest.raises(ValueError,match='1-5'): kmap_from_input(expr='abcdeg')
 
 
 @pytest.mark.parametrize('form',['sop','pos'])
@@ -78,8 +78,8 @@ def test_cli_uses_same_verified_report(form,capsys):
 
 
 def test_cli_failure_is_nonzero(capsys):
-    assert main(['kmap','--expr','abcde'])==1
-    assert '1-4' in capsys.readouterr().err
+    assert main(['kmap','--expr','abcdeg'])==1
+    assert '1-5' in capsys.readouterr().err
 
 
 def test_all_display_rectangles_cover_exactly_their_declared_cell_centres():

@@ -15,6 +15,7 @@ import sys
 import webbrowser
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
+from ohmwork.search_budget import SearchLimitExceeded
 from ohmwork.api import derive_from_input, format_tt_report, synthesize_from_input, kmap_from_input
 from ohmwork.kmap import build_synthesis_kmap
 from ohmwork.expr import render
@@ -323,7 +324,7 @@ _PAGE = r"""<!doctype html>
   </div>
 
   <div id="synth-table-fields" style="display:none">
-    <label>Variables (comma-separated, 1-4)
+    <label>Variables (comma-separated, 1-5)
       <input type="text" id="synth-vars" placeholder="a,b,c,d">
     </label>
 
@@ -508,14 +509,14 @@ function buildGrid() {
   if (vars.length === 0) {
     const msg = document.createElement("p");
     msg.className = "hint";
-    msg.textContent = "Enter 1-4 variables above to build the truth table grid.";
+    msg.textContent = "Enter 1-5 variables above to build the truth table grid.";
     wrap.appendChild(msg);
     return;
   }
-  if (vars.length > 4) {
+  if (vars.length > 5) {
     const msg = document.createElement("p");
     msg.className = "hint";
-    msg.textContent = "The grid supports up to 4 variables (M1 scope); use fewer, or enter the truth table manually below.";
+    msg.textContent = "The grid supports up to 5 variables; use fewer variables.";
     wrap.appendChild(msg);
     return;
   }
@@ -1435,7 +1436,7 @@ $("panel-synth").addEventListener("submit", async (e) => {
       payload.table = gridToBitString();
     } else {
       $("synth-error").classList.remove("empty");
-      $("synth-error").textContent = "error: enter 1-4 variables to build the truth table grid (or use manual entry below).";
+      $("synth-error").textContent = "error: enter 1-5 variables to build the truth table grid (or use manual entry below).";
       $("synth-result").classList.add("empty");
       return;
     }
@@ -1460,7 +1461,7 @@ $("panel-synth").addEventListener("submit", async (e) => {
 $("synth-km-show-all").addEventListener("click",()=>synthKmapDiagram?.reset());
 $("synth-km-download").addEventListener("click",()=>{
   if(!synthKmapDiagram) return;
-  const clone=synthKmapDiagram.svg.cloneNode(true);
+  const clone=synthKmapDiagram.exportSvg();
   const url=URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)],{type:"image/svg+xml;charset=utf-8"}));
   const a=document.createElement("a");a.href=url;a.download="ohmwork-synthesis-kmap.svg";a.click();
   setTimeout(()=>URL.revokeObjectURL(url),1000);
@@ -1526,7 +1527,7 @@ function clearSynthResultDisplay() {
   $("download-spice-example").disabled = true;
   closeSpiceHelp();
   $("spice-help-toggle").hidden = true;
-  synthKmapDiagram = null;
+  synthKmapDiagram?.destroy(); synthKmapDiagram = null;
   synthKmapReport = "";
   ["synth-km-stage","synth-km-groups","synth-km-selection-reason","synth-km-connection","synth-km-equation",
    "synth-km-pdn","synth-km-selection","synth-km-assignments"].forEach(id=>clearChildren($(id)));
@@ -1770,6 +1771,8 @@ def _handle_synth(environ, start_response):
             max_stack=max_stack,
         )
         output_name = validate_output_name(body.get("output_name"), result.var_order)
+    except SearchLimitExceeded as exc:
+        return _json_response(start_response, '200 OK', {'ok':False, 'error_kind':'search_limit', 'error':'Search limit: '+str(exc)})
     except (ParseError, ValueError, RuntimeError) as e:
         return _json_response(start_response, "200 OK", {"ok": False, "error": str(e)})
 
@@ -1800,6 +1803,8 @@ def _handle_synth(environ, start_response):
         selection_reason = view["reasoning"]["kmap_selection_note"]
         kmap = {"selection_reason": selection_reason, "view": kmap_view, "connection": connection, "pdn": pdn, "assignments": assignments,
                 "output": selection_reason + "\n" + connection + "\n" + pdn + "\n" + format_kmap_report(model)}
+    except SearchLimitExceeded as exc:
+        return _json_response(start_response, '200 OK', {'ok':False, 'error_kind':'search_limit', 'error':'Search limit: '+str(exc)})
     except (ParseError, ValueError, RuntimeError) as e:
         return _json_response(start_response, "200 OK", {"ok": False, "error": str(e)})
     return _json_response(
@@ -1818,6 +1823,8 @@ def _handle_kmap(environ, start_response):
         result = kmap_from_input(**{key:body[key] for key in keys if key in body})
         view = build_kmap_view(result)
         output = format_kmap_report(result)
+    except SearchLimitExceeded as exc:
+        return _json_response(start_response, '200 OK', {'ok':False, 'error_kind':'search_limit', 'error':'Search limit: '+str(exc)})
     except (ParseError, ValueError, RuntimeError) as exc:
         return _json_response(start_response, '200 OK', {'ok':False, 'error':str(exc)})
     return _json_response(start_response, '200 OK', {'ok':True, 'result':view, 'output':output})

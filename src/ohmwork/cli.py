@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from ohmwork.search_budget import SearchLimitExceeded
 from ohmwork.api import kmap_from_input, render_synth, render_tt, synthesize_from_input
 from ohmwork.presenter import validate_output_name
 from ohmwork.schematic import build_textbook_schematic
@@ -156,6 +157,9 @@ def run_synth(args: argparse.Namespace, *, stdout, stderr) -> int:
     except (ValueError, ParseError) as e:
         print(f"error: {e}", file=stderr)
         return 1
+    except SearchLimitExceeded as e:
+        print(f"search limit: {e}", file=stderr)
+        return 2
     except RuntimeError as e:
         # Synthesis, layout, and export validation failures never produce
         # a partial report or a netlist that looks like a valid design.
@@ -172,6 +176,9 @@ def run_kmap(args: argparse.Namespace, *, stdout, stderr) -> int:
                                  dc=args.dc, table=args.table, form=args.form.upper(),
                                  output_name=args.output_name)
         output = format_kmap_report(result)
+    except SearchLimitExceeded as exc:
+        print(f"search limit: {exc}", file=stderr)
+        return 2
     except (ParseError, ValueError, RuntimeError) as exc:
         print(f"error: {exc}", file=stderr)
         return 1

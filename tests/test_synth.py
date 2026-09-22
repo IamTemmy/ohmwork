@@ -311,13 +311,13 @@ def test_synthesize_raises_rather_than_return_a_design_that_fails_verification(m
         synthesize(["a", "b", "c"], minterms=minterms_from_expr(["a", "b", "c"], "(abc)'"))
 
 
-def test_synth_rejects_five_or_more_variables():
-    with pytest.raises(ValueError, match="1-4 variables"):
-        synthesize(["a", "b", "c", "d", "e"], minterms={0})
+def test_synth_rejects_six_or_more_variables():
+    with pytest.raises(ValueError, match="1-5 variables"):
+        synthesize(["a", "b", "c", "d", "e", "g"], minterms={0})
 
 
 def test_synth_rejects_zero_variables():
-    with pytest.raises(ValueError, match="1-4 variables"):
+    with pytest.raises(ValueError, match="1-5 variables"):
         synthesize([], minterms=set())
 
 

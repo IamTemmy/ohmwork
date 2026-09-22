@@ -3,22 +3,42 @@
 Digital logic work at the speed of typing, showing its work at every step.
 
 See [docs/CHARTER.md](docs/CHARTER.md) for the mission and scope, and
-[docs/decisions.md](docs/decisions.md) for the definitional decisions (D1–D19) that govern
+[docs/decisions.md](docs/decisions.md) for the definitional decisions (D1–D20) that govern
 the implementation.
 
-## v1 status and limits
+## v1.1 scope and limits
 
 The v1 feature set includes derivation tables, standalone and synthesis-integrated
 K-maps, verified transistor schematics, SPICE exports, and CSV derivation-table
 export. Implementation is complete within the limits below; release approval and
 version tagging are separate from feature availability.
 
-K-maps and synthesis support 1–4 variables. Derivation/minimization supports five
+K-maps and synthesis support 1–5 declared variables (D20). Derivation/minimization supports five
 variables; the web derivation table permits up to eight, with potentially higher
 computation time. Synthesis searches the D16 single-stage AOI/OAI candidate space,
 not every possible CMOS circuit. Multi-stage NAND/NOR decomposition, analog design
-sizing, and five-variable K-map/synthesis support remain future work. Constant
+sizing, and six-variable K-map/synthesis support remain future work. Constant
 functions are supported by standalone K-maps but rejected by CMOS synthesis.
+
+Five-variable K-maps use two 4×4 Gray-code planes. The first declared variable
+selects the plane; matching positions across planes are adjacent. Planes appear
+side by side on wide screens and stack on narrow screens, with local scrolling.
+The API, CLI, editable grids, schematic, and SPICE exports use the same verified
+result. For example:
+
+```bash
+ohmwork synth --expr "(abc+de)'"
+ohmwork kmap --expr "(abc+de)'" --form pos
+```
+
+Five-variable exact search can stop at a resource limit rather than return an
+unverified or partially minimized answer. Each production direction and the
+standalone independent cover checker has its own 2,000,000-work-unit /
+20,000-storage-item allowance. Synthesis uses two production searches; standalone
+K-maps use a production search plus an independent check. Both must finish.
+These are algorithm counters, not a wall-clock latency promise. CLI exhaustion
+prints `search limit:` and exits 2; the HTTP API returns `error_kind: search_limit`.
+v1.1 closeout still requires independent review and owner dogfooding.
 
 ## Setup
 
@@ -44,7 +64,7 @@ don't want to activate it, prefix every command with `./.venv/bin/` instead (`./
 ## Karnaugh maps
 
 The **K-map** tab in `ohmwork ui` accepts an expression, a clickable truth-table
-input grid, minterm/don't-care lists, or a binary-order bit string (1–4 variables).
+input grid, minterm/don't-care lists, or a binary-order bit string (1–5 variables).
 Choose SOP to group ones or POS to group zeros. Select a colored group or its
 explanation to isolate it; group IDs and stroke patterns distinguish overlaps
 and wraparound pieces without relying on color alone. Original X cells remain
