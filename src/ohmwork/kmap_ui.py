@@ -391,12 +391,12 @@ function renderKmap(view, host, cards, onSelection) {
     $k('km-summary').textContent=`${view.form} · ${view.term_count} ${view.term_count===1?'group':'groups'} · ${view.literal_count} ${view.literal_count===1?'literal':'literals'} · verified for all ${view.cells.length} inputs`;
     $k('km-direction').textContent=view.form==='SOP'?'Group the 1s. Each colored group contributes one product term.':
       `Group the 0s. Their products give ${view.grouped_target} = ${view.grouped_expression}; complementing gives the POS above.`;
+    $k('km-result').hidden=false;
     diagram=renderKmap(view,$k('km-stage'),$k('km-groups'),text=>$k('km-selection').textContent=text);
     const xs=view.cells.filter(c=>c.value==='X').sort((a,b)=>a.minterm-b.minterm);
     $k('km-assignments').textContent=xs.length?'Selected X assignments: '+xs.map(c=>`m${c.minterm} → ${c.assigned_value} (${c.group_ids.length?'grouped':'ungrouped'})`).join('; '):'';
     $k('km-alternatives').hidden=view.alternatives.length<2;
     view.alternatives.forEach((expr,i)=>{const li=document.createElement('li');li.textContent=`${view.output_name} = ${expr}${i===view.selected_alternative?' — selected by deterministic target-SOP ordering':''}`;$k('km-alternative-list').appendChild(li);});
-    $k('km-result').hidden=false;
   });
   $k('km-show-all').addEventListener('click',()=>diagram?.reset());
   $k('km-download').addEventListener('click',()=>{
