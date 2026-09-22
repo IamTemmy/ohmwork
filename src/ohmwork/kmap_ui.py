@@ -9,9 +9,14 @@ CSS = r"""
   .km-summary h2 { font-size:1.4rem; margin:.2rem 0; overflow-wrap:anywhere; }
   .km-selection-status { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
   .km-meta { font-size:.85rem; opacity:.75; }
+  body:has(.panel.active .km-svg[data-two-plane="true"]) { max-width:1280px; }
   .km-stage { overflow-x:auto; border:1px solid #8884; border-radius:12px; margin:1rem 0; background:light-dark(#fcfdff,#161a23); }
   .km-stage svg { display:block; margin:auto; }
   .km-group-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr)); gap:.7rem; margin:1rem 0; }
+  .km-group-list[data-two-plane="true"] { grid-template-columns:repeat(var(--km-card-columns),minmax(0,1fr)); }
+  @media (max-width:900px) {
+    .km-group-list[data-two-plane="true"] { grid-template-columns:repeat(var(--km-card-columns-medium),minmax(0,1fr)); }
+  }
   .km-group-card { color:inherit; background:transparent; border:1px solid #8885; border-left:4px solid var(--group-color); border-radius:8px; padding:.8rem; cursor:pointer; text-align:left; font:inherit; }
   .km-group-card[aria-pressed=true] { outline:2px solid var(--group-color); background:#8881; }
   .km-group-card strong { display:block; margin-bottom:.3rem; }
@@ -40,6 +45,7 @@ CSS = r"""
   .km-work td:first-child { font-family:ui-monospace,monospace; }
   .km-work td:last-child { overflow-wrap:normal; word-break:normal; }
   @media (max-width:600px) {
+    .km-group-list[data-two-plane="true"] { grid-template-columns:minmax(0,1fr); }
     .km-work table, .km-work tbody, .km-work tr, .km-work td { display:block; box-sizing:border-box; width:100%; }
     .km-work thead { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); }
     .km-work tr { margin-bottom:.8rem; }
@@ -68,7 +74,7 @@ HTML = r"""
     <input type="text" id="km-expr" placeholder="e.g. ab + a'c" autocomplete="off" spellcheck="false">
   </label>
   <div id="km-truth-fields" hidden>
-    <label>Variables in order (1–4, comma-separated)<input type="text" id="km-vars" placeholder="a, b, c" autocomplete="off" spellcheck="false"></label>
+    <label>Variables in order (1–5, comma-separated)<input type="text" id="km-vars" placeholder="a, b, c" autocomplete="off" spellcheck="false"></label>
     <div class="km-input-grid" id="km-input-grid"></div>
     <div id="km-minterm-fields" hidden>
       <label>1-cell indices (leave empty for none)<input type="text" id="km-ones" placeholder="0, 2, 8, 10" autocomplete="off"></label>
@@ -117,6 +123,9 @@ const KM_SVG_STYLE = `
 }
 `;
 function renderKmap(view, host, cards, onSelection) {
+  cards.dataset.twoPlane=String(view.plane_variable!==null);
+  cards.style.setProperty('--km-card-columns',Math.max(1,Math.min(3,view.groups.length)));
+  cards.style.setProperty('--km-card-columns-medium',Math.max(1,Math.min(2,view.groups.length)));
   const ns = 'http://www.w3.org/2000/svg';
   const node = (tag, attrs={}, text=null, parent=null) => {
     const el=document.createElementNS(ns,tag);
@@ -127,7 +136,7 @@ function renderKmap(view, host, cards, onSelection) {
   };
   const svg=node('svg',{xmlns:ns,viewBox:`0 0 ${view.width} ${view.height}`,role:'group',
     'aria-label':`Karnaugh map of ${view.output_name}, ${view.form}, grouping ${view.grouping_value}s`,
-    'data-kmap-svg':'true',class:'km-svg'});
+    'data-kmap-svg':'true','data-two-plane':String(view.plane_variable!==null),class:'km-svg'});
   // Fixed readable scale; the enclosing region scrolls instead of shrinking text.
   svg.style.width=view.width+'px'; svg.style.height=view.height+'px';
   node('style',{},KM_SVG_STYLE,svg);
@@ -136,13 +145,20 @@ function renderKmap(view, host, cards, onSelection) {
   node('text',{x:24,y:34,class:'km-title'},`${view.output_name} · Karnaugh map`,svg);
   node('text',{x:24,y:58,class:'km-small'},`${view.form} · group ${view.grouping_value}s · ${view.groups.length} ${view.groups.length===1?'group':'groups'} · X = don't-care`,svg);
   const grid=view.grid;
-  node('text',{x:grid.left+grid.columns*grid.cell/2,y:82,class:'km-axis'},view.column_variables.join(''),svg);
-  node('text',{x:32,y:grid.top+grid.rows*grid.cell/2,class:'km-axis'},view.row_variables.join('') || '—',svg);
-  view.column_labels.forEach((label,i)=>node('text',{x:grid.left+(i+.5)*grid.cell,y:103,class:'km-axis'},label,svg));
-  view.row_labels.forEach((label,i)=>node('text',{x:70,y:grid.top+(i+.5)*grid.cell+5,class:'km-axis'},label || '—',svg));
+  const planes=view.plane_labels || [''];
+  planes.forEach((plane,pi)=>{
+    const dx=pi*view.plane_stride, dy=grid.top-112;
+    const axes=node('g',{'data-plane':pi,'data-plane-axes':pi},null,svg);
+    if(view.plane_variable!==null) node('text',{x:dx+grid.left+grid.columns*grid.cell/2,y:82,class:'km-axis',
+      'data-plane-heading':pi,'font-weight':650},`${view.plane_variable}=${plane}`,axes);
+    node('text',{x:dx+grid.left+grid.columns*grid.cell/2,y:82+dy,class:'km-axis'},view.column_variables.join(''),axes);
+    node('text',{x:dx+32,y:grid.top+grid.rows*grid.cell/2,class:'km-axis'},view.row_variables.join('') || '—',axes);
+    view.column_labels.forEach((label,i)=>node('text',{x:dx+grid.left+(i+.5)*grid.cell,y:103+dy,class:'km-axis'},label,axes));
+    view.row_labels.forEach((label,i)=>node('text',{x:dx+70,y:grid.top+(i+.5)*grid.cell+5,class:'km-axis'},label || '—',axes));
+  });
   const cellLayer=node('g',{'data-role':'cells'},null,svg);
   for (const c of view.cells) {
-    const g=node('g',{'data-minterm':c.minterm,'data-value':c.value,'data-assigned-value':c.assigned_value},null,cellLayer);
+    const g=node('g',{'data-plane':c.plane,'data-minterm':c.minterm,'data-value':c.value,'data-assigned-value':c.assigned_value},null,cellLayer);
     node('rect',{x:c.x,y:c.y,width:grid.cell,height:grid.cell,class:'km-grid-cell'},null,g);
     node('title',{},`m${c.minterm}: ${c.value}${c.value==='X'?`, selected value ${c.assigned_value}`:''}; groups ${c.group_ids.join(', ') || 'none'}`,g);
   }
@@ -155,28 +171,31 @@ function renderKmap(view, host, cards, onSelection) {
     node('title',{},`${group.id} · ${group.term}`,g);
     group.pieces.forEach((p,i)=>node('rect',{x:p.x,y:p.y,width:p.width,height:p.height,rx:14,
       fill:group.color,'fill-opacity':.07,stroke:group.color,'stroke-dasharray':group.dash,
-      class:'km-piece','data-piece-index':i},null,g));
+      class:'km-piece','data-plane':p.plane,'data-piece-index':i},null,g));
     // Repeated G badges go in dedicated per-cell strips below the values;
     // they identify every overlapping group without mixing color meanings.
     groupNodes.push(g);
   }
   // Text is always above tinted group regions, never obscured by their fills.
   for (const c of view.cells) {
-    node('text',{x:c.cx,y:c.cy,class:'km-value','data-cell-text':c.minterm},c.value,svg);
-    node('rect',{x:c.x+3,y:c.y+3,width:29,height:17,rx:2,class:'km-badge','data-index-badge':c.minterm},null,svg);
-    node('text',{x:c.x+7,y:c.y+15,class:'km-index','data-index-text':c.minterm},`m${c.minterm}`,svg);
+    node('text',{'data-plane':c.plane,x:c.cx,y:c.cy,class:'km-value','data-cell-text':c.minterm},c.value,svg);
+    node('rect',{'data-plane':c.plane,x:c.x+3,y:c.y+3,width:29,height:17,rx:2,class:'km-badge','data-index-badge':c.minterm},null,svg);
+    node('text',{'data-plane':c.plane,x:c.x+7,y:c.y+15,class:'km-index','data-index-text':c.minterm},`m${c.minterm}`,svg);
     const count=c.group_ids.length;
+    const badgeStep=view.plane_variable!==null ? 28 : 24;
+    const badgeWidth=view.plane_variable!==null ? 26 : 22;
     c.group_ids.forEach((id,i)=>{
       const row=Math.floor(i/4), rowCount=Math.min(4,count-row*4);
-      const x=c.cx+(i%4-(rowCount-1)/2)*24, y=c.cy+30+row*16;
-      node('rect',{x:x-11,y:y-11,width:22,height:15,rx:3,class:'km-badge','data-group-badge':id,'data-badge-cell':c.minterm},null,svg);
-      node('text',{x,y,class:'km-small','text-anchor':'middle','font-weight':600,
+      const x=c.cx+(i%4-(rowCount-1)/2)*badgeStep, y=c.cy+30+row*16;
+      node('rect',{'data-plane':c.plane,x:x-badgeWidth/2,y:y-11,width:badgeWidth,height:15,rx:3,class:'km-badge','data-group-badge':id,'data-badge-cell':c.minterm},null,svg);
+      node('text',{'data-plane':c.plane,x,y,class:'km-small','text-anchor':'middle','font-weight':600,
         'data-membership':id,'data-member-cell':c.minterm},id,svg);
     });
   }
-  node('text',{x:24,y:grid.top+grid.rows*grid.cell+28,class:'km-small'},
+  node('text',{'data-below-grid':true,x:24,y:grid.top+grid.rows*grid.cell+28,class:'km-small'},
     'Same group ID = one group. Opposite edges are adjacent.',svg);
-  if (!view.groups.length) node('text',{x:24,y:view.legend_y,class:'km-small'},'No groups needed: the selected function is constant.',svg);
+  if(view.plane_variable!==null) node('text',{'data-below-grid':true,x:24,y:grid.top+grid.rows*grid.cell+48,class:'km-small'},'The same position in the other map is adjacent.',svg);
+  if (!view.groups.length) node('text',{'data-below-grid':true,x:24,y:view.legend_y,class:'km-small'},'No groups needed: the selected function is constant.',svg);
   const proof=document.createElement('section'); proof.className='km-proof-panel km-work';
   proof.id=cards.id+'-proof-panel'; proof.hidden=true; proof.setAttribute('role','region');
   proof.setAttribute('aria-labelledby',proof.id+'-title');
@@ -214,7 +233,7 @@ function renderKmap(view, host, cards, onSelection) {
   proof.addEventListener('keydown',e=>{if(e.key==='Escape') {e.preventDefault();closeProof();}});
   view.groups.forEach((group,i)=>{
     const y=group.legend_y;
-    const legend=node('g',{class:'km-legend','data-legend-id':group.id},null,svg);
+    const legend=node('g',{'data-below-grid':true,class:'km-legend','data-legend-id':group.id},null,svg);
     node('line',{x1:24,y1:y-5,x2:66,y2:y-5,stroke:group.color,'stroke-width':3,'stroke-dasharray':group.dash},null,legend);
     const wrap=[group.wraps_rows?'top/bottom':'',group.wraps_columns?'left/right':''].filter(Boolean).join(' + ');
     group.legend_lines.forEach((line,j)=>node('text',{x:80,y:y+j*22},line,legend));
@@ -223,7 +242,7 @@ function renderKmap(view, host, cards, onSelection) {
     button.dataset.groupId=group.id; button.style.setProperty('--group-color',group.color);
     button.setAttribute('aria-pressed','false');
     const strong=document.createElement('strong'); strong.textContent=`${group.work.title}: ${group.term}`; button.appendChild(strong);
-    const detail=document.createElement('small'); detail.textContent=`${group.work.notation} = ${group.work.result}${group.essential?' · essential group':''}${wrap?' · wraps '+wrap:''}`;
+    const detail=document.createElement('small'); detail.textContent=`${group.work.notation} = ${group.work.result}${group.essential?' · essential group':''}${wrap?' · wraps '+wrap:''}${group.crosses_planes?' · both planes':''}`;
     button.appendChild(detail);
     const why=document.createElement('small'); why.textContent=group.explanation; button.appendChild(why);
     const section=document.createElement('section'); section.className='km-group-section';
@@ -238,7 +257,7 @@ function renderKmap(view, host, cards, onSelection) {
     section.appendChild(toggle);
     cards.appendChild(section); buttons.push(button);
   });
-  view.footer_lines.forEach((line,i)=>node('text',{x:24,y:view.footer_y+i*20,class:'km-small',
+  view.footer_lines.forEach((line,i)=>node('text',{'data-below-grid':true,x:24,y:view.footer_y+i*20,class:'km-small',
     'font-family':'ui-monospace,monospace','font-size':14},line,svg));
   const reference=document.createElement('details'); reference.className='km-work'; reference.dataset.booleanReference='true';
   const refTitle=document.createElement('summary');refTitle.textContent='Boolean algebra reference';reference.appendChild(refTitle);
@@ -246,6 +265,22 @@ function renderKmap(view, host, cards, onSelection) {
   cards.appendChild(proof);
   cards.appendChild(reference);
   host.appendChild(svg);
+  // Move only display coordinates. Every cell/piece keeps its model plane and
+  // global group identity; exports retain these transforms without JavaScript.
+  const resize=()=>{
+    if(view.plane_variable===null) return;
+    const stacked=host.clientWidth<view.width;
+    const dy=stacked ? grid.rows*grid.cell+100 : 0;
+    svg.dataset.planeLayout=stacked?'stacked':'side-by-side';
+    svg.querySelectorAll('[data-plane]').forEach(el=>{
+      el.setAttribute('transform',el.dataset.plane==='1' && stacked ? `translate(${-view.plane_stride} ${dy})` : 'translate(0 0)');
+    });
+    svg.querySelectorAll('[data-below-grid]').forEach(el=>el.setAttribute('transform',`translate(0 ${dy})`));
+    const width=stacked?view.plane_width:view.width, height=view.height+dy;
+    svg.setAttribute('viewBox',`0 0 ${width} ${height}`);
+    svg.style.width=width+'px'; svg.style.height=height+'px';
+  };
+  const observer=new ResizeObserver(resize); observer.observe(host); resize();
   let pinned=null;
   function highlight(id) {
     svg.dataset.activeGroup=id || '';
@@ -281,13 +316,22 @@ function renderKmap(view, host, cards, onSelection) {
     }
   });
   highlight(null);
-  return {svg,reset:()=>{pinned=null;highlight(null);}};
+  const exportSvg=()=>{
+    const clone=svg.cloneNode(true);
+    if(view.plane_variable===null) return clone; // Preserve v1's selected-export behavior.
+    clone.dataset.activeGroup='';
+    clone.querySelectorAll('.km-group,.km-legend,[data-membership]').forEach(el=>{el.style.opacity='1';});
+    clone.querySelectorAll('.km-group').forEach(el=>{el.dataset.selected='false';el.setAttribute('aria-pressed','false');});
+    clone.querySelectorAll('.km-active-cell').forEach(el=>el.classList.remove('km-active-cell'));
+    return clone;
+  };
+  return {svg,exportSvg,destroy:()=>observer.disconnect(),reset:()=>{pinned=null;highlight(null);}};
 }
 (function setupKmap() {
   const $k=id=>document.getElementById(id);
   let token=0, diagram=null, report='', gridValues=[];
   function clearResult() {
-    token++; diagram=null;report='';
+    token++; diagram?.destroy(); diagram=null;report='';
     $k('km-result').hidden=true; $k('km-error').textContent='';
     ['km-equation','km-summary','km-direction','km-stage','km-groups','km-selection','km-assignments','km-alternative-list'].forEach(id=>$k(id).replaceChildren());
     $k('km-alternatives').open=false;
@@ -297,8 +341,8 @@ function renderKmap(view, host, cards, onSelection) {
   function buildInputGrid() {
     const names=$k('km-vars').value.split(',').map(x=>x.trim());
     const host=$k('km-input-grid'); host.replaceChildren(); gridValues=[];
-    if (!names.length || names.length>4 || names.some(n=>! /^[A-Za-z][0-9]?$/.test(n) || n==='F') || new Set(names).size!==names.length) {
-      host.textContent='Enter 1–4 distinct variables to build the table.'; return;
+    if (!names.length || names.length>5 || names.some(n=>! /^[A-Za-z][0-9]?$/.test(n) || n==='F') || new Set(names).size!==names.length) {
+      host.textContent='Enter 1–5 distinct variables to build the table.'; return;
     }
     gridValues=Array(2**names.length).fill('0');
     const t=document.createElement('table');t.className='truth-grid';t.setAttribute('aria-label','K-map input truth table');
@@ -347,17 +391,17 @@ function renderKmap(view, host, cards, onSelection) {
     $k('km-summary').textContent=`${view.form} · ${view.term_count} ${view.term_count===1?'group':'groups'} · ${view.literal_count} ${view.literal_count===1?'literal':'literals'} · verified for all ${view.cells.length} inputs`;
     $k('km-direction').textContent=view.form==='SOP'?'Group the 1s. Each colored group contributes one product term.':
       `Group the 0s. Their products give ${view.grouped_target} = ${view.grouped_expression}; complementing gives the POS above.`;
+    $k('km-result').hidden=false;
     diagram=renderKmap(view,$k('km-stage'),$k('km-groups'),text=>$k('km-selection').textContent=text);
     const xs=view.cells.filter(c=>c.value==='X').sort((a,b)=>a.minterm-b.minterm);
     $k('km-assignments').textContent=xs.length?'Selected X assignments: '+xs.map(c=>`m${c.minterm} → ${c.assigned_value} (${c.group_ids.length?'grouped':'ungrouped'})`).join('; '):'';
     $k('km-alternatives').hidden=view.alternatives.length<2;
     view.alternatives.forEach((expr,i)=>{const li=document.createElement('li');li.textContent=`${view.output_name} = ${expr}${i===view.selected_alternative?' — selected by deterministic target-SOP ordering':''}`;$k('km-alternative-list').appendChild(li);});
-    $k('km-result').hidden=false;
   });
   $k('km-show-all').addEventListener('click',()=>diagram?.reset());
   $k('km-download').addEventListener('click',()=>{
     if(!diagram) return;
-    const clone=diagram.svg.cloneNode(true);
+    const clone=diagram.exportSvg();
     const url=URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)],{type:'image/svg+xml;charset=utf-8'}));
     const a=document.createElement('a');a.href=url;a.download='ohmwork-kmap.svg';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   });

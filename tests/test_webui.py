@@ -186,10 +186,10 @@ def test_api_synth_from_bit_string(server_url):
     assert result["ok"] is True
 
 
-def test_api_synth_rejects_five_variables_as_a_clean_error(server_url):
-    result = post_json(server_url + "/api/synth", {"variables": "a,b,c,d,e", "ones": "0"})
+def test_api_synth_rejects_six_variables_as_a_clean_error(server_url):
+    result = post_json(server_url + "/api/synth", {"variables": "a,b,c,d,e,g", "ones": "0"})
     assert result["ok"] is False
-    assert "1-4 variables" in result["error"]
+    assert "1-5 variables" in result["error"]
 
 
 def test_api_synth_dual_rail_and_max_stack_options(server_url):

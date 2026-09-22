@@ -161,7 +161,7 @@ def test_search_failure_propagates_to_builders(monkeypatch):
     with pytest.raises(SearchLimitExceeded): _synthesize(VARS,ones)
 
 
-@pytest.mark.parametrize('expr', ['abcde','abcdef'])
+@pytest.mark.parametrize('expr', ['abcdef','abcdefg'])
 def test_public_boundary_rejects_before_truth_enumeration(expr, monkeypatch):
     def forbidden(*a, **kw): raise AssertionError('enumerated unsupported truth table')
     monkeypatch.setattr(api,'all_assignments',forbidden)
@@ -169,7 +169,7 @@ def test_public_boundary_rejects_before_truth_enumeration(expr, monkeypatch):
         with pytest.raises(ValueError,match='supports'): call(expr=expr)
     with pytest.raises(ValueError): synthesize(list(expr), {0})
     with pytest.raises(ValueError): build_kmap(list(expr),{0})
-    with pytest.raises(ValueError): build_synthesis_kmap(result_for_private())
+    assert len(build_synthesis_kmap(result_for_private()).cells)==32
 
 
 def result_for_private():
@@ -197,8 +197,10 @@ print(json.dumps(asdict(m), sort_keys=True))
 def test_presentation_cannot_silently_flatten_two_planes():
     from ohmwork.kmap_view import build_kmap_view, format_kmap_report
     m = _build_kmap(VARS,{0,16})
-    for call in (build_kmap_view, format_kmap_report):
-        with pytest.raises(ValueError, match='Phase 2'): call(m)
+    view=build_kmap_view(m)
+    assert view['plane_labels']==('0','1') and len(view['cells'])==32
+    report=format_kmap_report(m)
+    assert 'Plane a=0' in report and 'Plane a=1' in report
 
 
 def test_dense_dont_care_regression_preserves_all_149_ties():

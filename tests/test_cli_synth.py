@@ -135,10 +135,10 @@ def test_rejects_reserved_f_in_vars():
     assert "error" in err.lower()
 
 
-def test_rejects_five_or_more_variables():
-    code, out, err = run(["synth", "--vars", "a,b,c,d,e", "--ones", "0"])
+def test_rejects_six_or_more_variables():
+    code, out, err = run(["synth", "--vars", "a,b,c,d,e,g", "--ones", "0"])
     assert code != 0
-    assert "1-4 variables" in err
+    assert "1-5 variables" in err
 
 
 def test_output_is_byte_identical_across_hash_seeds():

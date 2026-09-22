@@ -64,6 +64,9 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: playwright install-deps chromium
 
+      - name: Verify five-variable layout and standalone SVG exports
+        run: pytest tests/test_five_variable_browser.py -q
+
       - name: Run headless-browser smoke test
         run: pytest tests/test_webui_browser.py tests/test_kmap_browser.py -q
 

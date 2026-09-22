@@ -148,7 +148,7 @@ def test_source_sets_are_snapshot_copies_and_input_order_is_preserved():
 
 
 @pytest.mark.parametrize('kwargs', [
-    {'var_order':[]}, {'var_order':['a','b','c','d','e']}, {'var_order':['a','a']},
+    {'var_order':[]}, {'var_order':['a','b','c','d','e','g']}, {'var_order':['a','a']},
     {'var_order':['a','F']}, {'var_order':['abc']}, {'minterms':{-1}},
     {'minterms':{4}}, {'minterms':{True}}, {'minterms':{1.0}},
     {'minterms':{1},'dont_cares':{1}}, {'output_name':'a'}, {'output_name':'<x>'},

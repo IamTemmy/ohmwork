@@ -21,26 +21,28 @@ DASHES = ('', '10 4', '3 4', '12 3 3 3', '8 3 2 3 2 3', '14 5', '2 3 8 3', '6 3'
 
 def build_kmap_view(model: KMap) -> dict:
     """Flatten the already-verified model; add only presentation geometry."""
-    if model.plane_variable is not None:
-        raise ValueError('Five-variable K-map presentation is pending D20 Phase 2')
     rows, cols = len(model.row_labels), len(model.column_labels)
+    two_planes = model.plane_variable is not None
+    top = TOP + (28 if two_planes else 0)
+    plane_width = max(480, LEFT+cols*CELL+32)
+    stride = plane_width
     groups=[]
     for i,g in enumerate(model.groups):
-        inset=8+2*i
-        pieces=[{**asdict(p), 'x':LEFT+p.column*CELL+inset,
-                 'y':TOP+p.row*CELL+inset, 'width':p.columns*CELL-2*inset,
+        inset=min(8+2*i, 38)
+        pieces=[{**asdict(p), 'x':LEFT+p.column*CELL+inset+p.plane*stride,
+                 'y':top+p.row*CELL+inset, 'width':p.columns*CELL-2*inset,
                  'height':p.rows*CELL-2*inset} for p in g.pieces]
         groups.append({'id':g.id, 'pattern':g.pattern, 'minterms':g.minterms,
                        'used_dont_cares':g.used_dont_cares, 'term':render(g.term),
                        'explanation':g.explanation, 'essential':g.essential,
                        'witnesses':g.essential_witnesses,
-                       'wraps_rows':g.wraps_rows, 'wraps_columns':g.wraps_columns,
+                       'crosses_planes':g.crosses_planes, 'wraps_rows':g.wraps_rows, 'wraps_columns':g.wraps_columns,
                        'color':COLORS[i % len(COLORS)], 'dash':DASHES[i % len(DASHES)],
                        'pieces':pieces, 'work':group_work(model, g)})
-    cells=[{**asdict(c), 'x':LEFT+c.column*CELL, 'y':TOP+c.row*CELL,
-            'cx':LEFT+(c.column+.5)*CELL, 'cy':TOP+(c.row+.5)*CELL} for c in model.cells]
+    cells=[{**asdict(c), 'x':LEFT+c.column*CELL+c.plane*stride, 'y':top+c.row*CELL,
+            'cx':LEFT+(c.column+.5)*CELL+c.plane*stride, 'cy':top+(c.row+.5)*CELL} for c in model.cells]
     target=model.output_name if model.form=='SOP' else model.output_name+"'"
-    width=max(480,LEFT+cols*CELL+32)
+    width=plane_width
     footer=wrap(f'{model.output_name} = {render(model.expression)}', width=int((width-48)/8.5))
     if model.synthesis_f_prime is not None:
         footer += wrap(
@@ -48,7 +50,7 @@ def build_kmap_view(model: KMap) -> dict:
             width=int((width-48)/8.5))
     xs=[f'm{c.minterm}={c.assigned_value}' for c in sorted(model.cells,key=lambda c:c.minterm) if c.value=='X']
     if xs: footer+=wrap('Selected X values: '+', '.join(xs),width=int((width-48)/8.5))
-    legend_y=TOP+rows*CELL+84
+    legend_y=top+rows*CELL+84
     cursor=legend_y
     for group in groups:
         work=group['work']
@@ -56,6 +58,7 @@ def build_kmap_view(model: KMap) -> dict:
         lines+=wrap(work['notation'], width=int((width-104)/8.5))
         lines+=wrap(work['steps'][0]['expression']+' = '+work['result'], width=int((width-104)/8.5))
         edges=[name for flag,name in ((group['wraps_rows'],'top/bottom'),(group['wraps_columns'],'left/right')) if flag]
+        if group['crosses_planes']: lines.append(f'Spans both {model.plane_variable}=0 and {model.plane_variable}=1 planes')
         if edges: lines.append('Wraps '+ ' + '.join(edges))
         lines+=wrap(work['note'], width=int((width-104)/8.5))
         group['legend_lines']=lines
@@ -70,22 +73,27 @@ def build_kmap_view(model: KMap) -> dict:
             'grouping_value':model.grouping_value, 'term_count':model.term_count,
             'literal_count':model.literal_count, 'alternatives':tuple(map(render,model.alternatives)),
             'selected_alternative':model.selected_alternative,
-            'origin':model.origin, 'width':width,
+            'origin':model.origin, 'width':width*(2 if two_planes else 1),
+            'plane_variable':model.plane_variable, 'plane_labels':model.plane_labels,
+            'plane_stride':stride, 'plane_width':plane_width,
             'height':footer_y+len(footer)*20+24, 'footer_lines':footer, 'footer_y':footer_y,
-            'grid':{'left':LEFT,'top':TOP,'cell':CELL,'rows':rows,'columns':cols},
+            'grid':{'left':LEFT,'top':top,'cell':CELL,'rows':rows,'columns':cols},
             'legend_y':legend_y, 'laws':[{'name':name,'identity':identity} for name,identity in LAWS]}
 
 
 def format_kmap_report(model: KMap) -> str:
     """CLI/export explanation; no frontend Boolean formatting or algebra."""
-    if model.plane_variable is not None:
-        raise ValueError('Five-variable K-map presentation is pending D20 Phase 2')
     lines=[f'{model.output_name} = {render(model.expression)}',
-           f'{model.form}: group the {model.grouping_value}s. X = don\'t-care.',
-           f"Rows: {', '.join(model.row_variables) or '(none)'}; columns: {', '.join(model.column_variables)}",
-           '\t'+'\t'.join(model.column_labels)]
-    for row,label in enumerate(model.row_labels):
-        lines.append((label or '–')+'\t'+'\t'.join(c.value for c in model.cells if c.row==row))
+           f"{model.form}: group the {model.grouping_value}s. X = don't-care.",
+           f"Rows: {', '.join(model.row_variables) or '(none)'}; columns: {', '.join(model.column_variables)}"]
+    for plane,label in enumerate(model.plane_labels):
+        if model.plane_variable is not None:
+            lines.append(f'Plane {model.plane_variable}={label}')
+        lines.append('\t'+'\t'.join(model.column_labels))
+        for row,row_label in enumerate(model.row_labels):
+            lines.append((row_label or '–')+'\t'+'\t'.join(c.value for c in model.cells if c.row==row and c.plane==plane))
+    if model.plane_variable is not None:
+        lines.append('The same position in the other map is adjacent. The displayed seam is not an extra adjacency.')
     if not model.groups:
         lines.append(f'No groups needed: the selected function is constant {render(model.expression)}.')
     for g in model.groups:

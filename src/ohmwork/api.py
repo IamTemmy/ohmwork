@@ -172,7 +172,9 @@ def synthesize_from_input(
     Raises ``ValueError`` (bad input, unsupported variable count, or no
     candidate fits ``max_stack``) or ``RuntimeError`` (D7 verification
     failed inside ``synthesize`` itself — a bug in ohmwork, never a valid
-    design; see ``synth.synthesize``'s own docstring)."""
+    design; see ``synth.synthesize``'s own docstring). SearchLimitExceeded (a
+    RuntimeError subclass) is an expected exact-search resource limit: no
+    complete verified answer is returned when either search exhausts its budget."""
     # Reject unsupported input before allocating its exponential truth table.
     # Preserve the established public error and input-conflict precedence.
     if expr is not None and not any(x is not None for x in (variables, ones, dc, table)):
@@ -218,19 +220,19 @@ def kmap_from_input(
     ones: str | None = None, dc: str | None = None, table: str | None = None,
     form: str = 'SOP', output_name: str = 'F',
 ):
-    """One standalone map, with the 4-variable cap BEFORE truth enumeration."""
+    """One standalone map, with the 5-variable cap BEFORE truth enumeration."""
     from ohmwork.kmap import build_kmap
     if expr is not None:
         if any(x is not None for x in (variables,ones,dc,table)):
             raise ValueError('--expr cannot be combined with --vars/--ones/--dc/--table')
         ast=parse(expr)
         var_order=variables_in_order(ast)
-        if not 1 <= len(var_order) <= 4:
-            raise ValueError('kmap supports 1-4 variables')
+        if not 1 <= len(var_order) <= 5:
+            raise ValueError('kmap supports 1-5 variables')
         minterms={i for i,row in enumerate(all_assignments(var_order)) if evaluate(ast,row)}
         dont_cares=set()
     else:
-        if variables is not None and not 1 <= len(parse_var_list(variables)) <= 4:
-            raise ValueError('kmap supports 1-4 variables')
+        if variables is not None and not 1 <= len(parse_var_list(variables)) <= 5:
+            raise ValueError('kmap supports 1-5 variables')
         var_order,minterms,dont_cares=resolve_truth_table(variables=variables,ones=ones,dc=dc,table=table)
     return build_kmap(var_order,minterms,dont_cares,form=form,output_name=output_name)

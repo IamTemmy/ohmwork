@@ -30,7 +30,7 @@ class Rectangle:
     column: int
     rows: int
     columns: int
-    plane: int = 0
+    plane: int = 0  # plane index, not a sentinel; KMap.plane_variable defines whether a selector exists
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,7 +70,7 @@ class Cell:
     value: str  # original F: '0', '1', 'X' (never overwrite an X)
     assigned_value: int  # the selected expression's F value, including on Xs
     group_ids: tuple[str, ...]
-    plane: int = 0
+    plane: int = 0  # plane index, not a sentinel; KMap.plane_variable defines whether a selector exists
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,9 +258,9 @@ def build_kmap(
     var_order: Sequence[str], minterms: Iterable[int], dont_cares: Iterable[int] = frozenset(),
     *, form: str = 'SOP', output_name: str = 'F',
 ) -> KMap:
-    """Public one- through four-variable map until D20 Phase 2."""
-    if not 1 <= len(var_order) <= 4:
-        raise ValueError('kmap supports 1-4 variables')
+    """Public one- through five-variable map."""
+    if not 1 <= len(var_order) <= 5:
+        raise ValueError('kmap supports 1-5 variables')
     return _build_kmap(var_order, minterms, dont_cares, form=form, output_name=output_name)
 
 
@@ -282,9 +282,9 @@ def _build_kmap(var_order, minterms, dont_cares=frozenset(), *, form='SOP', outp
 
 
 def build_synthesis_kmap(result: SynthesisResult, output_name: str = 'F') -> KMap:
-    """Public synthesis map until D20's two-plane presentation ships."""
-    if not 1 <= len(result.var_order) <= 4:
-        raise ValueError('kmap supports 1-4 variables')
+    """Public map of the exact selected synthesis candidate."""
+    if not 1 <= len(result.var_order) <= 5:
+        raise ValueError('kmap supports 1-5 variables')
     return _build_synthesis_kmap(result, output_name)
 
 

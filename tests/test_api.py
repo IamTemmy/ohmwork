@@ -161,6 +161,6 @@ def test_render_synth_output_is_byte_identical_to_the_cli():
     assert out == direct + "\n"
 
 
-def test_render_synth_rejects_five_or_more_variables():
-    with pytest.raises(ValueError, match="1-4 variables"):
-        render_synth(variables="a,b,c,d,e", ones="0")
+def test_render_synth_rejects_six_or_more_variables():
+    with pytest.raises(ValueError, match="1-5 variables"):
+        render_synth(variables="a,b,c,d,e,g", ones="0")

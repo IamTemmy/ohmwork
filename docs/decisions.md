@@ -1316,9 +1316,12 @@ are tracked on that PR, rather than asserted here before review takes place.
 
 **Date:** 2026-09-22. **Status:** owner authorized starting v1.1 after coursework
 exposed the five-variable limit. After the independent proposal review, the owner
-explicitly authorized the build. Phase 1 is implemented on its review branch;
-Claude's independent implementation review is pending. Phase 2 remains gated on
-that review. v1 remains closed at `05df193`; this is an extension, not a
+explicitly authorized the build. Claude independently reviewed Phase 1 at
+`cfab4fa` and approved Phase 2 conditional on budget semantics/coverage follow-ups.
+Those conditions are resolved in Phase 2: separate allowances are explicit,
+validation exhaustion is an expected failed build, and missing mutation/candidate
+inventory tests were added. Phase 2 implementation is awaiting independent review
+and owner dogfooding. v1 remains closed at `05df193`; this is an extension, not a
 retrospective change to its acceptance criteria.
 
 **Motivating case:** `F = (abc+de)'`. The expected static complementary CMOS
@@ -1415,10 +1418,24 @@ Do not disable the independent validator to make the new maps run faster. If the
 battery reveals unacceptable runtime/memory or requires a search budget, resolve
 that explicitly in review before shipping: report incomplete search honestly,
 never label a partial result minimum or change a previous result silently.
-Phase 1 pins deterministic per-search limits of 2,000,000 counted search
+Phase 1 pins deterministic per-search-invocation limits of 2,000,000 counted search
 operations and 20,000 stored frontier/cache items. Exhaustion raises a dedicated
 `SearchLimitExceeded` error; no partial result escapes. These apply to the new
 five-variable synthesis/K-map paths, not derivation's independent simplifier.
+Each AOI/OAI cover direction and standalone independent oracle has a **separate**
+allowance. A synthesis call runs two production searches (up to 4,000,000 counted
+units on success); its integrated map does not run the cover oracle again. A
+standalone map runs one production search plus one oracle invocation (also up to
+4,000,000 counted units on success). The storage-item threshold applies separately
+to each invocation, not process RSS. Input evaluation, cube enumeration, circuit
+verification and rendering are outside these counters. No whole-call latency or
+whole-process memory guarantee is implied. If production finishes but independent
+validation exhausts its allowance, the build **fails without returning a result**:
+a complete answer here requires both computations to finish. CLI presents this
+as `search limit:` with exit 2; HTTP reports `error_kind: search_limit`, rather
+than classifying exhaustion as a verification bug. Phase 2 retains both independent
+allowances and tests production/oracle exhaustion separately.
+
 The measured CI battery has a 10-second subprocess deadline per fixture and a
 128 MiB peak-RSS gate. Passing 70 fixtures is not a worst-case guarantee. Runtime
 work budgets and benchmark deadlines are distinct; they do not promise a fixed
@@ -1496,8 +1513,8 @@ Codex implements; Claude independently reviews each phase before the next starts
   public five-variable flow that will fail halfway through. Phase 1 is an internal
   capability milestone until Phase 2 supplies its presentation. Private
   `_synthesize`, `_build_kmap`, and `_build_synthesis_kmap` expose the internal
-  capability for tests; public builders retain their four-variable caps.
-  Presentation entry points reject two-plane models until Phase 2.
+  capability for tests; public builders retained four-variable caps during Phase 1.
+  Phase 2 now enables the five-variable builders and their presentation together.
 - **Phase 2:** two-plane visual/CLI presentation; enable five-variable API/CLI/UI
   flows together; downloads, accessibility, interaction, live browser tests, and
   README/CHARTER scope reconciliation. Owner dogfoods the professor's case before
@@ -1510,3 +1527,10 @@ returned AOI/10 for `(abc+de)'`, AOI/10 for NAND5 and NOR5, OAI/10 for
 Each had two candidates and took approximately 1–3 ms on this environment.
 This was a bounded scratch experiment, not production enablement, an exhaustive
 performance study, or end-to-end five-variable validation.
+
+**Phase 2 presentation clarification:** `plane` is a zero-based index into
+`KMap.plane_labels`, including index 0 for a single-plane map. It is not a null
+sentinel or a Boolean input value; only `plane_variable` determines whether a
+plane selector exists. Five-variable exports contain both planes with all groups
+at full visibility regardless of the live selection. Existing 1–4-variable
+selected-export behavior remains unchanged. See `docs/five-variable-phase2.md`.
