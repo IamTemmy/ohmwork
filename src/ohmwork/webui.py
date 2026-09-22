@@ -64,6 +64,10 @@ _PAGE = r"""<!doctype html>
 <title>Ohmwork</title>
 <style>
   :root { color-scheme: light dark; }
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     max-width: 880px; margin: 2rem auto; padding: 0 1rem; line-height: 1.4;
@@ -224,13 +228,13 @@ _PAGE = r"""<!doctype html>
   button.copy-btn-primary:hover { background: #5a82ff38; }
   .tt-export-actions {
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: .75rem; width: 100%; max-width: 38rem; align-items: stretch;
+    gap: .5rem; width: 18.5rem; max-width: 100%; align-items: stretch;
   }
   .tt-export-actions > button.copy-btn {
     box-sizing: border-box; width: 100%; min-height: 44px;
-    padding: .55rem 1rem; font-size: .95rem; line-height: 1.4; font-weight: 600;
+    padding: .4rem .75rem; font-size: .85rem; line-height: 1.4; font-weight: 600;
   }
-  @media (max-width: 600px) {
+  @media (max-width: 360px) {
     .tt-export-actions { grid-template-columns: minmax(0, 1fr); grid-auto-rows: 1fr; }
   }
   pre.copy-fallback {
@@ -241,6 +245,7 @@ _PAGE = r"""<!doctype html>
 </style>
 </head>
 <body>
+<div id="copy-status" class="visually-hidden" role="status" aria-live="polite"></div>
 <h1>Ohmwork</h1>
 <p class="tagline">Digital logic work at the speed of typing — form fields instead of flags.</p>
 
@@ -281,14 +286,14 @@ _PAGE = r"""<!doctype html>
     </div>
 
     <div class="row copy-row tt-export-actions">
-      <button type="button" class="copy-btn copy-btn-primary" id="tt-copy-rich">Copy table for Word/Docs</button>
+      <button type="button" class="copy-btn copy-btn-primary" id="tt-copy-rich" title="Copy formatted table for Word or Google Docs" aria-label="Copy table for Word or Google Docs">Copy table</button>
       <button type="button" class="copy-btn" id="tt-download-csv" disabled>Download CSV</button>
     </div>
 
     <details class="section" id="tt-advanced-exports">
       <summary>Advanced exports</summary>
       <p class="hint">Copy formats for the table above — for Word or Google Docs, use "Copy
-        table for Word/Docs" instead; the table itself is always the current result.</p>
+        table" instead; the table itself is always the current result.</p>
       <div class="row">
         <label><input type="radio" name="tt-format" value="terminal" checked> Plain text / Terminal</label>
         <label><input type="radio" name="tt-format" value="md"> Markdown source</label>
@@ -682,7 +687,7 @@ function clearTtOutputDisplay() {
   const richBtn = $("tt-copy-rich");
   removeCopyFallbackFor(richBtn);
   richBtn.classList.remove("copied");
-  richBtn.textContent = "Copy table for Word/Docs";
+  richBtn.textContent = "Copy table";
 }
 $("tt-expr").addEventListener("input", clearTtOutputDisplay);
 $("tt-cols-input").addEventListener("input", clearTtOutputDisplay);
@@ -1596,7 +1601,24 @@ function showCopiedFeedback(btn) {
   const original = btn.textContent;
   btn.textContent = "Copied!";
   btn.classList.add("copied");
+  announceCopyStatus();
   setTimeout(() => { btn.textContent = original; btn.classList.remove("copied"); }, 1500);
+}
+
+// A copy button's own visible "Copied!" state isn't always what a screen
+// reader announces -- a button with a static aria-label (like tt-copy-rich,
+// whose label always names the Word/Docs destination) keeps that label as
+// its accessible name even while its text content reads "Copied!", so the
+// success feedback would otherwise never reach assistive tech. This
+// separate, always-present status region is the one channel every copy
+// button's feedback is guaranteed to reach, regardless of whether that
+// button has its own aria-label. Clearing before re-setting (on the next
+// frame) forces even a repeated identical announcement to be re-read,
+// rather than being treated as an unchanged live region.
+function announceCopyStatus() {
+  const status = $("copy-status");
+  status.textContent = "";
+  requestAnimationFrame(() => { status.textContent = "Copied to clipboard."; });
 }
 
 async function copyText(text, btn) {
