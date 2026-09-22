@@ -104,3 +104,19 @@ jobs:
           name: spice-electrical-review
           path: test-artifacts/spice/
           if-no-files-found: error
+
+  five-variable-performance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: D20 exact-search time and memory gate
+        run: python tools/benchmark_five_variables.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: five-variable-performance
+          path: test-artifacts/five-variable-performance.json
+          if-no-files-found: error

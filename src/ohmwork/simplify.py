@@ -13,6 +13,8 @@ rewrites) breaks the tie deterministically.
 
 from __future__ import annotations
 
+from ohmwork.search_budget import SearchBudget
+
 from itertools import combinations
 
 from ohmwork.expr import Const, Expr, Not, Var, mk_and, mk_or
@@ -83,32 +85,68 @@ def _essential_cover(
 
 
 def _minimal_extra_cover(
-    primes: set[str], remaining: set[int], n_vars: int
+    primes: set[str], remaining: set[int], n_vars: int, *, _budget=None
 ) -> list[set[str]]:
     """All minimum-size sets of primes (from ``primes``) covering every
     minterm in ``remaining``, via Petrick's method. Returns every tie for
     the minimum size so the caller can break ties per D5."""
     if not remaining:
         return [set()]
-    candidates = [p for p in primes if any(_term_covers(p, m, n_vars) for m in remaining)]
+    budget = _budget
+    candidates = [p for p in sorted(primes) if any(_term_covers(p, m, n_vars) for m in remaining)]
     # Petrick's method: product of sums -> sum of products, kept minimal.
     clauses = [
-        frozenset(p for p in candidates if _term_covers(p, m, n_vars)) for m in remaining
+        frozenset(p for p in candidates if _term_covers(p, m, n_vars)) for m in sorted(remaining)
     ]
+    # Conjunction is commutative/idempotent: multiply the most constrained
+    # clauses first and omit duplicates without changing the cover family.
+    clauses = sorted(set(clauses), key=lambda c: (len(c), tuple(sorted(c))))
+    upper_bound = len(candidates)
+    if n_vars == 5:
+        # A complete greedy cover is only an upper bound, never the answer.
+        # No optimal cover can have more terms than this witnessed solution;
+        # dropping larger partial products preserves every minimum-size tie.
+        uncovered = set(remaining)
+        witness = set()
+        coverage = {p: {m for m in remaining if _term_covers(p,m,n_vars)} for p in candidates}
+        while uncovered:
+            p = min(candidates, key=lambda p: (-len(coverage[p] & uncovered), p))
+            if not coverage[p] & uncovered:
+                raise RuntimeError('prime chart cannot cover the required cells')
+            witness.add(p)
+            uncovered -= coverage[p]
+        upper_bound = len(witness)
     products: set[frozenset[str]] = {frozenset()}
     for clause in clauses:
         new_products: set[frozenset[str]] = set()
-        for prod_set in products:
-            for lit in clause:
-                new_products.add(prod_set | {lit})
+        for prod_set in sorted(products, key=lambda p: tuple(sorted(p))):
+            for lit in sorted(clause):
+                combined = prod_set | {lit}
+                if len(combined) <= upper_bound:
+                    new_products.add(combined)
+                if budget:
+                    budget.check(items=len(products) + len(new_products))
         # keep the search bounded: drop any product that is a strict
         # superset of another already found (it can never be minimal).
-        minimal: set[frozenset[str]] = set()
-        for p in new_products:
-            if any(other < p for other in new_products):
-                continue
-            minimal.add(p)
-        products = minimal
+        # Process shortest products first. A discarded product already has a
+        # surviving subset, so only the surviving antichain must be compared.
+        # Equal-size products cannot be strict subsets. This is exact absorption,
+        # not a heuristic or a cap on the returned tied-cover inventory.
+        minimal: list[frozenset[str]] = []
+        ordered_products = sorted(new_products, key=lambda p: (len(p), tuple(sorted(p))))
+        for p in ordered_products:
+            dominated = False
+            for other in minimal:
+                if len(other) >= len(p):
+                    break
+                if budget:
+                    budget.check(items=len(products) + len(new_products) + len(minimal))
+                if other < p:
+                    dominated = True
+                    break
+            if not dominated:
+                minimal.append(p)
+        products = set(minimal)
     best_size = min(len(p) for p in products)
     result = [set(p) for p in products if len(p) == best_size]
     # `products` is a set of frozensets of strings: Python randomizes string
@@ -156,7 +194,8 @@ def _literal_count(terms) -> int:
 
 
 def minimal_covers(
-    var_order: list[str], minterms: set[int], dont_cares: set[int] = frozenset()
+    var_order: list[str], minterms: set[int], dont_cares: set[int] = frozenset(),
+    *, _budget: SearchBudget | None = None,
 ) -> list[Expr] | None:
     """Every minimal sum-of-products cover tied for minimum term count, then
     minimum literal count — i.e. every candidate :func:`minimize` would
@@ -177,7 +216,7 @@ def minimal_covers(
 
     primes = _prime_implicants(n_vars, care_set)
     essential, remaining = _essential_cover(primes, minterms, n_vars)
-    extra_options = _minimal_extra_cover(primes, remaining, n_vars)
+    extra_options = _minimal_extra_cover(primes, remaining, n_vars, _budget=_budget)
 
     # Petrick's method above only minimizes the number of terms. Standard
     # minimal-SOP practice ranks ties by total literal count next — so

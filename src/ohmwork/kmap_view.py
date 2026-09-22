@@ -21,6 +21,8 @@ DASHES = ('', '10 4', '3 4', '12 3 3 3', '8 3 2 3 2 3', '14 5', '2 3 8 3', '6 3'
 
 def build_kmap_view(model: KMap) -> dict:
     """Flatten the already-verified model; add only presentation geometry."""
+    if model.plane_variable is not None:
+        raise ValueError('Five-variable K-map presentation is pending D20 Phase 2')
     rows, cols = len(model.row_labels), len(model.column_labels)
     groups=[]
     for i,g in enumerate(model.groups):
@@ -76,6 +78,8 @@ def build_kmap_view(model: KMap) -> dict:
 
 def format_kmap_report(model: KMap) -> str:
     """CLI/export explanation; no frontend Boolean formatting or algebra."""
+    if model.plane_variable is not None:
+        raise ValueError('Five-variable K-map presentation is pending D20 Phase 2')
     lines=[f'{model.output_name} = {render(model.expression)}',
            f'{model.form}: group the {model.grouping_value}s. X = don\'t-care.',
            f"Rows: {', '.join(model.row_variables) or '(none)'}; columns: {', '.join(model.column_variables)}",

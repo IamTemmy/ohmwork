@@ -14,7 +14,8 @@ import subprocess
 
 import pytest
 
-from ohmwork.api import synthesize_from_input
+from ohmwork.api import synthesize_from_input, resolve_truth_table
+from ohmwork.synth import _synthesize
 from ohmwork.schematic import build_textbook_schematic
 from ohmwork.spice import render_spice_example
 
@@ -82,6 +83,13 @@ def check_harness(text, layout, values):
 
 
 CASES = [
+    ('phase1-aoi32', {'expr': "(abc+de)'"}),
+    ('phase1-nand5', {'expr': "(abcde)'"}),
+    ('phase1-nor5', {'expr': "(a+b+c+d+e)'"}),
+    ('phase1-oai', {'expr': "((a+b)(c+d)e)'"}),
+    ('phase1-shared', {'expr': "a'b+c'd+e"}),
+    ('phase1-unused-case', {'variables': 'a,A,a0,z,q', 'ones': ','.join(map(str,range(16,32)))}),
+    ('phase1-dontcare', {'variables': 'a,b,c,d,e', 'ones': '16', 'dc': '0'}),
     ("nand3", {"expr": "(abc)'"}),
     ("nor4", {"expr": "(a+b+c+d)'"}),
     ("aoi31", {"expr": "(abc+d)'"}),
@@ -106,7 +114,8 @@ CASES = [
 @pytest.mark.parametrize("dual", [False, True], ids=["single-rail", "dual-rail"])
 def test_all_vectors_in_ngspice(case, kwargs, dual, tmp_path):
     executable = ngspice_executable()
-    result = synthesize_from_input(**kwargs, dual_rail=dual)
+    result = (_synthesize(*resolve_truth_table(**kwargs), dual_rail=dual)
+              if case.startswith('phase1-') else synthesize_from_input(**kwargs, dual_rail=dual))
     layout = build_textbook_schematic(result, "Y")
     if case == "stress40" and not dual:
         assert result.total_transistors == 40

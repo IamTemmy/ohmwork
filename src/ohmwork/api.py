@@ -173,6 +173,17 @@ def synthesize_from_input(
     candidate fits ``max_stack``) or ``RuntimeError`` (D7 verification
     failed inside ``synthesize`` itself — a bug in ohmwork, never a valid
     design; see ``synth.synthesize``'s own docstring)."""
+    # Reject unsupported input before allocating its exponential truth table.
+    # Preserve the established public error and input-conflict precedence.
+    if expr is not None and not any(x is not None for x in (variables, ones, dc, table)):
+        names = variables_in_order(parse(expr))
+    elif expr is None and variables is not None:
+        names = parse_var_list(variables)
+    else:
+        names = None
+    from ohmwork.synth import MAX_VARS
+    if names and len(names) > MAX_VARS:
+        synthesize(names, set())  # raises the same public variable-limit error
     var_order, minterms, dont_cares = resolve_truth_table(
         expr=expr, variables=variables, ones=ones, dc=dc, table=table
     )
