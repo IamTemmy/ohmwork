@@ -64,6 +64,10 @@ _PAGE = r"""<!doctype html>
 <title>Ohmwork</title>
 <style>
   :root { color-scheme: light dark; }
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     max-width: 880px; margin: 2rem auto; padding: 0 1rem; line-height: 1.4;
@@ -241,6 +245,7 @@ _PAGE = r"""<!doctype html>
 </style>
 </head>
 <body>
+<div id="copy-status" class="visually-hidden" role="status" aria-live="polite"></div>
 <h1>Ohmwork</h1>
 <p class="tagline">Digital logic work at the speed of typing — form fields instead of flags.</p>
 
@@ -1596,7 +1601,24 @@ function showCopiedFeedback(btn) {
   const original = btn.textContent;
   btn.textContent = "Copied!";
   btn.classList.add("copied");
+  announceCopyStatus();
   setTimeout(() => { btn.textContent = original; btn.classList.remove("copied"); }, 1500);
+}
+
+// A copy button's own visible "Copied!" state isn't always what a screen
+// reader announces -- a button with a static aria-label (like tt-copy-rich,
+// whose label always names the Word/Docs destination) keeps that label as
+// its accessible name even while its text content reads "Copied!", so the
+// success feedback would otherwise never reach assistive tech. This
+// separate, always-present status region is the one channel every copy
+// button's feedback is guaranteed to reach, regardless of whether that
+// button has its own aria-label. Clearing before re-setting (on the next
+// frame) forces even a repeated identical announcement to be re-read,
+// rather than being treated as an unchanged live region.
+function announceCopyStatus() {
+  const status = $("copy-status");
+  status.textContent = "";
+  requestAnimationFrame(() => { status.textContent = "Copied to clipboard."; });
 }
 
 async function copyText(text, btn) {
