@@ -51,7 +51,7 @@ def test_logic_live_keyboard_layout_export(page,server_url,width,theme,tmp_path)
     # Open the file itself, without page JavaScript or styles.
     page.goto(path.as_uri());page.wait_for_selector('svg')
     artifact=Path('test-artifacts/logic');artifact.mkdir(parents=True,exist_ok=True)
-    page.screenshot(path=str(artifact/f'standalone-{width}-{theme}.png'),full_page=True)
+    page.screenshot(path=str(artifact/f'standalone-{width}-{theme}.png'))
     page.goto(server_url);build(page,"(abc+de)'")
     page.screenshot(path=str(artifact/f'professor-{width}-{theme}.png'),full_page=True)
 
@@ -63,8 +63,8 @@ def test_basic_gate_controls_every_vector(page,server_url,kind):
     rows=page.request.post(server_url+'/api/logic',data={'kind':kind,'variables':names}).json()['result']['rows']
     for index,row in enumerate(rows):
         page.evaluate('''inputs=>{document.querySelectorAll('#lg-inputs button').forEach((b,i)=>{if((b.getAttribute('aria-pressed')==='true')!==inputs[i])b.click();});}''',row['inputs'])
-        assert page.locator('#lg-stage [data-output-value]').inner_text()==str(int(row['output']))
-        assert page.locator('#lg-stage [data-signal=g0]').inner_text()==str(int(row['gates'][0]))
+        assert page.locator('#lg-stage [data-output-value]').text_content()==str(int(row['output']))
+        assert page.locator('#lg-stage [data-signal=g0]').text_content()==str(int(row['gates'][0]))
         assert page.locator('#lg-table tbody tr[aria-current=true]').count()==1
         assert page.locator('#lg-table tbody tr').nth(index).get_attribute('aria-current')=='true'
 
@@ -85,12 +85,12 @@ def test_eight_inputs_all_256_rows_and_repeated_connections(page,server_url):
     assert page.locator('#lg-stage [data-gate-id]').count()==2
     assert page.locator('#lg-stage .lg-wire[data-driver=g0][data-gate=g1]').count()==2
     page.locator('#lg-inputs button').first.click()
-    assert page.locator('#lg-stage [data-signal=g0]').inner_text()=='1'
-    assert page.locator('#lg-stage [data-output-value]').inner_text()=='0'
+    assert page.locator('#lg-stage [data-signal=g0]').text_content()=='1'
+    assert page.locator('#lg-stage [data-output-value]').text_content()=='0'
     build(page,'a')
     assert page.locator('#lg-stage [data-gate-id]').count()==0
     page.locator('#lg-inputs button').click()
-    assert page.locator('#lg-stage [data-output-value]').inner_text()=='1'
+    assert page.locator('#lg-stage [data-output-value]').text_content()=='1'
 
 
 def test_edits_reset_errors_and_delayed_response(page):
