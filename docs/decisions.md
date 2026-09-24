@@ -1534,3 +1534,64 @@ sentinel or a Boolean input value; only `plane_variable` determines whether a
 plane selector exists. Five-variable exports contain both planes with all groups
 at full visibility regardless of the live selection. Existing 1–4-variable
 selected-export behavior remains unchanged. See `docs/five-variable-phase2.md`.
+
+## D21 — Interactive logic gates and expression circuits
+
+**Status (2026-09-24):** owner authorized incremental implementation and commits.
+Phase 1 implements the model for independent Claude review before Phase 2 UI work.
+This does not change D20's five-variable CMOS/K-map limits.
+
+### Contract and scope
+
+- A separate ideal Boolean gate circuit, not a transistor-layout conversion.
+  Supported primitives: AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF.
+  NOT/BUF have one input; other primitives have two through eight inputs.
+  XOR is odd parity; XNOR is even parity, including more than two inputs.
+- Basic-gate selection and D8 expression input share an immutable directed acyclic
+  circuit model. Up to eight distinct input variables, 128 gates, 4096 source
+  characters and 64 nesting levels. Reject before exhaustive evaluation when
+  limits are exceeded. These are educational display/verification limits, not
+  a claim of industrial synthesis capacity or a wall-clock guarantee.
+- Preserve parsed expression structure and operand multiplicity. Identical AST
+  subexpressions may share one gate output. A complemented AND/OR/XOR can be
+  displayed directly as NAND/NOR/XNOR. No Boolean minimization, absorption,
+  De Morgan optimization or cost claim. A bare variable is a direct connection;
+  explicit BUF selection creates a buffer. Repeated terminal connections remain
+  distinct (e.g. a^a feeds both XOR terminals).
+- Synthetic stable input/gate IDs; names remain case-sensitive display labels.
+  A gate references its ordered input-driver IDs, producing one output net.
+  Validate uniqueness, allowed types/arities, available drivers, topological
+  order, reachable gates, declared names, and the output identity.
+- Evaluate the netlist independently of the expression evaluator. Exhaustively
+  compare every output against the source AST for all 2^n inputs before returning
+  a built circuit. Every row includes input and internal gate values so the future
+  UI can select a preverified row without reimplementing Boolean logic in JS.
+- Gate count counts shared gates once; depth counts gate stages on the longest
+  input-to-output path (direct wire depth zero). No propagation timing, analog
+  simulation or transistor count is inferred from these figures.
+
+### Reviewed phases
+
+1. **Model:** gate presets, expression compiler, circuit evaluation/validation,
+   exhaustive verification and test battery; independently reviewed before UI.
+2. **Presentation:** standard gate symbols, routed connections, input toggles,
+   matching truth-table row, internal signal values, gate explanations, accessible
+   keyboard operation and standalone SVG download. Use the same verified model;
+   exact model-to-drawing connectivity checks and live 1280/390px tests in both
+   themes. Add API/CLI/UI together; preserve existing workflows.
+3. **Truth-table synthesis:** separately reviewed mapping and simplification
+   contract, don't-care assignments and explicit optimization claims. No silent
+   reuse of an unrelated CMOS candidate as a gate-level minimum.
+4. Six-variable K-maps/CMOS and multi-output building blocks are later proposals,
+   each with its own performance and correctness gates, not enabled here.
+
+### Phase 1 acceptance
+
+All eight primitives at every supported arity; multi-input parity vectors;
+AND/OR combinations, nested complements, repeated operands/subexpressions,
+case-differing names and arbitrary first-appearance order; 256-row eight-input
+verification; source/gate-count/depth limits; deterministic IDs across hash seeds;
+strict assignment validation. Mutations must reject duplicate IDs, missing or
+forward drivers/cycles, invalid kind/arity, wrong output, unreachable gates and
+function-changing wiring. A structurally valid but incorrect graph must fail
+independent exhaustive equivalence verification.
