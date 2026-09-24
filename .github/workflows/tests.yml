@@ -67,6 +67,9 @@ jobs:
       - name: Verify five-variable layout and standalone SVG exports
         run: pytest tests/test_five_variable_browser.py -q
 
+      - name: Verify interactive logic gates and standalone exports
+        run: pytest tests/test_logic_browser.py -q
+
       - name: Run headless-browser smoke test
         run: pytest tests/test_webui_browser.py tests/test_kmap_browser.py -q
 
@@ -78,6 +81,7 @@ jobs:
           path: |
             test-artifacts/schematics/
             test-artifacts/kmaps/
+            test-artifacts/logic/
           if-no-files-found: ignore
 
   spice-test:

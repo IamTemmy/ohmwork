@@ -4,13 +4,19 @@
 Final release approval is recorded through independent PR review; this status does
 not itself create a release or version tag.
 D17 schematics, D18 K-maps (including synthesis integration), and D19 SPICE export
-have shipped. Decisions D1–D20 remain authoritative. Earlier M1 exclusions below
+have shipped. Decisions D1–D21 remain authoritative. Earlier M1 exclusions below
 record the historical milestone scope, not the current shipping status.
 **v1.1 extension (D20):** synthesis and K-maps now support five declared inputs,
 using two linked 4×4 planes and all 32 verification vectors. Public API/CLI/UI
 support is enabled together. Exact searches may explicitly report resource
 exhaustion; they never return truncated minima. Review and owner dogfooding gate
 v1.1 closeout. The v1 scope below remains a historical record.
+
+**D21 extension:** a separate ideal Logic gates view supports eight inputs,
+primitive gates and structure-preserving expression circuits. Input switches,
+internal signals, truth-table rows and SVG snapshots use exhaustive verification.
+This does not extend the five-variable CMOS/K-map limit or claim gate minimization.
+Truth-table-to-gate synthesis remains Phase 3. Independent review gates shipment.
 
 **Owner:** Temiloluwa Adesola (@IamTemmy)
 **Collaborators:** Claude (via Claude Code), ChatGPT

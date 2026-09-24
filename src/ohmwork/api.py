@@ -236,3 +236,19 @@ def kmap_from_input(
             raise ValueError('kmap supports 1-5 variables')
         var_order,minterms,dont_cares=resolve_truth_table(variables=variables,ones=ones,dc=dc,table=table)
     return build_kmap(var_order,minterms,dont_cares,form=form,output_name=output_name)
+
+
+def logic_from_input(*, expr: str | None = None, kind: str | None = None,
+                     variables: str | None = None):
+    """Build a verified ideal circuit from an expression or one gate preset.
+
+    Raises ValueError/ParseError for invalid inputs. No minimization is applied.
+    """
+    from ohmwork.logic_gates import build_basic_gate, build_expression_circuit
+    if expr is not None:
+        if kind is not None or variables is not None:
+            raise ValueError('Choose an expression or a basic gate, not both')
+        return build_expression_circuit(expr)
+    if not isinstance(kind, str) or not isinstance(variables, str):
+        raise ValueError('Choose a gate and supply comma-separated input names')
+    return build_basic_gate(kind, tuple(name.strip() for name in variables.split(',')))

@@ -90,6 +90,7 @@ def _parse_expression(source: str) -> Expr:
         elif char == ')':
             depth -= 1
     ast = parse(source)
+    # Required before compiler recursion/hashing, not just final verification.
     _check_ast(ast)
     return ast
 
@@ -101,7 +102,11 @@ def validate_circuit(circuit: Circuit) -> None:
     if not 1 <= len(circuit.inputs) <= MAX_INPUTS:
         raise ValueError('Logic circuits support 1-8 inputs')
     names = tuple(port.name for port in circuit.inputs)
-    if tuple(parse_var_list(','.join(names))) != names:
+    try:
+        parsed_names = tuple(parse_var_list(','.join(names)))
+    except ValueError as exc:
+        raise ValueError(str(exc).replace('--vars contains', 'Input names contain').replace('--vars', 'Input names')) from exc
+    if parsed_names != names:
         raise ValueError('Invalid input names')
     if len(circuit.gates) > MAX_GATES:
         raise ValueError(f'Logic circuit exceeds {MAX_GATES} gates')
@@ -234,6 +239,7 @@ def build_basic_gate(kind: str, names: tuple[str, ...]) -> VerifiedCircuit:
     inputs = tuple(Input(f'i{i}', name) for i, name in enumerate(names))
     gate = Gate('g0', kind, tuple(port.id for port in inputs))
     circuit = Circuit(inputs, (gate,), gate.id)
+    # Validate preset arity/names before constructing its source AST.
     validate_circuit(circuit)
     operands = tuple(Var(name) for name in names)
     if kind in {'BUF', 'NOT'}:
