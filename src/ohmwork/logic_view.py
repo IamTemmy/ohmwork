@@ -149,10 +149,12 @@ def render_logic_svg(view: dict, row_index: int = 0) -> str:
            '.lg-diagram text{fill:currentColor;stroke:none} .lg-body{fill:#fff} '
            '.lg-wire{fill:none;stroke:#596675;stroke-width:2} '
            '.lg-wire[data-value="1"]{stroke:#007a60;stroke-width:3} '
+           '.lg-junction{fill:#596675}.lg-junction[data-value="1"]{fill:#007a60} '
            '.lg-gate{stroke:currentColor;stroke-width:2} '
            '.lg-gate:focus{outline:none;stroke:#2463eb;stroke-width:3} '
            '@media(prefers-color-scheme:dark){.lg-diagram{background:#161a23;color:#e9eef6} '
-           '.lg-body{fill:#161a23}.lg-wire{stroke:#a3afc0}.lg-wire[data-value="1"]{stroke:#49d6b5}}</style>',
+           '.lg-body{fill:#161a23}.lg-wire{stroke:#a3afc0}.lg-wire[data-value="1"]{stroke:#49d6b5} '
+           '.lg-junction{fill:#a3afc0}.lg-junction[data-value="1"]{fill:#49d6b5}}</style>',
            text(24, 28, 'Ideal logic · crossings without dots are not junctions')]
     for route in view['routes']:
         points = ' '.join(f'{x},{y}' for x,y in route['points'])
