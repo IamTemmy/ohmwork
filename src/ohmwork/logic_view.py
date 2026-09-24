@@ -181,8 +181,8 @@ def render_logic_svg(view: dict, row_index: int = 0) -> str:
                            f'data-value="{int(values[driver])}" cx="{x}" cy="{y}" r="3"/>')
     for port in view['inputs']:
         x,y=port['x'],port['y']
-        svg.append(text(x-48,y-10,port['name']))
-        svg.append(text(x-48,y+12,int(values[port['id']]), f'data-signal="{port["id"]}"'))
+        svg.append(text(x-48,y+5,port['name'], 'data-input-name="true"'))
+        svg.append(text(x-22,y+5,int(values[port['id']]), f'data-signal="{port["id"]}"'))
         svg.append(f'<circle cx="{x}" cy="{y}" r="3" fill="currentColor"/>')
     for gate in view['gates']:
         x,y,h=gate['x'],gate['y'],gate['height']

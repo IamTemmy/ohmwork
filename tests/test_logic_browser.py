@@ -41,6 +41,14 @@ def test_logic_live_keyboard_layout_export(page,server_url,width,theme,tmp_path)
         return a.x<0||a.y<0||z.x>svg.viewBox.baseVal.width+1||z.y>svg.viewBox.baseVal.height+1;
       }).map(t=>t.textContent),overflow:document.documentElement.scrollWidth>innerWidth+1})''')
     assert data=={'clipped':[],'overflow':False}
+    assert page.locator('#lg-stage svg').evaluate("""svg=>{
+      const boxes=[...svg.querySelectorAll('text')].map(t=>{
+        const b=t.getBBox(),m=t.getCTM(),a=new DOMPoint(b.x,b.y).matrixTransform(m),z=new DOMPoint(b.x+b.width,b.y+b.height).matrixTransform(m);
+        return {x:a.x,y:a.y,r:z.x,b:z.y};
+      });
+      return boxes.every((a,i)=>boxes.slice(i+1).every(b=>Math.min(a.r,b.r)-Math.max(a.x,b.x)<.5 || Math.min(a.b,b.b)-Math.max(a.y,b.y)<.5));
+    }""")
+
     assert page.locator('#lg-table td').first.evaluate('n=>n.getBoundingClientRect().width')>=40
     if width==390:
         assert page.locator('#lg-stage').evaluate('n=>n.scrollWidth>n.clientWidth')
