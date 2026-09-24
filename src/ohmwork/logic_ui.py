@@ -6,13 +6,16 @@ CSS = r'''
 .lg-fields > label { flex:1; min-width:140px; }
 #panel-logic select { font:inherit; color:inherit; background:transparent; padding:.6rem; width:100%; border:1px solid #8888; border-radius:6px; }
 .lg-stage, .lg-table-scroll { overflow:auto; max-width:100%; border:1px solid #8886; border-radius:10px; margin:1rem 0; }
-.lg-stage svg { display:block; }
+.lg-stage svg { display:block; margin:auto; }
 .lg-stage { max-height:650px; }
 .lg-table-scroll { max-height:350px; }
-.lg-table-scroll table { margin:0; white-space:nowrap; }
+.lg-table-scroll table { margin:0; white-space:nowrap; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+#lg-table th, #lg-table td { padding:.55rem .85rem; min-width:1.4rem; text-align:center; border:1px solid #8885; }
+#lg-table th { position:sticky; top:0; background:light-dark(#f1f3f8,#202631); }
+#lg-table td:last-child, #lg-table th:last-child { font-weight:700; border-left:2px solid #6685ad; }
 #lg-table tr[aria-current=true] { background:light-dark(#dfeaff,#263d62); font-weight:700; }
 .lg-actions { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin:1rem 0; }
-#panel-logic button { font-size:.95rem; padding:.55rem .8rem; margin:0; min-height:44px; }
+#panel-logic button { font:inherit; font-size:.95rem; padding:.55rem .8rem; margin:0; min-height:44px; border:1px solid #8886; border-radius:6px; background:#8881; color:inherit; cursor:pointer; }
 #panel-logic button[aria-pressed=true] { background:light-dark(#d9f4e8,#164a3d); }
 #panel-logic button:focus-visible { outline:3px solid #4487ff; outline-offset:3px; }
 .lg-detail { border:1px solid #8887; border-radius:10px; padding:1rem; margin:1rem 0; }

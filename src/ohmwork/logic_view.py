@@ -37,7 +37,7 @@ def build_logic_view(result: VerifiedCircuit) -> dict:
     columns: dict[int, list] = {}
     for gate in circuit.gates:
         columns.setdefault(depths[gate.id], []).append(gate)
-    field_height = max(100 * len(circuit.inputs),
+    field_height = max(50 * len(circuit.inputs),
                        max((sum(max(100, 24 * len(g.inputs)) + 70 for g in gs)
                             for gs in columns.values()), default=100))
     column_x = {}
@@ -67,6 +67,19 @@ def build_logic_view(result: VerifiedCircuit) -> dict:
                           'pins': pins, 'out': outputs[gate.id],
                           'explanation': EXPLANATIONS[gate.kind]})
             y += height + 70
+    # For unshared first-stage inputs, align their wires with their actual
+    # terminals. This avoids near-coincident horizontal runs and wasted height.
+    destinations = {p.id:[] for p in circuit.inputs}
+    for gate in gates:
+        for driver,pin in zip(gate['inputs'],gate['pins']):
+            if driver in destinations:
+                destinations[driver].append((depths[gate['id']],pin[1]))
+    if all(len(ds)==1 and ds[0][0]==1 for ds in destinations.values()):
+        positions = sorted(ds[0][1] for ds in destinations.values())
+        if all(b-a >= 24 for a,b in zip(positions,positions[1:])):
+            for port in ports:
+                port['y'] = destinations[port['id']][0][1]
+                outputs[port['id']] = (port['x'],port['y'])
     # Coordinates use depth columns; signal rows retain canonical netlist order.
     gate_order = {g.id:i for i,g in enumerate(circuit.gates)}
     gates.sort(key=lambda g: gate_order[g['id']])

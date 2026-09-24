@@ -41,6 +41,10 @@ def test_logic_live_keyboard_layout_export(page,server_url,width,theme,tmp_path)
         return a.x<0||a.y<0||z.x>svg.viewBox.baseVal.width+1||z.y>svg.viewBox.baseVal.height+1;
       }).map(t=>t.textContent),overflow:document.documentElement.scrollWidth>innerWidth+1})''')
     assert data=={'clipped':[],'overflow':False}
+    assert page.locator('#lg-table td').first.evaluate('n=>n.getBoundingClientRect().width')>=40
+    if width==390:
+        assert page.locator('#lg-stage').evaluate('n=>n.scrollWidth>n.clientWidth')
+        assert page.locator('.lg-table-scroll').evaluate('n=>n.scrollWidth>n.clientWidth')
     with page.expect_download() as download: page.click('#lg-download')
     path=tmp_path/'snapshot.svg';download.value.save_as(path)
     svg=ET.parse(path).getroot()

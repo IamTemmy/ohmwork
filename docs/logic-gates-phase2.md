@@ -48,6 +48,7 @@ It uses the existing Host/Origin/content-type/body-size guards.
 
 ## Rendering and interaction contract
 
+- Unshared first-stage input wires align with their terminal heights.
 - Gates occupy depth columns. Column gutters expand with terminal count so every
   destination terminal has its own lane. Edges that skip stages route above the
   gate field, with distinct source exit lanes. Wires never traverse gate bodies.
@@ -64,7 +65,8 @@ It uses the existing Host/Origin/content-type/body-size guards.
   support Enter/Space. Closing an explanation or pressing Escape returns focus
   to its opener. SVG/table scrolling regions are keyboard reachable.
 - Wide diagrams retain readable text through local scrolling; they are not
-  squeezed to fit a phone. The page's four tabs wrap on narrow screens.
+  squeezed to fit a phone. The page's four tabs wrap on narrow screens. Truth-table cells have explicit
+  borders/padding, sticky headings, and an emphasized output column.
 - Download SVG captures the current input vector, all gates/routes/values, and a
   descriptive input/output snapshot. Temporary selection and interactive roles
   are removed. It works standalone without JavaScript. CLI SVG starts at all 0s.
@@ -107,3 +109,10 @@ implementation shown separately by Synthesis.
 Phase 3 (truth-table-to-gate synthesis) remains a separate review/implementation
 step. No minimum-gate mapping, six-variable CMOS/K-map support, or multi-output
 circuit synthesis is introduced here.
+
+Screenshot review found unstyled table cells and unnecessarily close input-wire
+runs in the professor example. The final presentation pass adds readable table
+tracks, consistent compact buttons, centered diagrams, and aligned unshared
+first-stage inputs. Browser checks assert minimum cell width and local diagram/
+table scrolling at 390px. The focused 122-test core/view/interface set passed
+again after this visual correction.
