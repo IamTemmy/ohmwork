@@ -126,16 +126,16 @@ def render_logic_svg(view: dict, row_index: int = 0) -> str:
     values.update(zip([g['id'] for g in view['gates']], row['gates']))
     def text(x, y, value, extra=''):
         return f'<text x="{x}" y="{y}" {extra}>{escape(str(value))}</text>'
-    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Logic circuit" '
+    svg = [f'<svg class="lg-diagram" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Logic circuit" '
            f'viewBox="0 0 {view["width"]} {view["height"]}" width="{view["width"]}" height="{view["height"]}">',
            '<title>Verified ideal Boolean circuit</title>',
-           '<style>svg{background:#fff;color:#172334;font:14px system-ui,sans-serif} '
-           'text{fill:currentColor;stroke:none} .lg-body{fill:#fff} '
+           '<style>.lg-diagram{background:#fff;color:#172334;font:14px system-ui,sans-serif} '
+           '.lg-diagram text{fill:currentColor;stroke:none} .lg-body{fill:#fff} '
            '.lg-wire{fill:none;stroke:#596675;stroke-width:2} '
            '.lg-wire[data-value="1"]{stroke:#007a60;stroke-width:3} '
            '.lg-gate{stroke:currentColor;stroke-width:2} '
            '.lg-gate:focus{outline:none;stroke:#2463eb;stroke-width:3} '
-           '@media(prefers-color-scheme:dark){svg{background:#161a23;color:#e9eef6} '
+           '@media(prefers-color-scheme:dark){.lg-diagram{background:#161a23;color:#e9eef6} '
            '.lg-body{fill:#161a23}.lg-wire{stroke:#a3afc0}.lg-wire[data-value="1"]{stroke:#49d6b5}}</style>',
            text(24, 28, 'Ideal logic · crossings without dots are not junctions')]
     for route in view['routes']:
@@ -143,6 +143,24 @@ def render_logic_svg(view: dict, row_index: int = 0) -> str:
         svg.append(f'<polyline class="lg-wire" data-driver="{route["driver"]}" '
                    f'data-gate="{route["gate"]}" data-terminal="{route["terminal"]}" '
                    f'data-value="{int(values[route["driver"]])}" points="{points}"/>')
+    # Only actual same-net branching points receive junction dots. Merely
+    # crossing a different route never creates an electrical connection.
+    for driver in values:
+        segments = [(a,b) for r in view['routes'] if r['driver'] == driver
+                    for a,b in zip(r['points'],r['points'][1:]) if a != b]
+        candidates = {tuple(p) for segment in segments for p in segment}
+        for x,y in sorted(candidates):
+            directions = set()
+            for (ax,ay),(bx,by) in segments:
+                if ay == by == y and min(ax,bx) <= x <= max(ax,bx):
+                    if min(ax,bx) < x: directions.add('left')
+                    if max(ax,bx) > x: directions.add('right')
+                if ax == bx == x and min(ay,by) <= y <= max(ay,by):
+                    if min(ay,by) < y: directions.add('up')
+                    if max(ay,by) > y: directions.add('down')
+            if len(directions) > 2:
+                svg.append(f'<circle class="lg-wire lg-junction" data-driver="{driver}" '
+                           f'data-value="{int(values[driver])}" cx="{x}" cy="{y}" r="3"/>')
     for port in view['inputs']:
         x,y=port['x'],port['y']
         svg.append(text(x-48,y-10,port['name']))
