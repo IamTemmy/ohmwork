@@ -20,6 +20,9 @@ from ohmwork.api import derive_from_input, format_tt_report, synthesize_from_inp
 from ohmwork.kmap import build_synthesis_kmap
 from ohmwork.expr import render
 from ohmwork.kmap_view import build_kmap_view, format_kmap_report
+from ohmwork.logic_ui import CSS as LOGIC_CSS, HTML as LOGIC_HTML, JS as LOGIC_JS
+from ohmwork.logic_view import build_logic_view, format_logic_report, render_logic_svg
+from ohmwork.api import logic_from_input
 from ohmwork.kmap_ui import CSS as KMAP_CSS, HTML as KMAP_HTML, JS as KMAP_JS
 from ohmwork.derivation import variables_in_order
 from ohmwork.errors import ParseError
@@ -1686,6 +1689,13 @@ _PAGE = (_PAGE.replace('</style>', KMAP_CSS + '</style>', 1)
          .replace('<script>', KMAP_HTML + '\n<script>', 1)
          .replace('</script>', KMAP_JS + '\n</script>', 1))
 
+_PAGE = (_PAGE.replace('</style>', LOGIC_CSS + '</style>', 1)
+         .replace('<button type="button" class="tab" data-tab="synth">',
+                  '<button type="button" class="tab" data-tab="logic">Logic gates</button>\n'
+                  '<button type="button" class="tab" data-tab="synth">', 1)
+         .replace('<script>', LOGIC_HTML + '\n<script>', 1)
+         .replace('</script>', LOGIC_JS + '\n</script>', 1))
+
 
 def _json_response(start_response, status: str, payload: dict):
     body = json.dumps(payload).encode("utf-8")
@@ -1812,6 +1822,24 @@ def _handle_synth(environ, start_response):
     )
 
 
+def _handle_logic(environ, start_response):
+    body = _read_json_body(environ)
+    try:
+        if not isinstance(body, dict):
+            raise ValueError('Request body must be a JSON object')
+        keys = ('expr', 'kind', 'variables')
+        if any(key not in keys for key in body):
+            raise ValueError('Unknown logic input field')
+        if any(not isinstance(value, str) for value in body.values()):
+            raise ValueError('Logic input fields must be text')
+        view = build_logic_view(logic_from_input(**body))
+        payload = {'ok': True, 'result': view, 'svg': render_logic_svg(view),
+                   'output': format_logic_report(view)}
+    except (ValueError, ParseError) as exc:
+        payload = {'ok': False, 'error': str(exc)}
+    return _json_response(start_response, '200 OK', payload)
+
+
 def _handle_kmap(environ, start_response):
     body = _read_json_body(environ)
     try:
@@ -1903,6 +1931,7 @@ _ROUTES = {
     ("GET", "/"): _handle_index,
     ("POST", "/api/tt"): _handle_tt,
     ("POST", "/api/kmap"): _handle_kmap,
+    ("POST", "/api/logic"): _handle_logic,
     ("POST", "/api/synth"): _handle_synth,
 }
 

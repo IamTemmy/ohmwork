@@ -100,6 +100,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     synth.add_argument("--output-name", help="SPICE output label; requires --netlist (default F)")
 
+    logic = subparsers.add_parser('logic', help='Explore a verified ideal logic circuit')
+    source = logic.add_mutually_exclusive_group(required=True)
+    source.add_argument('--expr', help='D8 expression; preserves its parsed structure')
+    source.add_argument('--gate', choices=('AND','OR','NOT','NAND','NOR','XOR','XNOR','BUF'))
+    logic.add_argument('--vars', help='Comma-separated input names for --gate (up to 8)')
+    logic.add_argument('--svg', action='store_true', help='Standalone SVG snapshot with all inputs 0')
+
     ui = subparsers.add_parser(
         "ui",
         help="Start a local web page for tt/synth (M1.1) instead of the command line",
@@ -186,6 +193,19 @@ def run_kmap(args: argparse.Namespace, *, stdout, stderr) -> int:
     return 0
 
 
+def run_logic(args: argparse.Namespace, *, stdout, stderr) -> int:
+    from ohmwork.api import logic_from_input
+    from ohmwork.logic_view import build_logic_view, format_logic_report, render_logic_svg
+    try:
+        view = build_logic_view(logic_from_input(expr=args.expr, kind=args.gate, variables=args.vars))
+        output = render_logic_svg(view) if args.svg else format_logic_report(view)
+    except (ValueError, ParseError) as exc:
+        print(f"error: {exc}", file=stderr)
+        return 1
+    print(output, file=stdout)
+    return 0
+
+
 def run_ui(args: argparse.Namespace, *, stdout, stderr) -> int:
     from ohmwork.webui import run_server  # imported lazily: only `ui` needs it
 
@@ -203,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_kmap(args, stdout=sys.stdout, stderr=sys.stderr)
     if args.command == "synth":
         return run_synth(args, stdout=sys.stdout, stderr=sys.stderr)
+    if args.command == "logic":
+        return run_logic(args, stdout=sys.stdout, stderr=sys.stderr)
     if args.command == "ui":
         return run_ui(args, stdout=sys.stdout, stderr=sys.stderr)
 
