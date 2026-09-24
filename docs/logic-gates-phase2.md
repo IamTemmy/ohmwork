@@ -74,11 +74,22 @@ It uses the existing Host/Origin/content-type/body-size guards.
 
 ## Evidence and independent review focus
 
-Local non-browser/non-SPICE suite: **1,023 passed before the additional all-vector signal-order regression; the focused
-renderer suite then passed all 19 tests**. This includes 87 core tests,
-19 renderer/geometry tests, and 16 integration tests. Chromium tests run in their
-own required CI step (not silently omitted from CI). Consult the PR for the
-exact final head and CI result.
+Local non-browser/non-SPICE suite: **1,024 passed**. This includes 87 core tests,
+19 renderer/geometry tests, and 16 integration tests. All 15 new Chromium cases
+passed in CI, including both screen sizes/themes. The existing browser suite
+also runs in that job. Consult the PR for the exact final head and CI result.
+
+The initial browser run exposed two test-harness errors: `inner_text()` was used
+on SVG text (changed to `text_content()`), and full-page capture stalled on raw
+SVG documents (changed to viewport capture, as in existing SVG tests). Keyboard,
+clipping, and export assertions passed before those capture failures. A separate
+implementation correction preserves canonical gate order after depth-based
+coordinate placement, now tested across every internal signal and all 256 vectors
+of `(ab+cd)(ef+gh)` in both Python and Chromium.
+
+A deterministic 40-case nested-expression geometry sweep also found no collinear
+overlap between wires driven by different signals. This supplements, rather than
+replaces, the checked-in exact terminal/endpoint and no-gate-body-crossing tests.
 
 `test_logic_browser.py` covers all eight primitives, every vector for 3-input
 primitives, all 256 vectors for 8-input XNOR and a seven-gate, multilevel expression, shared/repeated connections, a direct
