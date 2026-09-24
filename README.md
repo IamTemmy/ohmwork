@@ -3,7 +3,7 @@
 Digital logic work at the speed of typing, showing its work at every step.
 
 See [docs/CHARTER.md](docs/CHARTER.md) for the mission and scope, and
-[docs/decisions.md](docs/decisions.md) for the definitional decisions (D1–D20) that govern
+[docs/decisions.md](docs/decisions.md) for the definitional decisions (D1–D21) that govern
 the implementation.
 
 ## v1.1 scope and limits
@@ -81,6 +81,28 @@ ohmwork kmap --vars "a,b" --table "1X00" --form pos --output-name Y
 
 The synthesis report embeds the same verified K-map view, explaining the chosen
 circuit and why its AOI/OAI construction was selected.
+
+## Interactive logic gates (D21)
+
+The **Logic gates** tab accepts a basic gate (AND, OR, NOT, NAND, NOR, XOR,
+XNOR or BUF) or a D8 expression with up to eight distinct inputs. Change the
+input switches to follow internal signals and the matching truth-table row.
+Select a gate for its rule and current input/output values. Download SVG saves
+an independent snapshot of the current circuit state.
+
+```sh
+ohmwork logic --gate XOR --vars a,b,c
+ohmwork logic --expr "(abc+de)'"
+ohmwork logic --expr "ab+c" --svg > logic.svg
+```
+
+XOR means odd parity; XNOR means even parity, including more than two inputs.
+This view preserves parsed expression structure and shares identical subexpressions;
+it does not minimize gate count. Its gate count/depth describe ideal Boolean gates,
+not CMOS transistor counts or physical timing. Limits are eight inputs per gate,
+128 gates, 4096 expression characters and 64 nesting levels. Large diagrams/tables
+scroll locally. Truth-table-to-gate synthesis is a later phase; CMOS/K-maps retain
+their separate five-variable limit. See [the Phase 2 review guide](docs/logic-gates-phase2.md).
 
 ## SPICE export
 

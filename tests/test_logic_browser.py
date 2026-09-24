@@ -113,3 +113,17 @@ def test_edits_reset_errors_and_delayed_response(page):
     page.wait_for_timeout(250)
     assert page.locator('#lg-result').is_hidden()
     assert page.locator('#lg-stage svg').count()==0
+
+
+def test_multilevel_signal_identity_matches_verified_rows(page,server_url):
+    source='(ab+cd)(ef+gh)';build(page,source)
+    rows=page.request.post(server_url+'/api/logic',data={'expr':source}).json()['result']['rows']
+    page.evaluate('''rows=>{
+      const buttons=[...document.querySelectorAll('#lg-inputs button')];
+      for(const row of rows){
+        buttons.forEach((b,i)=>{if((b.getAttribute('aria-pressed')==='true')!==row.inputs[i])b.click();});
+        row.gates.forEach((value,i)=>{if(Number(document.querySelector('[data-signal=g'+i+']').textContent)!==Number(value))throw Error('wrong internal signal g'+i);});
+        const current=document.querySelector('#lg-table tbody tr[aria-current=true]');
+        if(current.textContent!==[...row.inputs,...row.gates,row.output].map(Number).join(''))throw Error('wrong table row');
+      }
+    }''',rows)

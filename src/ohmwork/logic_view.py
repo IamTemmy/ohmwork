@@ -67,6 +67,9 @@ def build_logic_view(result: VerifiedCircuit) -> dict:
                           'pins': pins, 'out': outputs[gate.id],
                           'explanation': EXPLANATIONS[gate.kind]})
             y += height + 70
+    # Coordinates use depth columns; signal rows retain canonical netlist order.
+    gate_order = {g.id:i for i,g in enumerate(circuit.gates)}
+    gates.sort(key=lambda g: gate_order[g['id']])
     routes = []
     long_index = 0
     lane_counts = {}

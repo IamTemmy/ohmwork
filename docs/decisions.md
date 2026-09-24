@@ -1595,3 +1595,19 @@ strict assignment validation. Mutations must reject duplicate IDs, missing or
 forward drivers/cycles, invalid kind/arity, wrong output, unreachable gates and
 function-changing wiring. A structurally valid but incorrect graph must fail
 independent exhaustive equivalence verification.
+
+### Phase 2 implementation and review handoff
+
+Phase 1 was independently approved at `fcd58bc`; the owner authorized Phase 2.
+The separate `logic` CLI / `/api/logic` / Logic gates tab now consume the same
+verified model. Standard symbols retain exact ordered terminal routes; repeated
+connections are not deduplicated. Long routes occupy overhead lanes; crossings
+without dots do not join. Standalone SVG downloads capture the current input
+vector and values, independent of the live gate selection; CLI SVG uses all 0s.
+
+Native switches and gate controls select preverified rows. The diagram and table
+scroll locally rather than shrinking labels. Explanations support keyboard
+activation, Escape/close, and focus return. Request generation tokens reject stale
+results after edits/reset/resubmission. Bounds remain those of Phase 1.
+See `docs/logic-gates-phase2.md` for commands, acceptance checks, and review scope.
+Phase 2 is subject to independent review; Phase 3 is not implemented here.

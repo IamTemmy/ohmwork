@@ -11,6 +11,7 @@ CASES=['a','ab+c',"(abc+de)'",'a^a','(a+b)^(a+b)',"a''",'a+(b(c+d))','(ab+cd)(ef
 @pytest.mark.parametrize('source',CASES)
 def test_exact_model_geometry_svg_bridge(source):
     result=build_expression_circuit(source);v=build_logic_view(result)
+    assert [g['id'] for g in v['gates']]==[g.id for g in result.circuit.gates]
     expected=Counter((d,g.id,i) for g in result.circuit.gates for i,d in enumerate(g.inputs))
     expected[(result.circuit.output,'F',0)]+=1
     assert Counter((r['driver'],r['gate'],r['terminal']) for r in v['routes'])==expected
@@ -53,3 +54,11 @@ def test_altered_verified_rows_rejected():
 def test_names_are_not_cli_flavored():
     with pytest.raises(ValueError,match='Input names contain duplicate'):
         build_basic_gate('AND',('a','a'))
+
+
+def test_depth_columns_preserve_internal_row_identity_for_every_vector():
+    result=build_expression_circuit('(ab+cd)(ef+gh)');view=build_logic_view(result)
+    for i,row in enumerate(result.rows):
+        root=ET.fromstring(render_logic_svg(view,i))
+        shown={n.get('data-signal'):int(n.text) for n in root.findall('{*}text') if n.get('data-signal')}
+        assert all(shown[g.id]==int(value) for g,value in zip(result.circuit.gates,row.gates))
