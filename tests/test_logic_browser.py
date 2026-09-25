@@ -136,6 +136,41 @@ def test_multilevel_signal_identity_matches_verified_rows(page,server_url):
         buttons.forEach((b,i)=>{if((b.getAttribute('aria-pressed')==='true')!==row.inputs[i])b.click();});
         row.gates.forEach((value,i)=>{if(Number(document.querySelector('[data-signal=g'+i+']').textContent)!==Number(value))throw Error('wrong internal signal g'+i);});
         const current=document.querySelector('#lg-table tbody tr[aria-current=true]');
-        if(current.textContent!==[...row.inputs,...row.gates,row.output].map(Number).join(''))throw Error('wrong table row');
+        if(current.textContent!==[...row.inputs,...row.gates.slice(0,-1),row.output].map(Number).join(''))throw Error('wrong table row');
       }
     }''',rows)
+
+
+@pytest.mark.parametrize('width',[1280,390])
+@pytest.mark.parametrize('theme',['light','dark'])
+def test_branch_layout_aliases_and_descriptive_table(page,server_url,width,theme,tmp_path):
+    page.set_viewport_size({'width':width,'height':900});page.emulate_media(color_scheme=theme)
+    build(page,"xy'+x'y")
+    assert page.locator('#lg-table th').all_text_contents()==['x','y',"g0: y'","g1: xy'","g2: x'","g3: x'y",'F']
+    assert page.locator('#lg-stage [data-input-name]').all_text_contents()==['x','y','x','y']
+    rows=page.request.post(server_url+'/api/logic',data={'expr':"xy'+x'y"}).json()['result']['rows']
+    for row in rows:
+        page.evaluate("""row=>{
+          document.querySelectorAll('#lg-inputs button').forEach((b,i)=>{if((b.getAttribute('aria-pressed')==='true')!==row.inputs[i])b.click();});
+          row.inputs.forEach((v,i)=>document.querySelectorAll('[data-signal=i'+i+']').forEach(n=>{if(Number(n.textContent)!==Number(v))throw Error('wrong alias');}));
+          row.gates.forEach((v,i)=>{if(Number(document.querySelector('[data-signal=g'+i+']').textContent)!==Number(v))throw Error('wrong gate');});
+        }""",row)
+        assert page.locator('#lg-table tbody tr[aria-current=true]').inner_text().split()==[str(int(v)) for v in (*row['inputs'],*row['gates'][:-1],row['output'])]
+    assert page.locator('#lg-stage svg').evaluate("""svg=>{
+      const boxes=[...svg.querySelectorAll('text')].map(t=>{
+        const b=t.getBBox(),m=t.getCTM(),a=new DOMPoint(b.x,b.y).matrixTransform(m),z=new DOMPoint(b.x+b.width,b.y+b.height).matrixTransform(m);
+        return {x:a.x,y:a.y,r:z.x,b:z.y};
+      });
+      return boxes.every((a,i)=>a.x>=0&&a.y>=0&&a.r<=svg.viewBox.baseVal.width&&a.b<=svg.viewBox.baseVal.height&&boxes.slice(i+1).every(b=>Math.min(a.r,b.r)-Math.max(a.x,b.x)<.5 || Math.min(a.b,b.b)-Math.max(a.y,b.y)<.5));
+    }""")
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
+    artifact=Path('test-artifacts/logic');artifact.mkdir(parents=True,exist_ok=True)
+    page.locator('#lg-stage svg').screenshot(path=str(artifact/f'branches-{width}-{theme}.png'))
+    with page.expect_download() as download: page.click('#lg-download')
+    path=tmp_path/'branches.svg';download.value.save_as(path)
+    svg=ET.parse(path).getroot()
+    assert len(svg.findall("{*}text[@data-input-name]"))==4
+    assert len(svg.findall("{*}g[@data-gate-id]"))==5
+    build(page,kind='AND',names='a,b,c')
+    assert page.locator('#lg-table th').all_text_contents()==['a','b','c','F']
+    assert '1 gate ·' in page.locator('#lg-meta').inner_text()

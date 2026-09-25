@@ -50,7 +50,7 @@ HTML = r'''
     </section>
     <div class="lg-actions"><button id="lg-download" type="button" disabled>Download SVG</button><button id="lg-copy" type="button" disabled>Copy circuit report</button></div>
     <h3>Truth table and internal signals</h3>
-    <p>The highlighted row matches the input switches. Internal columns use gate IDs from the diagram.</p>
+    <p>The highlighted row matches the input switches. Each internal column names a gate and its expression. F is the final output; its gate is not repeated as another column.</p>
     <div class="lg-table-scroll" tabindex="0" aria-label="Truth table; scroll to explore"><table id="lg-table"></table></div>
   </section>
 </form>
@@ -123,7 +123,7 @@ JS = r'''
     view=data.result; report=data.output; vector=0;
     el('lg-result').hidden=false;
     el('lg-summary').textContent='F = '+view.expression;
-    el('lg-meta').textContent=view.gate_count+' gates · depth '+view.depth+' · verified for all '+view.rows.length+' input vectors';
+    el('lg-meta').textContent=view.gate_count+(view.gate_count===1?' gate · depth ':' gates · depth ')+view.depth+' · verified for all '+view.rows.length+' input vectors';
     el('lg-stage').innerHTML=data.svg;
     const svg=el('lg-stage').querySelector('svg');svg.setAttribute('role','group');
     el('lg-inputs').replaceChildren();
@@ -143,9 +143,10 @@ JS = r'''
       symbol.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();inspect(g.id,symbol);}});
     });
     const head=document.createElement('thead'),hr=document.createElement('tr');head.append(hr);
-    [...view.inputs.map(p=>p.name),...view.gates.map(g=>g.id),'F'].forEach(t=>cell('th',t,hr).scope='col');
+    const internal=view.gates.map((g,i)=>({g,i})).filter(({g})=>view.table_gates.includes(g.id));
+    [...view.inputs.map(p=>p.name),...internal.map(({g})=>g.id+': '+g.expression),'F'].forEach(t=>cell('th',t,hr).scope='col');
     const body=document.createElement('tbody');
-    view.rows.forEach(r=>{const tr=document.createElement('tr');[...r.inputs,...r.gates,r.output].forEach(v=>cell('td',Number(v),tr));body.append(tr);});
+    view.rows.forEach(r=>{const tr=document.createElement('tr');[...r.inputs,...internal.map(({i})=>r.gates[i]),r.output].forEach(v=>cell('td',Number(v),tr));body.append(tr);});
     el('lg-table').replaceChildren(head,body);el('lg-download').disabled=false;el('lg-copy').disabled=false;update();
   }
   el('panel-logic').addEventListener('submit',async e=>{
