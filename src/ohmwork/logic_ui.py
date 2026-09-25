@@ -50,7 +50,7 @@ HTML = r'''
     </section>
     <div class="lg-actions"><button id="lg-download" type="button" disabled>Download SVG</button><button id="lg-copy" type="button" disabled>Copy circuit report</button></div>
     <h3>Truth table and internal signals</h3>
-    <p>The highlighted row matches the input switches. Each internal column names a gate and its expression. F is the final output; its gate is not repeated as another column.</p>
+    <p>The highlighted row matches the input switches. Each internal column names a gate and its expression. Brackets identify gates: [g0] is a gate; g0 without brackets is an input name. F is the final output; its gate is not repeated as another column.</p>
     <div class="lg-table-scroll" tabindex="0" aria-label="Truth table; scroll to explore"><table id="lg-table"></table></div>
   </section>
 </form>
@@ -94,7 +94,7 @@ JS = r'''
     if(selected===id){close();return;}
     selected=id;opener=button;el('lg-detail').hidden=false;
     const gate=view.gates.find(g=>g.id===id);
-    el('lg-detail-title').textContent=gate.id+' · '+gate.kind;
+    el('lg-detail-title').textContent=gate.display_id+' · '+gate.kind;
     el('lg-detail-rule').textContent=gate.explanation;
     el('lg-gate-buttons').querySelectorAll('button').forEach(b=>b.setAttribute('aria-expanded',String(b.dataset.id===id)));
     el('lg-stage').querySelectorAll('[data-gate-id]').forEach(b=>b.setAttribute('aria-expanded',String(b.dataset.gateId===id)));
@@ -114,8 +114,8 @@ JS = r'''
     el('lg-table').querySelectorAll('tbody tr').forEach((tr,i)=>tr.setAttribute('aria-current',String(i===vector)));
     if(selected) {
       const g=view.gates.find(g=>g.id===selected);
-      const names=Object.fromEntries(view.inputs.map(p=>[p.id,p.name]));
-      el('lg-detail-values').textContent=g.inputs.map((d,i)=>'Input '+(i+1)+' ('+(names[d]||d)+') = '+Number(values[d])).join('; ')+'. Output '+g.id+' = '+Number(values[g.id])+'.';
+      const names=Object.fromEntries([...view.inputs.map(p=>[p.id,p.name]),...view.gates.map(g=>[g.id,g.display_id])]);
+      el('lg-detail-values').textContent=g.inputs.map((d,i)=>'Input '+(i+1)+' ('+(names[d]||d)+') = '+Number(values[d])).join('; ')+'. Output '+g.display_id+' = '+Number(values[g.id])+'.';
     }
   }
   function cell(tag,text,parent) {const n=document.createElement(tag);n.textContent=text;parent.append(n);return n;}
@@ -133,18 +133,18 @@ JS = r'''
     });
     el('lg-gate-buttons').replaceChildren();
     view.gates.forEach(g=>{
-      const b=document.createElement('button');b.type='button';b.textContent=g.id+' · '+g.kind;b.dataset.id=g.id;
+      const b=document.createElement('button');b.type='button';b.textContent=g.display_id+' · '+g.kind;b.dataset.id=g.id;
       b.setAttribute('aria-expanded','false');b.setAttribute('aria-controls','lg-detail');b.addEventListener('click',()=>inspect(g.id,b));
       el('lg-gate-buttons').append(b);
       const symbol=svg.querySelector('[data-gate-id="'+g.id+'"]');
-      symbol.setAttribute('tabindex','0');symbol.setAttribute('role','button');symbol.setAttribute('aria-label','Inspect '+g.id+' '+g.kind);
+      symbol.setAttribute('tabindex','0');symbol.setAttribute('role','button');symbol.setAttribute('aria-label','Inspect '+g.display_id+' '+g.kind);
       symbol.setAttribute('aria-expanded','false');symbol.setAttribute('aria-controls','lg-detail');
       symbol.addEventListener('click',()=>inspect(g.id,symbol));
       symbol.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();inspect(g.id,symbol);}});
     });
     const head=document.createElement('thead'),hr=document.createElement('tr');head.append(hr);
     const internal=view.gates.map((g,i)=>({g,i})).filter(({g})=>view.table_gates.includes(g.id));
-    [...view.inputs.map(p=>p.name),...internal.map(({g})=>g.id+': '+g.expression),'F'].forEach(t=>cell('th',t,hr).scope='col');
+    [...view.inputs.map(p=>p.name),...internal.map(({g})=>g.display_id+': '+g.expression),'F'].forEach(t=>cell('th',t,hr).scope='col');
     const body=document.createElement('tbody');
     view.rows.forEach(r=>{const tr=document.createElement('tr');[...r.inputs,...internal.map(({i})=>r.gates[i]),r.output].forEach(v=>cell('td',Number(v),tr));body.append(tr);});
     el('lg-table').replaceChildren(head,body);el('lg-download').disabled=false;el('lg-copy').disabled=false;update();

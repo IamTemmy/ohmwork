@@ -67,3 +67,23 @@ branches now use the same layout policy.
    overlap, local scrolling, keyboard inspection and signal updates.
 
 Leave this draft until independent review; no Phase 3 work is included.
+
+## Review correction: unambiguous gate references
+
+Claude identified two label ambiguities: concatenated fallback gate IDs and
+primary inputs named like gate IDs. Internal display IDs now use brackets
+(`[g0]`) in diagrams, tables, inspectors, buttons and copied reports. Input
+names remain literal (`g0`). A short legend explains the distinction.
+
+Fallback equations use explicit operators (`[g11] · [g11]`) and are assembled
+as presentation text, never by substituting fake `Var` nodes into D8's shared
+renderer. Once an expression reaches the expansion limit, downstream equations
+use local references instead of re-expanding the shared graph. `expr.py` and
+all computational gate identities/rows remain unchanged.
+
+Regressions cover the 128-gate repeated-doubling model (including two- and
+three-digit IDs), the owner's live `g0(a+b)(c+d)(e+f)+g0'` collision case,
+SVG/report labels, inspector input-vs-gate labels, and a browser-rendered
+server-verified 20-gate doubling graph. The latter supplies a verified response
+to the browser because the source compiler correctly flattens associative AND.
+Focused Python suite after correction: 131 passed.

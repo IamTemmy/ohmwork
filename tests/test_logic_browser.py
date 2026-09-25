@@ -146,7 +146,7 @@ def test_multilevel_signal_identity_matches_verified_rows(page,server_url):
 def test_branch_layout_aliases_and_descriptive_table(page,server_url,width,theme,tmp_path):
     page.set_viewport_size({'width':width,'height':900});page.emulate_media(color_scheme=theme)
     build(page,"xy'+x'y")
-    assert page.locator('#lg-table th').all_text_contents()==['x','y',"g0: y'","g1: xy'","g2: x'","g3: x'y",'F']
+    assert page.locator('#lg-table th').all_text_contents()==['x','y',"[g0]: y'","[g1]: xy'","[g2]: x'","[g3]: x'y",'F']
     assert page.locator('#lg-stage [data-input-name]').all_text_contents()==['x','y','x','y']
     rows=page.request.post(server_url+'/api/logic',data={'expr':"xy'+x'y"}).json()['result']['rows']
     for row in rows:
@@ -174,3 +174,31 @@ def test_branch_layout_aliases_and_descriptive_table(page,server_url,width,theme
     build(page,kind='AND',names='a,b,c')
     assert page.locator('#lg-table th').all_text_contents()==['a','b','c','F']
     assert '1 gate ·' in page.locator('#lg-meta').inner_text()
+
+
+def test_input_gate_name_collision_in_live_table_diagram_and_inspector(page):
+    build(page,"g0(a+b)(c+d)(e+f)+g0'")
+    headers=page.locator('#lg-table th').all_text_contents()
+    assert 'g0' in headers and '[g0]: a + b' in headers
+    assert '[g3]: g0(a + b)(c + d)(e + f)' in headers
+    assert page.locator('#lg-stage [data-gate-id=g0] text').text_content()=='[g0] · OR'
+    page.locator('#lg-gate-buttons button[data-id=g3]').click()
+    detail=page.locator('#lg-detail-values').inner_text()
+    assert 'Input 1 (g0)' in detail and 'Input 2 ([g0])' in detail
+    assert 'Output [g3]' in detail
+
+
+def test_double_digit_fallback_labels_in_browser(page):
+    # Inject a server-verified graph response: the expression compiler flattens
+    # associative AND, so use the supported Circuit model to exercise this DAG.
+    from test_logic_view import doubling_chain
+    from ohmwork.logic_view import build_logic_view,render_logic_svg,format_logic_report
+    view=build_logic_view(doubling_chain(20))
+    page.route('**/api/logic',lambda route:route.fulfill(json={
+        'ok':True,'result':view,'svg':render_logic_svg(view),'output':format_logic_report(view)}))
+    build(page,'g0')
+    headers=page.locator('#lg-table th').all_text_contents()
+    assert 'g0' in headers and '[g12]: [g11] · [g11]' in headers
+    page.locator('#lg-inputs button').click()
+    assert set(page.locator('#lg-table tbody tr[aria-current=true] td').all_text_contents())=={'1'}
+    assert page.locator('#lg-stage [data-signal=g19]').text_content()=='1'

@@ -25,25 +25,35 @@ EXPLANATIONS = {
 
 
 def _signal_expressions(circuit):
-    """Bound label expansion for shared DAGs; retain gate references when large."""
+    """Render D8 input expressions, or explicitly marked local gate equations.
+
+    None marks an expression whose expansion exceeded the display budget.
+    Gate references are presentation tokens, never fake Var nodes in the AST.
+    """
     nodes = {p.id: Var(p.name) for p in circuit.inputs}
+    primary_names = {p.id: p.name for p in circuit.inputs}
     labels = {}
     for g in circuit.gates:
         args = tuple(nodes[d] for d in g.inputs)
         base = {'AND': And, 'NAND': And, 'OR': Or, 'NOR': Or,
                 'XOR': Xor, 'XNOR': Xor}.get(g.kind)
-        node = base(args) if base else args[0]
-        if g.kind in {'NOT', 'NAND', 'NOR', 'XNOR'}:
-            node = Not(node)
-        label = render(node)
-        if len(label) > 80:
-            # Local gate equation remains exact and readable without exponentially
-            # expanding a repeatedly shared subexpression.
-            args = tuple(Var(d) if d in labels else nodes[d] for d in g.inputs)
+        inverted = g.kind in {'NOT', 'NAND', 'NOR', 'XNOR'}
+        node = None
+        if all(arg is not None for arg in args):
             node = base(args) if base else args[0]
-            if g.kind in {'NOT', 'NAND', 'NOR', 'XNOR'}:
+            if inverted:
                 node = Not(node)
             label = render(node)
+            if len(label) > 80:
+                node = None
+        if node is None:
+            terms = [primary_names[d] if d in primary_names else f'[{d}]'
+                     for d in g.inputs]
+            separator = {'AND': ' · ', 'NAND': ' · ', 'OR': ' + ',
+                         'NOR': ' + ', 'XOR': ' ⊕ ', 'XNOR': ' ⊕ '}.get(g.kind, '')
+            label = separator.join(terms)
+            if inverted:
+                label = (f"({label})" if base else label) + "'"
         labels[g.id] = label
         nodes[g.id] = node
     return labels
@@ -217,6 +227,7 @@ def build_logic_view(result: VerifiedCircuit) -> dict:
     expressions = _signal_expressions(circuit)
     for gate in view['gates']:
         gate['expression'] = expressions[gate['id']]
+        gate['display_id'] = f"[{gate['id']}]"
     view['table_gates'] = [g['id'] for g in view['gates'] if g['id'] != circuit.output]
     return view
 
@@ -301,7 +312,7 @@ def render_logic_svg(view: dict, row_index: int = 0) -> str:
         svg.append(f'<g transform="scale({scale} 1)">{symbol}</g>' if scale != 1 else symbol)
         edge=(102 if gate['kind'] in {'NOT','NAND'} else 107) if gate['kind'] in {'NOT','NAND','NOR','XNOR'} else (95 if gate['kind'] in {'OR','XOR'} else 90)
         svg.append(f'<path d="M{edge*scale} {h/2} H{110*scale}"/>')
-        svg.append(text(0,-14,f'{gate["id"]} · {gate["kind"]}'))
+        svg.append(text(0,-14,f'{gate["display_id"]} · {gate["kind"]}'))
         svg.append('</g>')
         svg.append(text(x+110*scale+5,y+h/2-9,int(values[gate['id']]),f'data-signal="{gate["id"]}"'))
     x,y=view['output_point']
@@ -313,9 +324,12 @@ def format_logic_report(view: dict) -> str:
     lines=[f'F = {view["expression"]}',
            f'{view["gate_count"]} logic gates; depth {view["depth"]}; verified {len(view["rows"])} input vectors.',
            'Structure-preserving ideal logic; no minimization or transistor-cost claim.']
-    lines += [f'{g["id"]}: {g["kind"]}({", ".join(g["inputs"])}) — {g["explanation"]}' for g in view['gates']]
+    names = {p['id']: p['name'] for p in view['inputs']}
+    names.update({g['id']: g['display_id'] for g in view['gates']})
+    lines += ['Brackets identify gates: [g0] is a gate; g0 without brackets is an input name.']
+    lines += [f'{g["display_id"]}: {g["kind"]}({", ".join(names[d] for d in g["inputs"])}) — {g["explanation"]}' for g in view['gates']]
     internal = [(i,g) for i,g in enumerate(view['gates']) if g['id'] in view['table_gates']]
-    lines += [f"{g['id']} = {g['expression']}" for _,g in internal]
-    lines += [' '.join([p['name'] for p in view['inputs']]+[g['id'] for _,g in internal]+['F'])]
+    lines += [f"{g['display_id']} = {g['expression']}" for _,g in internal]
+    lines += [' '.join([p['name'] for p in view['inputs']]+[g['display_id'] for _,g in internal]+['F'])]
     lines += [' '.join(str(int(v)) for v in (*r['inputs'],*(r['gates'][i] for i,_ in internal),r['output'])) for r in view['rows']]
     return '\n'.join(lines)

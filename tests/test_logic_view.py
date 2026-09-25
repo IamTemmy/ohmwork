@@ -96,3 +96,36 @@ def test_single_gate_table_only_needs_final_output():
     assert v['table_gates']==[]
     from ohmwork.logic_view import format_logic_report
     assert format_logic_report(v).splitlines()[-9]=='a b c F'
+
+
+def doubling_chain(count=128):
+    """Valid shared graph whose textual expansion would contain 2**count terms."""
+    from ohmwork.logic_gates import Circuit, Gate, Input, verify_circuit
+    from ohmwork.expr import Var
+    gates=tuple(Gate(f'g{i}','AND',('i0','i0') if i==0 else (f'g{i-1}',f'g{i-1}')) for i in range(count))
+    return verify_circuit(Circuit((Input('i0','g0'),),gates,gates[-1].id),Var('g0'))
+
+
+def test_fallback_references_have_delimiters_and_explicit_and_through_128_gates():
+    from ohmwork.logic_view import format_logic_report
+    v=build_logic_view(doubling_chain())
+    for g in v['gates'][6:]:
+        previous=int(g['id'][1:])-1
+        assert g['expression']==f'[g{previous}] · [g{previous}]'
+        assert len(g['expression'])<80
+    assert v['gates'][-1]['expression']=='[g126] · [g126]'
+    report=format_logic_report(v)
+    assert '[g12] = [g11] · [g11]' in report
+    assert '[g0]: AND(g0, g0)' in report
+
+
+def test_input_named_like_gate_is_visually_distinct_everywhere():
+    from ohmwork.logic_view import format_logic_report
+    v=build_logic_view(build_expression_circuit("g0(a+b)(c+d)(e+f)+g0'"))
+    assert 'g0' in [p['name'] for p in v['inputs']]
+    assert v['gates'][0]['display_id']=='[g0]'
+    assert v['gates'][3]['expression']=='g0(a + b)(c + d)(e + f)'
+    svg=ET.fromstring(render_logic_svg(v))
+    assert any(t.text=='g0' for t in svg.findall('{*}text[@data-input-name]'))
+    assert svg.find('{*}g[@data-gate-id="g0"]/{*}text').text=='[g0] · OR'
+    assert '[g3]: AND(g0, [g0], [g1], [g2])' in format_logic_report(v)
