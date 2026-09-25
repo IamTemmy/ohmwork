@@ -6,7 +6,7 @@ import pytest
 from ohmwork.logic_gates import build_basic_gate, build_expression_circuit
 from ohmwork.logic_view import build_logic_view, render_logic_svg
 
-CASES=['a','ab+c',"(abc+de)'",'a^a','(a+b)^(a+b)',"a''",'a+(b(c+d))','(ab+cd)(ef+gh)']
+CASES=["xy'+x'y","(a+b')(c'+d)","ab+ac","ab+ab'",'a','ab+c',"(abc+de)'",'a^a','(a+b)^(a+b)',"a''",'a+(b(c+d))','(ab+cd)(ef+gh)']
 
 @pytest.mark.parametrize('source',CASES)
 def test_exact_model_geometry_svg_bridge(source):
@@ -20,15 +20,16 @@ def test_exact_model_geometry_svg_bridge(source):
     gates={g['id']:g for g in v['gates']}
     for route in v['routes']:
         pts=route['points']
-        assert pts[0]==outputs[route['driver']]
+        aliases = [(p['x'],p['y']) for p in v.get('input_appearances',[]) if p['id']==route['driver']]
+        assert pts[0] in (aliases or [outputs[route['driver']]])
         assert pts[-1]==(v['output_point'] if route['gate']=='F' else gates[route['gate']]['pins'][route['terminal']])
         for x,y in pts: assert 0<=x<=v['width'] and 0<=y<=v['height']
         for (x,y),(xx,yy) in zip(pts,pts[1:]):
             assert x==xx or y==yy
             for g in v['gates']:
                 # No wire traverses a symbol's interior bounding rectangle.
-                assert not (y==yy and g['y']<y<g['y']+g['height'] and max(x,xx)>g['x'] and min(x,xx)<g['x']+95)
-                assert not (x==xx and g['x']<x<g['x']+95 and max(y,yy)>g['y'] and min(y,yy)<g['y']+g['height'])
+                assert not (y==yy and g['y']<y<g['y']+g['height'] and max(x,xx)>g['x'] and min(x,xx)<g['x']+95*g.get('scale_x',1))
+                assert not (x==xx and g['x']<x<g['x']+95*g.get('scale_x',1) and max(y,yy)>g['y'] and min(y,yy)<g['y']+g['height'])
     svg=ET.fromstring(render_logic_svg(v,len(v['rows'])-1))
     routes=svg.findall('{*}polyline')
     assert Counter((r.get('data-driver'),r.get('data-gate'),int(r.get('data-terminal'))) for r in routes)==expected
@@ -62,3 +63,36 @@ def test_depth_columns_preserve_internal_row_identity_for_every_vector():
         root=ET.fromstring(render_logic_svg(view,i))
         shown={n.get('data-signal'):int(n.text) for n in root.findall('{*}text') if n.get('data-signal')}
         assert all(shown[g.id]==int(value) for g,value in zip(result.circuit.gates,row.gates))
+
+
+def test_branch_labels_preserve_all_signals_without_duplicating_gates():
+    result=build_expression_circuit("xy'+x'y");v=build_logic_view(result)
+    assert v['layout']=='branches'
+    assert len(v['inputs'])==2 and len(v['input_appearances'])==4
+    assert len(v['gates'])==5
+    assert [g['expression'] for g in v['gates']]==["y'","xy'","x'","x'y","xy' + x'y"]
+    assert v['table_gates']==['g0','g1','g2','g3']
+    for i,row in enumerate(result.rows):
+        root=ET.fromstring(render_logic_svg(v,i))
+        for p,value in zip(result.circuit.inputs,row.inputs):
+            texts=root.findall(f"{{*}}text[@data-signal='{p.id}']")
+            assert len(texts)==2
+            assert all(t.text==str(int(value)) for t in texts)
+        for g,value in zip(result.circuit.gates,row.gates):
+            assert root.find(f"{{*}}text[@data-signal='{g.id}']").text==str(int(value))
+    # Every input/literal-to-branch path is straight and horizontal.
+    assert all(len(r['points'])==2 and r['points'][0][1]==r['points'][1][1]
+               for r in v['routes'] if r['gate'] not in {result.circuit.output,'F'})
+
+
+def test_shared_inverter_retains_one_wired_symbol():
+    v=build_logic_view(build_expression_circuit("a'b+a'c"))
+    assert v.get('layout')!='branches'
+    assert sum(g['kind']=='NOT' for g in v['gates'])==1
+
+
+def test_single_gate_table_only_needs_final_output():
+    v=build_logic_view(build_basic_gate('AND',tuple('abc')))
+    assert v['table_gates']==[]
+    from ohmwork.logic_view import format_logic_report
+    assert format_logic_report(v).splitlines()[-9]=='a b c F'
