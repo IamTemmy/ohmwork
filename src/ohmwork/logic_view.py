@@ -6,9 +6,10 @@ Crossings without a junction dot are not connections.
 """
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict
 from html import escape
-from ohmwork.expr import render
+from ohmwork.expr import And, Or, Xor, Not, Var, render
 from ohmwork.logic_gates import VerifiedCircuit, verify_circuit
 
 EXPLANATIONS = {
@@ -21,6 +22,113 @@ EXPLANATIONS = {
     'XOR': '1 when an odd number of inputs are 1 (odd parity).',
     'XNOR': '1 when an even number of inputs are 1 (even parity).',
 }
+
+
+def _signal_expressions(circuit):
+    """Render D8 input expressions, or explicitly marked local gate equations.
+
+    None marks an expression whose expansion exceeded the display budget.
+    Gate references are presentation tokens, never fake Var nodes in the AST.
+    """
+    nodes = {p.id: Var(p.name) for p in circuit.inputs}
+    primary_names = {p.id: p.name for p in circuit.inputs}
+    labels = {}
+    for g in circuit.gates:
+        args = tuple(nodes[d] for d in g.inputs)
+        base = {'AND': And, 'NAND': And, 'OR': Or, 'NOR': Or,
+                'XOR': Xor, 'XNOR': Xor}.get(g.kind)
+        inverted = g.kind in {'NOT', 'NAND', 'NOR', 'XNOR'}
+        node = None
+        if all(arg is not None for arg in args):
+            node = base(args) if base else args[0]
+            if inverted:
+                node = Not(node)
+            label = render(node)
+            if len(label) > 80:
+                node = None
+        if node is None:
+            terms = [primary_names[d] if d in primary_names else f'[{d}]'
+                     for d in g.inputs]
+            separator = {'AND': ' · ', 'NAND': ' · ', 'OR': ' + ',
+                         'NOR': ' + ', 'XOR': ' ⊕ ', 'XNOR': ' ⊕ '}.get(g.kind, '')
+            label = separator.join(terms)
+            if inverted:
+                label = (f"({label})" if base else label) + "'"
+        labels[g.id] = label
+        nodes[g.id] = node
+    return labels
+
+
+def _branch_layout(circuit, view):
+    """Place independent literal-fed branches beside their local input labels.
+
+    Repeated primary labels are appearances of one net, never new inputs.
+    Shared internal gates retain the general wired layout and are never cloned.
+    """
+    by_id = {g.id: g for g in circuit.gates}
+    root = by_id.get(circuit.output)
+    if root is None or len(root.inputs) < 2:
+        return
+    uses = Counter(d for g in circuit.gates for d in g.inputs)
+    if any(uses[g.id] != 1 for g in circuit.gates if g.id != root.id):
+        return
+    primary = {p.id: p for p in circuit.inputs}
+    branches = [by_id.get(d) for d in root.inputs]
+    if any(g is None or len(g.inputs) < 2 for g in branches):
+        return
+    literals = set()
+    for g in branches:
+        for d in g.inputs:
+            if d in primary:
+                continue
+            inv = by_id[d]
+            if inv.kind not in {'NOT', 'BUF'} or inv.inputs[0] not in primary:
+                return
+            literals.add(d)
+    if set(by_id) != {root.id, *(g.id for g in branches), *literals}:
+        return
+    gates, appearances, routes = {}, [], []
+    def place(g, x, y, height, scale=1):
+        pins = [(x-20, y+(i+1)*height/(len(g.inputs)+1)) for i in range(len(g.inputs))]
+        gate = {**asdict(g), 'x': x, 'y': y, 'height': height,
+                'scale_x': scale, 'pins': pins, 'out': (x+110*scale,y+height/2),
+                'explanation': EXPLANATIONS[g.kind]}
+        gates[g.id] = gate
+        return gate
+    def wire(driver, gate, terminal, points):
+        routes.append({'driver':driver, 'gate':gate, 'terminal':terminal, 'points':points})
+    def input_at(driver, gate, terminal, end):
+        start = (70, end[1])
+        appearances.append({**asdict(primary[driver]), 'x':start[0], 'y':start[1]})
+        wire(driver, gate, terminal, [start,end])
+    y = 100
+    for g in branches:
+        h = 60*(len(g.inputs)+1)
+        placed = place(g,330,y,h)
+        for i,(d,end) in enumerate(zip(g.inputs,placed['pins'])):
+            if d in primary:
+                input_at(d,g.id,i,end)
+            else:
+                inv = place(by_id[d],170,end[1]-20,40,.5)
+                input_at(by_id[d].inputs[0],d,0,inv['pins'][0])
+                wire(d,g.id,i,[inv['out'],end])
+        y += h+70
+    first, last = (gates[g.id]['out'][1] for g in (branches[0],branches[-1]))
+    final = place(root,560,(first+last)/2-max(100,24*len(branches))/2,max(100,24*len(branches)))
+    for i,g in enumerate(branches):
+        start,end = gates[g.id]['out'],final['pins'][i]
+        lane = 470+10*i
+        wire(g.id,root.id,i,[start,(lane,start[1]),(lane,end[1]),end])
+    output = (745,final['out'][1])
+    wire(root.id,'F',0,[final['out'],output])
+    # Keep canonical input coordinates anchored to their first visible appearance.
+    first_appearance = {}
+    for p in appearances:
+        first_appearance.setdefault(p['id'], p)
+    view['inputs'] = [first_appearance[p.id] for p in circuit.inputs]
+    view.update(gates=[gates[g.id] for g in circuit.gates],
+                input_appearances=appearances, routes=routes, output_point=output,
+                width=810, height=y, layout='branches')
 
 
 def build_logic_view(result: VerifiedCircuit) -> dict:
@@ -115,6 +223,12 @@ def build_logic_view(result: VerifiedCircuit) -> dict:
             'width': width, 'height': top + field_height + 60,
             'gate_count': result.gate_count, 'depth': result.depth,
             'rows': [asdict(row) for row in result.rows]}
+    _branch_layout(circuit, view)
+    expressions = _signal_expressions(circuit)
+    for gate in view['gates']:
+        gate['expression'] = expressions[gate['id']]
+        gate['display_id'] = f"[{gate['id']}]"
+    view['table_gates'] = [g['id'] for g in view['gates'] if g['id'] != circuit.output]
     return view
 
 
@@ -155,7 +269,7 @@ def render_logic_svg(view: dict, row_index: int = 0) -> str:
            '@media(prefers-color-scheme:dark){.lg-diagram{background:#161a23;color:#e9eef6} '
            '.lg-body{fill:#161a23}.lg-wire{stroke:#a3afc0}.lg-wire[data-value="1"]{stroke:#49d6b5} '
            '.lg-junction{fill:#a3afc0}.lg-junction[data-value="1"]{fill:#49d6b5}}</style>',
-           text(24, 28, 'Ideal logic · crossings without dots are not junctions')]
+           text(24, 28, 'Matching input labels carry the same signal' if view.get('layout') == 'branches' else 'Ideal logic · crossings without dots are not junctions')]
     for route in view['routes']:
         points = ' '.join(f'{x},{y}' for x,y in route['points'])
         svg.append(f'<polyline class="lg-wire" data-driver="{route["driver"]}" '
@@ -179,7 +293,7 @@ def render_logic_svg(view: dict, row_index: int = 0) -> str:
             if len(directions) > 2:
                 svg.append(f'<circle class="lg-wire lg-junction" data-driver="{driver}" '
                            f'data-value="{int(values[driver])}" cx="{x}" cy="{y}" r="3"/>')
-    for port in view['inputs']:
+    for port in view.get('input_appearances', view['inputs']):
         x,y=port['x'],port['y']
         svg.append(text(x-48,y+5,port['name'], 'data-input-name="true"'))
         svg.append(text(x-22,y+5,int(values[port['id']]), f'data-signal="{port["id"]}"'))
@@ -193,12 +307,14 @@ def render_logic_svg(view: dict, row_index: int = 0) -> str:
             t=(py-y)/h
             px=60*t*(1-t) if gate['kind'] in {'OR','NOR','XOR','XNOR'} else 0
             svg.append(f'<path data-pin="{i}" d="M-20 {py-y} H{px}" fill="none"/>')
-        svg.append(_symbol(gate['kind'],h))
+        scale = gate.get('scale_x', 1)
+        symbol = _symbol(gate['kind'],h)
+        svg.append(f'<g transform="scale({scale} 1)">{symbol}</g>' if scale != 1 else symbol)
         edge=(102 if gate['kind'] in {'NOT','NAND'} else 107) if gate['kind'] in {'NOT','NAND','NOR','XNOR'} else (95 if gate['kind'] in {'OR','XOR'} else 90)
-        svg.append(f'<path d="M{edge} {h/2} H110"/>')
-        svg.append(text(0,-14,f'{gate["id"]} · {gate["kind"]}'))
+        svg.append(f'<path d="M{edge*scale} {h/2} H{110*scale}"/>')
+        svg.append(text(0,-14,f'{gate["display_id"]} · {gate["kind"]}'))
         svg.append('</g>')
-        svg.append(text(x+115,y+h/2-9,int(values[gate['id']]),f'data-signal="{gate["id"]}"'))
+        svg.append(text(x+110*scale+5,y+h/2-9,int(values[gate['id']]),f'data-signal="{gate["id"]}"'))
     x,y=view['output_point']
     svg.extend([text(x+8,y-10,'F'),text(x+8,y+12,int(row['output']),'data-output-value="true"'),'</svg>'])
     return ''.join(svg)
@@ -208,7 +324,12 @@ def format_logic_report(view: dict) -> str:
     lines=[f'F = {view["expression"]}',
            f'{view["gate_count"]} logic gates; depth {view["depth"]}; verified {len(view["rows"])} input vectors.',
            'Structure-preserving ideal logic; no minimization or transistor-cost claim.']
-    lines += [f'{g["id"]}: {g["kind"]}({", ".join(g["inputs"])}) — {g["explanation"]}' for g in view['gates']]
-    lines += [' '.join([p['name'] for p in view['inputs']]+[g['id'] for g in view['gates']]+['F'])]
-    lines += [' '.join(str(int(v)) for v in (*r['inputs'],*r['gates'],r['output'])) for r in view['rows']]
+    names = {p['id']: p['name'] for p in view['inputs']}
+    names.update({g['id']: g['display_id'] for g in view['gates']})
+    lines += ['Brackets identify gates: [g0] is a gate; g0 without brackets is an input name.']
+    lines += [f'{g["display_id"]}: {g["kind"]}({", ".join(names[d] for d in g["inputs"])}) — {g["explanation"]}' for g in view['gates']]
+    internal = [(i,g) for i,g in enumerate(view['gates']) if g['id'] in view['table_gates']]
+    lines += [f"{g['display_id']} = {g['expression']}" for _,g in internal]
+    lines += [' '.join([p['name'] for p in view['inputs']]+[g['display_id'] for _,g in internal]+['F'])]
+    lines += [' '.join(str(int(v)) for v in (*r['inputs'],*(r['gates'][i] for i,_ in internal),r['output'])) for r in view['rows']]
     return '\n'.join(lines)
