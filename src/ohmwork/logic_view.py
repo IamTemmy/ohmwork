@@ -111,6 +111,11 @@ def _branch_layout(circuit, view):
         wire(g.id,root.id,i,[start,(lane,start[1]),(lane,end[1]),end])
     output = (745,final['out'][1])
     wire(root.id,'F',0,[final['out'],output])
+    # Keep canonical input coordinates anchored to their first visible appearance.
+    first_appearance = {}
+    for p in appearances:
+        first_appearance.setdefault(p['id'], p)
+    view['inputs'] = [first_appearance[p.id] for p in circuit.inputs]
     view.update(gates=[gates[g.id] for g in circuit.gates],
                 input_appearances=appearances, routes=routes, output_point=output,
                 width=810, height=y, layout='branches')
