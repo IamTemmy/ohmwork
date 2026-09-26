@@ -109,11 +109,11 @@ def _branch_layout(circuit, view):
         start = (x-100,placed['pins'][0][1])
         appearances.append({**asdict(primary[driver]), 'x':start[0], 'y':start[1]})
         wire(driver,g.id,0,[start,placed['pins'][0]])
-    y = 100 + (90*((len(shared)+1)//2)+50 if shared else 0)
+    y = 100 + (90*((len(shared)+1)//2) if shared else 0)
     branch_top = y
     for g in branches:
         inline = any(d in literals and d not in shared_ids for d in g.inputs)
-        h = (60 if inline or not shared else 42)*(len(g.inputs)+1)
+        h = (60 if inline or not shared else 24)*(len(g.inputs)+1)
         placed = place(g,330,y,h)
         for i,(d,end) in enumerate(zip(g.inputs,placed['pins'])):
             if d in primary:
@@ -126,7 +126,7 @@ def _branch_layout(circuit, view):
                 inv = place(by_id[d],170,end[1]-20,40,.5)
                 input_at(by_id[d].inputs[0],d,0,inv['pins'][0])
                 wire(d,g.id,i,[inv['out'],end])
-        y += h+70
+        y += h+(40 if shared else 70)
     first, last = (gates[g.id]['out'][1] for g in (branches[0],branches[-1]))
     final = place(root,560,(first+last)/2-max(100,24*len(branches))/2,max(100,24*len(branches)))
     for i,g in enumerate(branches):
