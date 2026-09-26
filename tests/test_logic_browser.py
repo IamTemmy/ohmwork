@@ -202,3 +202,45 @@ def test_double_digit_fallback_labels_in_browser(page):
     page.locator('#lg-inputs button').click()
     assert set(page.locator('#lg-table tbody tr[aria-current=true] td').all_text_contents())=={'1'}
     assert page.locator('#lg-stage [data-signal=g19]').text_content()=='1'
+
+
+@pytest.mark.parametrize('width',[1280,390])
+@pytest.mark.parametrize('theme',['light','dark'])
+def test_shared_inverters_aligned_branches(page,server_url,width,theme,tmp_path):
+    page.set_viewport_size({'width':width,'height':1100});page.emulate_media(color_scheme=theme)
+    source="xy'+x'y+xy+x'y'";build(page,source)
+    data=page.request.post(server_url+'/api/logic',data={'expr':source}).json()['result']
+    assert page.locator('#lg-stage [data-gate-id]').count()==7
+    assert page.locator('#lg-stage [data-kind=NOT]').count()==2
+    assert page.locator('#lg-stage [data-signal-alias]').count()==6
+    page.evaluate('''data=>{
+      for(const row of data.rows){
+        document.querySelectorAll('#lg-inputs button').forEach((b,i)=>{if((b.getAttribute('aria-pressed')==='true')!==row.inputs[i])b.click();});
+        data.gates.forEach((g,i)=>document.querySelectorAll('[data-signal='+g.id+']').forEach(n=>{if(Number(n.textContent)!==Number(row.gates[i]))throw Error('wrong shared signal');}));
+        if(document.querySelector('[data-output-value]').textContent!=='1')throw Error('wrong output');
+      }
+    }''',data)
+    toggle=page.locator('#lg-gate-buttons button[data-id=g0]');toggle.focus();toggle.press('Enter')
+    assert page.locator('#lg-stage [data-signal-alias][data-driver=g0][data-highlight=true]').count()==3
+    page.locator('#lg-close').press('Escape')
+    assert toggle.evaluate('n=>n===document.activeElement')
+    assert page.locator('#lg-stage svg').evaluate('''svg=>{
+      const boxes=[...svg.querySelectorAll('text')].map(t=>{
+        const b=t.getBBox(),m=t.getCTM(),a=new DOMPoint(b.x,b.y).matrixTransform(m),z=new DOMPoint(b.x+b.width,b.y+b.height).matrixTransform(m);
+        return {x:a.x,y:a.y,r:z.x,b:z.y};
+      });
+      return boxes.every((a,i)=>a.x>=0&&a.y>=0&&a.r<=svg.viewBox.baseVal.width&&a.b<=svg.viewBox.baseVal.height&&boxes.slice(i+1).every(b=>Math.min(a.r,b.r)-Math.max(a.x,b.x)<.5 || Math.min(a.b,b.b)-Math.max(a.y,b.y)<.5));
+    }''')
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
+    if width==390:
+        assert page.locator('#lg-stage').evaluate('n=>n.scrollWidth>n.clientWidth')
+    with page.expect_download() as download:page.click('#lg-download')
+    path=tmp_path/'shared.svg';download.value.save_as(path)
+    svg=ET.parse(path).getroot()
+    assert len(svg.findall('{*}g[@data-gate-id]'))==7
+    assert len(svg.findall('{*}text[@data-signal-alias]'))==6
+    assert not any(n.get('data-highlight') for n in svg.iter())
+    # Review the complete exported diagram, independent of the scroll viewport.
+    page.goto(path.as_uri());page.set_viewport_size({'width':850,'height':1200})
+    artifact=Path('test-artifacts/logic');artifact.mkdir(parents=True,exist_ok=True)
+    page.screenshot(path=str(artifact/f'shared-export-{width}-{theme}.png'))

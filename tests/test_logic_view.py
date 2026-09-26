@@ -6,7 +6,7 @@ import pytest
 from ohmwork.logic_gates import build_basic_gate, build_expression_circuit
 from ohmwork.logic_view import build_logic_view, render_logic_svg
 
-CASES=["xy'+x'y","(a+b')(c'+d)","ab+ac","ab+ab'",'a','ab+c',"(abc+de)'",'a^a','(a+b)^(a+b)',"a''",'a+(b(c+d))','(ab+cd)(ef+gh)']
+CASES=["xy'+x'y+xy+x'y'","a'b+a'c+d'e","(a'+b)(a'+c)","xy'+x'y","(a+b')(c'+d)","ab+ac","ab+ab'",'a','ab+c',"(abc+de)'",'a^a','(a+b)^(a+b)',"a''",'a+(b(c+d))','(ab+cd)(ef+gh)']
 
 @pytest.mark.parametrize('source',CASES)
 def test_exact_model_geometry_svg_bridge(source):
@@ -20,7 +20,7 @@ def test_exact_model_geometry_svg_bridge(source):
     gates={g['id']:g for g in v['gates']}
     for route in v['routes']:
         pts=route['points']
-        aliases = [(p['x'],p['y']) for p in v.get('input_appearances',[]) if p['id']==route['driver']]
+        aliases = [(p['x'],p['y']) for p in v.get('input_appearances',[])+v.get('signal_appearances',[]) if p['id']==route['driver']]
         assert pts[0] in (aliases or [outputs[route['driver']]])
         assert pts[-1]==(v['output_point'] if route['gate']=='F' else gates[route['gate']]['pins'][route['terminal']])
         for x,y in pts: assert 0<=x<=v['width'] and 0<=y<=v['height']
@@ -85,9 +85,11 @@ def test_branch_labels_preserve_all_signals_without_duplicating_gates():
                for r in v['routes'] if r['gate'] not in {result.circuit.output,'F'})
 
 
-def test_shared_inverter_retains_one_wired_symbol():
+def test_shared_inverter_retains_one_symbol_with_labeled_connections():
     v=build_logic_view(build_expression_circuit("a'b+a'c"))
-    assert v.get('layout')!='branches'
+    assert v.get('layout')=='branches'
+    assert len(v['shared_sources'])==1
+    assert len(v['signal_appearances'])==2
     assert sum(g['kind']=='NOT' for g in v['gates'])==1
 
 
@@ -129,3 +131,28 @@ def test_input_named_like_gate_is_visually_distinct_everywhere():
     assert any(t.text=='g0' for t in svg.findall('{*}text[@data-input-name]'))
     assert svg.find('{*}g[@data-gate-id="g0"]/{*}text').text=='[g0] · OR'
     assert '[g3]: AND(g0, [g0], [g1], [g2])' in format_logic_report(v)
+
+
+def test_four_products_keep_seven_gates_and_all_alias_values():
+    r=build_expression_circuit("xy'+x'y+xy+x'y'");v=build_logic_view(r)
+    assert r.gate_count==7 and len(v['gates'])==7
+    assert v['height']<=650
+    assert len(v['shared_sources'])==2 and len(v['signal_appearances'])==4
+    products=[g for g in v['gates'] if g['kind']=='AND']
+    assert len(products)==4 and len({g['x'] for g in products})==1
+    for i,row in enumerate(r.rows):
+        assert row.output
+        svg=ET.fromstring(render_logic_svg(v,i))
+        for g,value in zip(r.circuit.gates,row.gates):
+            signals=svg.findall(f"{{*}}text[@data-signal='{g.id}']")
+            assert signals and all(t.text==str(int(value)) for t in signals)
+            assert len(svg.findall(f"{{*}}g[@data-gate-id='{g.id}']"))==1
+        for alias in v['signal_appearances']:
+            text=svg.find(f"{{*}}text[@data-signal-alias][@data-driver='{alias['id']}']")
+            assert text.text.startswith(f"[{alias['id']}] = ")
+
+
+def test_shared_product_is_not_cloned_or_treated_as_an_input_inverter():
+    v=build_logic_view(build_expression_circuit('(ab+c)(ab+d)'))
+    assert v.get('layout')!='branches'
+    assert len(v['gates'])==4

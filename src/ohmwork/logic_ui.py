@@ -21,6 +21,7 @@ CSS = r'''
 .lg-detail { border:1px solid #8887; border-radius:10px; padding:1rem; margin:1rem 0; }
 .lg-detail h3 { margin-top:0; }
 .lg-stage [data-highlight=true] { stroke:#397bf6; stroke-width:4; }
+.lg-stage .lg-signal-label[data-highlight=true] { fill:#397bf6; stroke:none; font-weight:700; }
 #lg-summary { overflow-wrap:anywhere; }
 #lg-status { font-weight:600; }
 #lg-error { color:light-dark(#a51c1c,#ff9898); }
@@ -98,7 +99,7 @@ JS = r'''
     el('lg-detail-rule').textContent=gate.explanation;
     el('lg-gate-buttons').querySelectorAll('button').forEach(b=>b.setAttribute('aria-expanded',String(b.dataset.id===id)));
     el('lg-stage').querySelectorAll('[data-gate-id]').forEach(b=>b.setAttribute('aria-expanded',String(b.dataset.gateId===id)));
-    el('lg-stage').querySelectorAll('.lg-wire').forEach(w=>w.dataset.highlight=String(w.dataset.gate===id || w.dataset.driver===id));
+    el('lg-stage').querySelectorAll('.lg-wire, [data-signal-alias]').forEach(w=>w.dataset.highlight=String(w.dataset.gate===id || w.dataset.driver===id));
     update();
   }
   function update() {
@@ -108,7 +109,7 @@ JS = r'''
       b.textContent=view.inputs[i].name+': '+Number(row.inputs[i]);b.setAttribute('aria-pressed',String(row.inputs[i]));
     });
     el('lg-stage').querySelectorAll('[data-signal]').forEach(t=>t.textContent=Number(values[t.dataset.signal]));
-    el('lg-stage').querySelectorAll('.lg-wire').forEach(w=>w.dataset.value=Number(values[w.dataset.driver]));
+    el('lg-stage').querySelectorAll('.lg-wire, .lg-junction').forEach(w=>w.dataset.value=Number(values[w.dataset.driver]));
     el('lg-stage').querySelector('[data-output-value]').textContent=Number(row.output);
     el('lg-status').textContent='Inputs '+view.inputs.map((p,i)=>p.name+'='+Number(row.inputs[i])).join(', ')+' → F='+Number(row.output);
     el('lg-table').querySelectorAll('tbody tr').forEach((tr,i)=>tr.setAttribute('aria-current',String(i===vector)));
