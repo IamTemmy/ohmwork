@@ -289,7 +289,7 @@ def render_logic_svg(view: dict, row_index: int = 0) -> str:
     gates_by_id = {g['id']:g for g in view['gates']}
     if view.get('shared_sources'):
         svg.append(text(24,65,'Shared input signals'))
-        svg.append(text(24,view['branch_top']-25,'Product / sum branches'))
+        svg.append(text(24,view['branch_top']-25,'Logic branches'))
     for route in view['routes']:
         points = ' '.join(f'{x},{y}' for x,y in route['points'])
         svg.append(f'<polyline class="lg-wire" data-driver="{route["driver"]}" '
