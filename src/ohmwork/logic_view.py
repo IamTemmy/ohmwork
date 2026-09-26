@@ -63,18 +63,17 @@ def _branch_layout(circuit, view):
     """Place independent literal-fed branches beside their local input labels.
 
     Repeated primary labels are appearances of one net, never new inputs.
-    Shared internal gates retain the general wired layout and are never cloned.
+    Shared primary-fed unary gates are drawn once in a labeled source bank.
+    More complex shared internal gates retain the general wired layout.
     """
     by_id = {g.id: g for g in circuit.gates}
     root = by_id.get(circuit.output)
     if root is None or len(root.inputs) < 2:
         return
     uses = Counter(d for g in circuit.gates for d in g.inputs)
-    if any(uses[g.id] != 1 for g in circuit.gates if g.id != root.id):
-        return
     primary = {p.id: p for p in circuit.inputs}
     branches = [by_id.get(d) for d in root.inputs]
-    if any(g is None or len(g.inputs) < 2 for g in branches):
+    if any(g is None or len(g.inputs) < 2 or uses[g.id] != 1 for g in branches):
         return
     literals = set()
     for g in branches:
@@ -87,7 +86,9 @@ def _branch_layout(circuit, view):
             literals.add(d)
     if set(by_id) != {root.id, *(g.id for g in branches), *literals}:
         return
-    gates, appearances, routes = {}, [], []
+    shared = [g for g in circuit.gates if g.id in literals and uses[g.id] > 1]
+    shared_ids = {g.id for g in shared}
+    gates, appearances, routes, signals = {}, [], [], []
     def place(g, x, y, height, scale=1):
         pins = [(x-20, y+(i+1)*height/(len(g.inputs)+1)) for i in range(len(g.inputs))]
         gate = {**asdict(g), 'x': x, 'y': y, 'height': height,
@@ -101,13 +102,26 @@ def _branch_layout(circuit, view):
         start = (70, end[1])
         appearances.append({**asdict(primary[driver]), 'x':start[0], 'y':start[1]})
         wire(driver, gate, terminal, [start,end])
-    y = 100
+    for i,g in enumerate(shared):
+        x,y = 170+330*(i%2),100+90*(i//2)
+        placed = place(g,x,y,40,.5)
+        driver = g.inputs[0]
+        start = (x-100,placed['pins'][0][1])
+        appearances.append({**asdict(primary[driver]), 'x':start[0], 'y':start[1]})
+        wire(driver,g.id,0,[start,placed['pins'][0]])
+    y = 100 + (90*((len(shared)+1)//2)+50 if shared else 0)
+    branch_top = y
     for g in branches:
-        h = 60*(len(g.inputs)+1)
+        inline = any(d in literals and d not in shared_ids for d in g.inputs)
+        h = (60 if inline or not shared else 42)*(len(g.inputs)+1)
         placed = place(g,330,y,h)
         for i,(d,end) in enumerate(zip(g.inputs,placed['pins'])):
             if d in primary:
                 input_at(d,g.id,i,end)
+            elif d in shared_ids:
+                start = (150,end[1])
+                signals.append({'id':d, 'gate':g.id, 'x':start[0], 'y':start[1]})
+                wire(d,g.id,i,[start,end])
             else:
                 inv = place(by_id[d],170,end[1]-20,40,.5)
                 input_at(by_id[d].inputs[0],d,0,inv['pins'][0])
@@ -127,7 +141,9 @@ def _branch_layout(circuit, view):
         first_appearance.setdefault(p['id'], p)
     view['inputs'] = [first_appearance[p.id] for p in circuit.inputs]
     view.update(gates=[gates[g.id] for g in circuit.gates],
-                input_appearances=appearances, routes=routes, output_point=output,
+                input_appearances=appearances, signal_appearances=signals,
+                shared_sources=[g.id for g in shared], branch_top=branch_top,
+                routes=routes, output_point=output,
                 width=810, height=y, layout='branches')
 
 
@@ -269,7 +285,11 @@ def render_logic_svg(view: dict, row_index: int = 0) -> str:
            '@media(prefers-color-scheme:dark){.lg-diagram{background:#161a23;color:#e9eef6} '
            '.lg-body{fill:#161a23}.lg-wire{stroke:#a3afc0}.lg-wire[data-value="1"]{stroke:#49d6b5} '
            '.lg-junction{fill:#a3afc0}.lg-junction[data-value="1"]{fill:#49d6b5}}</style>',
-           text(24, 28, 'Matching input labels carry the same signal' if view.get('layout') == 'branches' else 'Ideal logic · crossings without dots are not junctions')]
+           text(24, 28, 'Matching labels carry the same signal; each gate is drawn once' if view.get('layout') == 'branches' else 'Ideal logic · crossings without dots are not junctions')]
+    gates_by_id = {g['id']:g for g in view['gates']}
+    if view.get('shared_sources'):
+        svg.append(text(24,65,'Shared input signals'))
+        svg.append(text(24,view['branch_top']-25,'Product / sum branches'))
     for route in view['routes']:
         points = ' '.join(f'{x},{y}' for x,y in route['points'])
         svg.append(f'<polyline class="lg-wire" data-driver="{route["driver"]}" '
@@ -298,6 +318,19 @@ def render_logic_svg(view: dict, row_index: int = 0) -> str:
         svg.append(text(x-48,y+5,port['name'], 'data-input-name="true"'))
         svg.append(text(x-22,y+5,int(values[port['id']]), f'data-signal="{port["id"]}"'))
         svg.append(f'<circle cx="{x}" cy="{y}" r="3" fill="currentColor"/>')
+    for alias in view.get('signal_appearances',[]):
+        driver = alias['id']
+        gate = gates_by_id[driver]
+        x,y = alias['x'],alias['y']
+        svg.append(text(22,y+5,f"{gate['display_id']} {gate['expression']}",
+                        f'class="lg-signal-label" data-signal-alias="true" data-driver="{driver}" data-gate="{alias["gate"]}"'))
+        svg.append(text(x-22,y+5,int(values[driver]),f'data-signal="{driver}"'))
+        svg.append(f'<circle cx="{x}" cy="{y}" r="3" class="lg-junction" data-driver="{driver}" data-value="{int(values[driver])}"/>')
+    for driver in view.get('shared_sources',[]):
+        gate = gates_by_id[driver]
+        x,y = gate['out']
+        svg.append(text(x+40,y+5,f"{gate['display_id']} = {gate['expression']}",
+                        f'class="lg-signal-label" data-signal-alias="true" data-driver="{driver}"'))
     for gate in view['gates']:
         x,y,h=gate['x'],gate['y'],gate['height']
         svg.append(f'<g class="lg-gate" data-gate-id="{gate["id"]}" '
