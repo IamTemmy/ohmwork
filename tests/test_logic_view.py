@@ -136,6 +136,7 @@ def test_input_named_like_gate_is_visually_distinct_everywhere():
 def test_four_products_keep_seven_gates_and_all_alias_values():
     r=build_expression_circuit("xy'+x'y+xy+x'y'");v=build_logic_view(r)
     assert r.gate_count==7 and len(v['gates'])==7
+    assert v['height']<=650
     assert len(v['shared_sources'])==2 and len(v['signal_appearances'])==4
     products=[g for g in v['gates'] if g['kind']=='AND']
     assert len(products)==4 and len({g['x'] for g in products})==1
@@ -148,7 +149,7 @@ def test_four_products_keep_seven_gates_and_all_alias_values():
             assert len(svg.findall(f"{{*}}g[@data-gate-id='{g.id}']"))==1
         for alias in v['signal_appearances']:
             text=svg.find(f"{{*}}text[@data-signal-alias][@data-driver='{alias['id']}']")
-            assert text.text.startswith(f"[{alias['id']}]")
+            assert text.text.startswith(f"[{alias['id']}] = ")
 
 
 def test_shared_product_is_not_cloned_or_treated_as_an_input_inverter():

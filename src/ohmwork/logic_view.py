@@ -322,7 +322,7 @@ def render_logic_svg(view: dict, row_index: int = 0) -> str:
         driver = alias['id']
         gate = gates_by_id[driver]
         x,y = alias['x'],alias['y']
-        svg.append(text(22,y+5,f"{gate['display_id']} {gate['expression']}",
+        svg.append(text(22,y+5,f"{gate['display_id']} = {gate['expression']}",
                         f'class="lg-signal-label" data-signal-alias="true" data-driver="{driver}" data-gate="{alias["gate"]}"'))
         svg.append(text(x-22,y+5,int(values[driver]),f'data-signal="{driver}"'))
         svg.append(f'<circle cx="{x}" cy="{y}" r="3" class="lg-junction" data-driver="{driver}" data-value="{int(values[driver])}"/>')
