@@ -131,7 +131,9 @@ def _branch_layout(circuit, view):
     final = place(root,560,(first+last)/2-max(100,24*len(branches))/2,max(100,24*len(branches)))
     for i,g in enumerate(branches):
         start,end = gates[g.id]['out'],final['pins'][i]
-        lane = 470+10*i
+        # Outer branches turn nearest the destination; inner branches turn
+        # earlier. Mirroring the lanes avoids crossings and aligns paired bends.
+        lane = 510-12*min(i,len(branches)-1-i)
         wire(g.id,root.id,i,[start,(lane,start[1]),(lane,end[1]),end])
     output = (745,final['out'][1])
     wire(root.id,'F',0,[final['out'],output])

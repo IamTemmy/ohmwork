@@ -8,6 +8,25 @@ from ohmwork.logic_view import build_logic_view, render_logic_svg
 
 CASES=["xy'+x'y+xy+x'y'","a'b+a'c+d'e","(a'+b)(a'+c)","xy'+x'y","(a+b')(c'+d)","ab+ac","ab+ab'",'a','ab+c',"(abc+de)'",'a^a','(a+b)^(a+b)',"a''",'a+(b(c+d))','(ab+cd)(ef+gh)']
 
+@pytest.mark.parametrize('source', ["xy+x'y'+x'y+xy'", "ab'c+bc'"] +
+                         ['+'.join(['ab','ac','ad','ae','af','ag','ah','bc'][:n])
+                          for n in range(2,9)])
+def test_branch_output_routes_are_symmetric_and_do_not_intersect(source):
+    result = build_expression_circuit(source)
+    view = build_logic_view(result)
+    routes = [r['points'] for r in view['routes'] if r['gate'] == result.circuit.output]
+    assert view['layout'] == 'branches'
+    assert [p[1][0] for p in routes] == [p[1][0] for p in reversed(routes)]
+    # Include endpoint touches and collinear overlap: different nets must be
+    # visibly separate all the way from their branch outputs to the final gate.
+    for i, points in enumerate(routes):
+        for other in routes[i+1:]:
+            for a,b in zip(points,points[1:]):
+                for c,d in zip(other,other[1:]):
+                    overlap_x = max(min(a[0],b[0]),min(c[0],d[0])) <= min(max(a[0],b[0]),max(c[0],d[0]))
+                    overlap_y = max(min(a[1],b[1]),min(c[1],d[1])) <= min(max(a[1],b[1]),max(c[1],d[1]))
+                    assert not (overlap_x and overlap_y)
+
 @pytest.mark.parametrize('source',CASES)
 def test_exact_model_geometry_svg_bridge(source):
     result=build_expression_circuit(source);v=build_logic_view(result)
